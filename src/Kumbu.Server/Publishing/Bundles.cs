@@ -181,8 +181,9 @@ internal sealed partial class Publications
         VaultPath? Attachment(string target) => resolver.Resolve(source, target) is { Kind: LinkKind.Attachment, Target: { } t } ? t : null;
         int? NoteLink(string target) =>
             target.Length == 0 ? noteId(source) : resolver.Resolve(source, target) is { Kind: LinkKind.Note, Target: { } t } ? noteId(t) : null;
+        var marked = access.IsSkillsVault ? access.Vault.Name : null;
         bool MayCopy(VaultPath p) =>
-            usable(p) && attachments.TryGetValue(p, out var a) && AttachmentFormat.ForPath(p)?.Kind == AttachmentKind.Image
+            usable(p) && attachments.TryGetValue(p, out var a) && AttachmentFormat.ForPath(p, marked)?.Kind == AttachmentKind.Image
             // An image larger than 15 MB is kept, not read (files spec, decision 12): left out as a file is, by its name.
             && !AttachmentFormat.IsLarge(a.Current.Size) && !Covered(record.Unpublishable, p.Value)
             && !InSkillPlace(access.Vault, p);

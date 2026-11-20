@@ -29,7 +29,7 @@ public sealed class Html(INoteReader notes) : ICommand
 
     public string Summary => "read an HTML file: its title and headings, or the elements a CSS selector picks";
 
-    public string Help => """
+    public string Help => $"""
         html [--html|--attr <name>|--count] <path> [selector]
           Read an HTML file (a text file, whatever its name). Without a selector: its title, its headings as an
           outline (h1 to h6, indented by level) and how many links, tables and forms it has.
@@ -39,11 +39,12 @@ public sealed class Html(INoteReader notes) : ICommand
           --attr <name>  the value of one attribute; elements without it are left out
           --count        how many elements the selector picks
           Nothing a page refers to is fetched and no script runs: html reads the file as it is.
-          A call stops after 10 seconds. Matching is linear for combinators; a few pseudo-classes
-          (:nth-child()) cost more and are stopped by the 10-second budget. Inside :not() and :is() only >
-          and + combine selectors, as a space or ~ there would try every ancestor or sibling of every element;
-          inside :has() only type, class, id and attribute selectors, combined by > or in :not() and :is().
-          A selector is at most 1,000 characters long, with at most 100 alternatives.
+          Parsing the page, and a selector's matching and printing, stop after {Seconds}; reading the file and the
+          outline have no time limit. Matching is linear for combinators; a few pseudo-classes (:nth-child()) cost
+          more and are stopped by that time limit. Inside :not() and :is() only > and + combine selectors, as a
+          space or ~ there would try every ancestor or sibling of every element; inside :has() only type, class,
+          id and attribute selectors, combined by > or in :not() and :is().
+          A selector is at most {CssSelection.MaxLength.ToString("N0", CultureInfo.InvariantCulture)} characters long, with at most {CssSelection.MaxAlternatives} alternatives.
 
           html /Work/page.html
           html /Work/page.html 'table.costs'

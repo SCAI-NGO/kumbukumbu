@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
@@ -395,5 +396,16 @@ public class HtmlTests
         Assert.Contains("\n  html /Work/page.html 'table.costs'", help);
         Assert.Contains("\n  html ", (await Run("help")).Output);
         Assert.Contains("\n  html ", Manual.ToolDescription);
+    }
+
+    [Fact]
+    public async Task Help_says_what_its_budget_stops()
+    {
+        var help = Regex.Replace((await Run("help html")).Output, @"\s+", " ");
+
+        Assert.Equal(TimeSpan.FromSeconds(10), new Kumbu.Core.Sh.Commands.Html(_store).Budget);
+        Assert.Contains("Parsing the page, and a selector's matching and printing, stop after 10 seconds", help);
+        Assert.Contains("are stopped by that time limit", help);
+        Assert.DoesNotContain("A call stops after 10 seconds", help);
     }
 }

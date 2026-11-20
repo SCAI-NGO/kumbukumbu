@@ -619,10 +619,11 @@ internal sealed partial class DavWrites(
         // format have none, and the writer refuses them. An SVG's the writer reads itself.
         bool matches;
         Func<string?, Task<ShellResult>> write;
+        var skillsVault = await tree.SkillsVaultAsync(ct);
         if (large)
         {
-            if (AttachmentFormat.TooLargeToCheck(path) is { } tooLarge) throw new DavException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
-            if (AttachmentFormat.LargeProblem(path, bytes.Span) is { } problem) throw new DavException(StatusCodes.Status415UnsupportedMediaType, problem);
+            if (AttachmentFormat.TooLargeToCheck(path, skillsVault) is { } tooLarge) throw new DavException(StatusCodes.Status413PayloadTooLarge, tooLarge + ".");
+            if (AttachmentFormat.LargeProblem(path, bytes.Span, skillsVault) is { } problem) throw new DavException(StatusCodes.Status415UnsupportedMediaType, problem);
             matches = true;
             // Its size where the header reads, without the pixel limit: nothing decodes a large image (files spec, decision 12).
             var dimensions = format.Kind == AttachmentKind.Image ? ImageHeader.Size(bytes.Span) : null;
@@ -631,7 +632,7 @@ internal sealed partial class DavWrites(
         }
         else
         {
-            matches = AttachmentFormat.Problem(path, bytes.Span) is null;
+            matches = AttachmentFormat.Problem(path, bytes.Span, skillsVault) is null;
             var dimensions = matches ? Dimensions(path, format, bytes) : null;
             write = async v => (await files.WriteAsync(path.Value, bytes, dimensions, v, ct)).Result;
         }

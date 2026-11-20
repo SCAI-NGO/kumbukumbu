@@ -23,17 +23,20 @@ public sealed class Blame(INoteStore notes, IWriterLabels? labels = null) : ICom
     public string Summary => "who wrote what: the writer of each run of lines of a note; of a folder: lines per writer";
 
     public string Help => $"""
-        blame [--lines] <path>
+        blame [--lines] <path>[#section]
           Who wrote what: for each run of lines of a note, the writer who last changed them and
           when (the newest write in the run, UTC). A line counts as changed when any character in it
           changed, indentation and reflow included, as in git blame. Recorded at every write since
           Kumbu² 0.6.0; lines older than that come from the history, which goes back {NoteWriter.HistoryLimit}
-          versions, and read "earlier than <time>" where it ends. A section (note.md#Heading)
-          limits it to that section. --lines prints every line with its writer, time and text.
+          versions, and read "earlier than <time>" where it ends. A section (note.md#Heading) or a
+          block (note.md#^block) limits it to that part. --lines prints every line with its writer,
+          time and text.
           A copy (cp, or Duplicate in the web app) is a new note: every line is its copier's.
         blame <folder>
           For each note below the folder: lines per writer (blank lines not counted), then the
-          total per writer and the number of notes.
+          total per writer and the number of notes. At most {MaxNotes} notes, fewer if they don't fit
+          one call; the rest are counted before the total: "… and N more notes; blame a folder below
+          it". --lines takes a note, not a folder.
 
           blame /Work/protocol.md
           blame /Work/protocol.md#Results --lines
@@ -44,7 +47,7 @@ public sealed class Blame(INoteStore notes, IWriterLabels? labels = null) : ICom
 
     private const string EarlierThan = "earlier than";
 
-    private const int MaxNotes = 200;
+    internal const int MaxNotes = 200;
 
     private static readonly Option[] Spec = [new(null, "lines")];
 
@@ -65,6 +68,7 @@ public sealed class Blame(INoteStore notes, IWriterLabels? labels = null) : ICom
             if (fragment is null && (path.IsRoot || (await notes.ListNotesUnderAsync(path, ct)).Count > 0
                 || (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0]))))
             {
+                if (options.Has("lines")) return ShellResult.Error("blame: --lines takes a note, not a folder");
                 return await FolderAsync(path, ct);
             }
 

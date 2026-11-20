@@ -56,6 +56,14 @@ public sealed class UploadToolTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public void The_description_takes_its_numbers_from_the_constants()
+    {
+        var text = Regex.Replace(Kumbu.Core.Sh.Manual.UploadDescription, @"\s+", " ");
+        Assert.Contains($"The URL works once and expires after {UploadTickets.Lifetime.TotalMinutes} minutes.", text);
+        Assert.Contains($"({Kumbu.Core.Attachments.FileTooLargeException.Shown(VaultOptions.DefaultMaxFileBytes)} unless its admin set another;", text);
+    }
+
+    [Fact]
     public async Task Answers_a_url_and_a_curl_line()
     {
         var (vault, _, key, _) = await OwnVaultAsync();

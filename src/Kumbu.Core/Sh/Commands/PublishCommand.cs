@@ -13,18 +13,21 @@ public sealed class PublishCommand(IPublisher? publisher) : ICommand
 {
     public string Name => "publish";
 
-    public string Usage => "publish ls|add|update|rm <note> [--depth N] [--without <note>]... [--dry-run]";
+    public string Usage => "publish ls [path] | add|update <note> [--depth N] [--without <note>]... | rm <note>";
 
     public string Summary => "share a note, with the notes it links to, as a read-only copy behind a secret link";
 
     public string Help => """
         publish ls [path]        the published notes below a path; a link is never shown again
-        publish add <note>       publish a copy of the note behind a secret link, shown once
-        publish update <note>    replace the copy with the notes as they are now; the link stays
-        publish rm <note>        withdraw the publication; its link reads nothing from then on
-          --depth N              also take the notes it links to, N links deep (0 to 5, default 0)
+        publish add <note> [--depth N] [--without <note>]... [--dry-run]
+                                 publish a copy of the note behind a secret link, shown once
+        publish update <note> [--depth N] [--without <note>]...
+                                 replace the copy with the notes as they are now; the link stays
+          --depth N              also take the notes it links to, N links deep (0 to 5; for add, default 0)
           --without <note>       leave a note out, and what is reached only through it (repeatable)
           --dry-run              add only: list what would be published, publish nothing
+          update keeps the stored depth and --without list unless given.
+        publish rm <note>        withdraw the publication; its link reads nothing from then on
         Only the vault's owner publishes, with a key or connection she allowed to ("May publish").
         add and update print every note the copy takes and every note left behind. Before you
         publish more than the one note, show that list to the person and let them confirm it.

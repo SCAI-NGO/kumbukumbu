@@ -16,10 +16,10 @@ public static class WriteTools
     public static async Task<CallToolResult> Write(
         NoteWriter writer,
         DeepLinks links,
-        [Description("Absolute path of the note, e.g. /Work/projects/plan.md")] string path,
-        [Description("The note's full Markdown content")] string content,
+        [Description("Absolute path of the note, SVG or skill text file, e.g. /Work/projects/plan.md")] string path,
+        [Description("The full content (Markdown for a note)")] string content,
         [Description("Version token from cat or the last write/edit; leave out to create a new note")] string? version = null,
-        [Description("Optional: one line on why, kept with this version in the note's history (at most 200 characters)")] string? message = null,
+        [Description("Optional: one line on why, kept with this version in the note's history; an SVG's or a skill file's history keeps none (at most 200 characters)")] string? message = null,
         CancellationToken ct = default) =>
         await ToolResult.RunAsync(KumbuMetrics.Tool.Write, () => writer.WriteAsync(path, content, version, ct, message), links);
 

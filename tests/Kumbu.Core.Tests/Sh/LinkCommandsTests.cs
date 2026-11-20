@@ -408,6 +408,59 @@ public class LinkCommandsTests
     public async Task LinksOfADirectoryWithoutProblems() =>
         Assert.Equal("(no broken or ambiguous links below /Demo/projects)", (await Run("links /Demo/projects")).Output);
 
+    // An existing folder without notes answers as a folder whose links all resolve (help-texts spec §3.9).
+    [Fact]
+    public async Task Links_on_an_empty_vault_finds_nothing_broken()
+    {
+        var store = new InMemoryNoteStore();
+        store.AddVault("Home");
+
+        Assert.Equal(ShellResult.Ok("(no broken or ambiguous links below /Home)"), await TestShell.Of(store).RunAsync("links /Home", CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("links /Work/Screens")]
+    [InlineData("links /Work/Screens/")]
+    public async Task Links_on_a_folder_holding_only_an_image_finds_nothing_broken(string line)
+    {
+        var store = new InMemoryNoteStore(("/Work/plan.md", "[[nope]]\n"));
+        store.AddAttachment("/Work/Screens/shot.png");
+
+        Assert.Equal(ShellResult.Ok("(no broken or ambiguous links below /Work/Screens)"), await TestShell.Of(store).RunAsync(line, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Links_on_a_folder_made_by_mkdir_finds_nothing_broken()
+    {
+        var sh = TestShell.Of(new InMemoryNoteStore(("/Work/plan.md", "[[nope]]\n")));
+        Assert.False((await sh.RunAsync("mkdir /Work/Drafts", CancellationToken.None)).IsError);
+
+        Assert.Equal(ShellResult.Ok("(no broken or ambiguous links below /Work/Drafts)"), await sh.RunAsync("links /Work/Drafts", CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("links /Work/nothing", "links: /Work/nothing: No such file or directory")]
+    [InlineData("links /Work/nothing/", "links: /Work/nothing: No such file or directory")]
+    [InlineData("links /Nope", "links: /Nope: No such file or directory")]
+    public async Task Links_on_a_missing_folder_is_no_such_file(string line, string error)
+    {
+        var store = new InMemoryNoteStore(("/Work/plan.md", "[[nope]]\n"));
+        store.AddAttachment("/Work/Screens/shot.png");
+
+        Assert.Equal(ShellResult.Error(error), await TestShell.Of(store).RunAsync(line, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Links_with_a_version_on_an_empty_folder_keeps_its_error()
+    {
+        var store = new InMemoryNoteStore();
+        store.AddVault("Home");
+
+        Assert.Equal(
+            ShellResult.Error("links: --version names a version of one note; a directory has none"),
+            await TestShell.Of(store).RunAsync("links --version 3 /Home", CancellationToken.None));
+    }
+
     [Fact]
     public async Task BacklinksSaysWhenNothingLinksAndShowsAmbiguousCandidates() => Assert.Equal(
         "/Demo/welcome.md:3:![[diagram.png]] [[nope]] [[plan]] [[#Welcome]]  (ambiguous, may mean this note)",

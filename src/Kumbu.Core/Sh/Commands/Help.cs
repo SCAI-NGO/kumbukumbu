@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 
 namespace Kumbu.Core.Sh.Commands;
@@ -44,13 +45,14 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
               Besides notes, a vault keeps every file type, up to the server's bound each (1 GiB unless its
               admin set another): images (.png, .jpg, .jpeg, .gif, .webp, .svg), PDFs, and any other file (a
               spreadsheet, a CSV, a script) as it is. A name ending in an image's or PDF's extension must hold
-              that format. A file and a folder never share a name. A file larger than 15 MB is kept and
+              that format. A file and a folder never share a name. A file larger than {AttachmentFormat.MaxBytes / (1024 * 1024)} MB is kept and
               downloaded, but not read: pdf, img, pdfimages and rg say so, and an SVG can't be that large.
-              People upload them (the web app, Obsidian, the upload tool); the write, edit and replace tools
-              refuse an attachment path, since they only write text.
-              An SVG is the exception: write takes it whole, as for a note (no version creates it, the version
-              replaces it), once it is well-formed XML with an svg root; edit and replace refuse it. Draw it,
-              look at it with img, and write it again: cat prints its source after its line.
+              People upload them (the web app, Obsidian, the upload tool, which takes an SVG too). The write
+              tool takes notes, SVGs and a skill's text files, and everything else is uploaded; the edit and
+              replace tools change notes only.
+              An SVG and a skill's text file are written whole, as a note is (no version creates one, the version
+              replaces it); an SVG once it is well-formed XML with an svg root. Draw an SVG, look at it with img,
+              and write it again: cat prints its source after its line.
               A note links to one by its name with the extension: ![[shot.png]], ![alt](/Screens/shot.png),
               [[report.pdf]], [[data.csv]]; the rules are those of 'help links'.
               A file that is UTF-8 text without NUL bytes is a text file: cat prints it and rg searches it.
@@ -76,9 +78,10 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 csv        reads a text file as a table: its shape, then rows, columns or a range B2:D20 ('help csv')
                 html       reads a text file as HTML: its headings, or what a CSS selector picks ('help html')
                 xml        reads a text file as XML: its elements, or what an XPath picks ('help xml')
-              What doesn't: semsearch --words and --tag find notes only, 'rg --files' lists notes only;
-              neither rg nor semsearch searches images (an SVG's source neither) or other files, semsearch no text
-              files, and rg not PDFs in a checkpoint; head, tail, wc, sort and outline read notes, not attachments.
+              What doesn't: semsearch --words and --tag find notes only, 'rg --files' lists notes and text files
+              only (with --tag, notes only); neither rg nor semsearch searches images (an SVG's source neither) or
+              other files, semsearch no text files, and rg not PDFs in a checkpoint; head, tail, wc, sort and
+              outline read notes, not attachments.
               A checkpoint holds the attachments too (see 'help checkpoints').
 
               ls /Work/Screens
@@ -93,13 +96,16 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
               A folder of that name anywhere else (/Work/Inbox/_archive/) is an ordinary folder.
               What lies in it is left out, unless asked:
                 ls         a vault's listing leaves out _archive/
-                rg         searches neither its notes nor its PDFs; --files and --tag leave its notes out
+                rg         searches none of its notes, text files or PDFs, and --files lists none of them
                 semsearch  ranks neither its notes nor its PDF pages
                 tags       counts no tag of its notes
                 backlinks  lists no note in it that links to the path
+                graph      leaves its notes and attachments out; --archive takes them in
+                calendar   leaves archived notes out
                 the web app's tree and search leave it out too; the tree shows it as one entry, Archive.
               Asking: --archive on each of them, or a path inside the archive: ls /Work/_archive/,
-              rg pump /Work/_archive/. cat, pdf, img, links and outline read an archived path as any other.
+              rg pump /Work/_archive/. calendar has no --archive; a note in the archive has no place in the
+              calendar. cat, pdf, img, links and outline read an archived path as any other.
               Not hidden: history, trash, du (the archive is a line of its own), df, restore, mv,
               checkpoints, the board; nor WebDAV, sync, the export, publishing or sharing.
               Links prefer what is outside the archive: a link that matches both an archived and a living
@@ -118,10 +124,12 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
             """,
     };
 
-    /// <summary>A command's help; a reader's ends with a pointer to the checkpoint topic, a command that is also a topic
-    /// ('archive') with one to the topic, which 'help' shows after the command's own.</summary>
+    /// <summary>A command's help; a reader's ends with a pointer to the checkpoint topic (calendar's says that only its
+    /// reading forms run there), a command that is also a topic ('archive') with one to the topic, which 'help' shows
+    /// after the command's own.</summary>
     public static string Of(ICommand command) => Shell.Readers.Contains(command.Name)
         ? command.Help.TrimEnd() + "\n  --checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'"
+            + (command.Name == "calendar" ? "\n                       the reading forms only; set, move, close, reopen and unset are refused there" : "")
         : Topics.ContainsKey(command.Name)
             ? command.Help.TrimEnd() + $"\n  'help {command.Name}' adds the {command.Name} topic"
             : command.Help;

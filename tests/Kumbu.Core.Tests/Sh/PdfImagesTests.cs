@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -1217,7 +1218,7 @@ public class PdfImagesTests
         var help = await Run("help");
         var own = await Run("help pdfimages");
 
-        Assert.True(help.Output.IndexOf("\n  pdf ", StringComparison.Ordinal) < help.Output.IndexOf("\n  pdfimages <pdf> [pages] <dir>/ ", StringComparison.Ordinal));
+        Assert.True(help.Output.IndexOf("\n  pdf ", StringComparison.Ordinal) < help.Output.IndexOf($"\n  {UsageLine["usage: ".Length..]} ", StringComparison.Ordinal));
         Assert.Contains("store a PDF's pictures as images, to place in notes", help.Output);
         Assert.StartsWith("pdfimages <pdf> [pages] <folder>/\npdfimages <pdf> <page> --crop x,y,w,h <file.png>\npdfimages --list <pdf> [pages]\n", own.Output);
         Assert.Contains("duplicates are found within one call", own.Output);
@@ -1229,6 +1230,33 @@ public class PdfImagesTests
         Assert.Contains("can't be read: the output names their pages, to look at with pdf --crop", own.Output);
         Assert.Contains("A call stopped within a page says which of its", own.Output);
         Assert.Contains("\n  pdfimages <pdf> [pages] <dir>/  ", Manual.ToolDescription);
+    }
+
+    [Fact]
+    public void Its_usage_shows_the_three_forms()
+    {
+        var command = new PdfImages(_store, _pixels, _files, _time);
+
+        Assert.Equal(UsageLine["usage: ".Length..], command.Usage);
+    }
+
+    [Fact]
+    public async Task Help_gives_the_time_limits_names_and_the_crop_hint_from_their_constants()
+    {
+        var command = new PdfImages(_store, _pixels, _files, _time);
+        var help = Regex.Replace((await Run("help pdfimages")).Output, @"\s+", " ");
+
+        Assert.Equal(TimeSpan.FromSeconds(20), command.Budget);
+        Assert.Equal(TimeSpan.FromSeconds(50), command.Ceiling);
+        Assert.Equal(500, PdfImages.MaxImages);
+        Assert.Contains("--list stops after about 10 seconds", help);
+        Assert.Contains("a call that stores lists its pages first, also for about 10 seconds, and stores only those listed", help);
+        Assert.Contains("storing stops at the first page boundary after 20 seconds; after 50 it stops even within a page, and names that page as partly stored", help);
+        Assert.Equal(15, AttachmentFormat.MaxBytes / (1024 * 1024));
+        Assert.Contains("a JPEG where the PNG would pass 15 MB", help);
+        Assert.DoesNotContain("stops after about 20 seconds", help);
+        Assert.Contains("<pdf name>-p<page>-<n>.png (.jpg where it is stored as a JPEG)", help);
+        Assert.Contains("when the first page alone has more than 500, it suggests storing its pictures in regions with --crop", help);
     }
 
     [Fact]

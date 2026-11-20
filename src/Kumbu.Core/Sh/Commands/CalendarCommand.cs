@@ -36,13 +36,13 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
 
     public string Name => "calendar";
 
-    public string Usage => "calendar <vault> [--week W | --month M | --from D --to D] [--tag T] | calendar notifications";
+    public string Usage => "calendar <vault> [--week W|--month M|--from D --to D] [--tag T] | notifications [--tag T] [vault] | set|move|… <note>";
 
     public string Summary => "the notes with a time: a vault's week, month or days; notifications: what's on in every vault; set, move, close, reopen, unset change one";
 
-    public string Help => """
+    public string Help => $"""
         calendar <vault> [--week 2026-W46 | --week 46 | --month 2026-11 | --from 2026-11-20 --to 2026-12-06] [--tag <tag>]
-        calendar notifications [--tag <tag>]
+        calendar notifications [--tag <tag>] [vault]
         calendar set <note> --when <value> [--until <value>] [--task | --no-task] [--upcoming 7d] [--tz <zone>] [--reason <text>]
         calendar move <note> <when>
         calendar close <note> [--reason <text>]
@@ -56,13 +56,13 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
           _archive/ are left out. Days and times are in your time zone.
           calendar <vault> prints the current week: entries over several days and week notes first,
           with their span, then each day with its entries (time, title, path, what it is, and
-          'upcoming', 'ongoing' or 'overdue' with a span), then the problems: dates that can't be
-          read, never dropped.
-          --week W   that week: 46 of the current year, or 2026-W46
+          'upcoming', 'ongoing' or 'overdue' with a span, or 'today · 14:00' for a time later today),
+          then the problems: dates that can't be read, never dropped.
+          --week W   that week: 46 of the current week's ISO year, or 2026-W46
           --month M  that month as its weeks, only the days with entries: 2026-11
           --from D --to D
                      those days (2026-11-20), both included, as their weeks, only the days
-                     with entries; give both, at most 366 days
+                     with entries; give both, at most {MaxRangeDays} days
           --tag T    only the notes with that tag or one nested below it, frontmatter or text
                      (ignoring case, with or without '#'); read them with cat
           calendar notifications lists what's on in every vault you can read: overdue first
@@ -90,7 +90,6 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
 
     public bool ReadsInput => false;
 
-    /// <summary>The write verb <paramref name="args"/> start with (options aside), or null for a read form.</summary>
     /// <summary>The write form a line names (set, move, close, reopen, unset), read past options as the command reads it; null for a read.</summary>
     public static string? WriteVerb(IReadOnlyList<string> args) => FirstWord(args) is { } word && WriteVerbs.Contains(word) ? word : null;
 
@@ -357,7 +356,7 @@ public sealed partial class CalendarCommand(INoteReader notes, Func<DateTime> no
     private const string Years = "calendar: a calendar has the years 2 to 9998";
 
     // So that one call can't ask for centuries; a year, a leap year's too, fits.
-    private const int MaxRangeDays = 366;
+    internal const int MaxRangeDays = 366;
 
     [GeneratedRegex(@"\A[0-9]{1,2}\z")]
     private static partial Regex WeekNumber();

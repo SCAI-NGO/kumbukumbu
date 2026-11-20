@@ -14,18 +14,19 @@ public sealed partial class Sort(INoteReader notes) : ICommand
 
     public string Name => "sort";
 
-    public string Usage => "sort [-r|-u|-n|-f] [path]";
+    public string Usage => "sort [-r] [-u] [-n] [-f] [--version V] [path]";
 
     public string Summary => "sort lines";
 
     public string Help => """
-        sort [-r] [-u] [-n] [-f] [path]
+        sort [-r] [-u] [-n] [-f] [--version V] [path]
           Sort the lines of a note, or of the piped input, in human order: Ü sorts next to U,
           lowercase before uppercase of the same letter. ls and rg list in the same order.
           -r, --reverse        reverse the order
           -u, --unique         drop lines that compare equal to the one before
           -n, --numeric-sort   by the number a line starts with (no number counts as 0)
           -f, --ignore-case    ignore case
+          --version V          of an earlier version of the note from 'history <path>'
 
           ls /Demo | sort -r
           rg --files /Demo | sort -f

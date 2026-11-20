@@ -262,8 +262,9 @@ public class ArchiveCommandTests
 
         Assert.StartsWith("archive <path>", help);
         Assert.Contains("server's time zone", help);
-        Assert.Contains("unless given --archive or a path", help);
+        var text = System.Text.RegularExpressions.Regex.Replace(help, @"\s+", " ");
+        Assert.Contains("unless given --archive or a path", text);
         Assert.Contains("To restore, mv it back (mv never overwrites).", help);
-        Assert.Contains("hiding the archive is about attention, not access", help);
+        Assert.Contains("hiding the archive is about attention, not access", text);
     }
 }

@@ -259,4 +259,11 @@ public class GraphCommandTests
         foreach (var mode in new[] { "--path", "--orphans", "--hubs", "--unresolved", "--tag", "--no-ghosts" }) Assert.Contains(mode, help);
         Assert.Contains("graph <note>", Manual.ToolDescription);
     }
+
+    [Fact]
+    public async Task Help_says_archive_takes_in_notes_and_attachments()
+    {
+        var help = System.Text.RegularExpressions.Regex.Replace((await Run(TestShell.Of(), "help graph")).Output, @"\s+", " ");
+        Assert.Contains("take in the notes and attachments of the archive (_archive/)", help);
+    }
 }

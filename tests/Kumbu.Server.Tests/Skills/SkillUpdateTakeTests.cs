@@ -156,6 +156,24 @@ public sealed class SkillUpdateTakeTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Review_diffs_text_files_in_a_skills_vault_marked_under_another_name()
+    {
+        await using var api = Api();
+        var alice = await RestClient.MarkedUnderAnotherNameAsync(api);
+        MarketplaceApiTests.Shown(api, Repo, Sha);
+        using (var installed = await alice.SendAsync(HttpMethod.Post, "/api/skills/install", new { repo = Repo, commit = Sha, path = "skills/pdf", vault = "Tools" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, installed.StatusCode);
+        }
+
+        Publish(Newer, NextVersion());
+        var review = await ReviewAsync(alice, "/Tools/pdf");
+
+        Assert.Contains("+print('new')", Hunks(FileOf(review, "scripts/new.py")));
+        Assert.Contains("-print('hi')", Hunks(FileOf(review, "scripts/run.py")));
+    }
+
+    [Fact]
     public async Task Review_shows_the_users_own_edits_too()
     {
         await using var api = Api();

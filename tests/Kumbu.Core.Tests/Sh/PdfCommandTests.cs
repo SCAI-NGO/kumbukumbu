@@ -927,11 +927,25 @@ public class PdfCommandTests
     }
 
     [Fact]
+    public async Task The_usage_names_the_options_of_the_help_synopsis()
+    {
+        var pdf = new Kumbu.Core.Sh.Commands.PdfCommand(_store, _pixels);
+        var synopsis = pdf.Help.Split('\n')[..2];
+        var graph = new Kumbu.Core.Sh.Commands.GraphCommand(_store);
+
+        Assert.Equal(string.Join(" | ", synopsis), pdf.Usage);
+        Assert.Contains("[--images|--images=all] [--crop x,y,w,h] [--rotate D] [--size small|medium|large]", pdf.Usage);
+        // help pads every row to the longest Usage, graph's; pdf's stays within it.
+        Assert.Contains($"\n  {graph.Usage}  {graph.Summary}\n", (await Run("help")).Output);
+        Assert.Contains($"\n  {pdf.Usage}", (await Run("help")).Output);
+    }
+
+    [Fact]
     public async Task The_help_names_rotate_and_its_conversions()
     {
         var help = (await Run("help pdf")).Output;
 
-        Assert.StartsWith("pdf <path> [pages] [--images | --images=all] [--crop x,y,w,h] [--rotate D] [--size small|medium|large]\n", help);
+        Assert.StartsWith("pdf <path> [pages] [--images|--images=all] [--crop x,y,w,h] [--rotate D] [--size small|medium|large]\n", help);
         Assert.Contains("""
               --rotate D        turn each page shown as an image clockwise by 90, 180 or 270 degrees, for a sheet lying
                                 on its side; needs --images, --images=all or --crop, and leaves the text as it is. With

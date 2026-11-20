@@ -279,7 +279,7 @@ describe("local commands", () => {
         "  cd [path] (.. alone is cd ..), pwd, clear, exit",
         "  l, la and lsa for ls -l, ls -a and ls -la; p <note> shows a note as it reads in the app (help p).",
         "  Relative paths work here; the console turns them into absolute ones, and → shows the result.",
-        "  It only reads: pdfimages, restore, mv, archive, mkdir, rm, mkcp, rmcp, publish add, update and rm and skills copy are refused, and the write tools aren't here.",
+        "  It only reads: pdfimages, restore, mv, archive, mkdir, rm, mkcp, rmcp, publish add, update and rm, skills copy, and calendar set, move, close, reopen and unset are refused, and the write tools aren't here.",
         "",
         "The manual agents get, unchanged:",
       ].join("\n"),
@@ -309,9 +309,11 @@ describe("local commands", () => {
     await open();
     await run("help");
     const block = lines()[3]!;
-    // publish is allowed for ls alone, skills for all but copy; their other subcommands are refused (ConsoleApi.ShAsync).
-    const refused = `${fixture.refused.join(", ")}, publish add, update and rm and skills copy`;
-    expect(refused).toBe("pdfimages, restore, mv, archive, mkdir, rm, mkcp, rmcp, publish add, update and rm and skills copy");
+    // publish is allowed for ls alone, skills for all but copy; calendar reads except set, move, close, reopen and unset (ConsoleApi.ShAsync).
+    const refused = `${fixture.refused.join(", ")}, publish add, update and rm, skills copy, and calendar set, move, close, reopen and unset`;
+    expect(refused).toBe(
+      "pdfimages, restore, mv, archive, mkdir, rm, mkcp, rmcp, publish add, update and rm, skills copy, and calendar set, move, close, reopen and unset",
+    );
     expect(block).toContain(`It only reads: ${refused} are refused`);
   });
 });

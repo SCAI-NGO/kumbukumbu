@@ -31,8 +31,9 @@ public sealed class Df(INoteReader notes, IStorageFigures figures) : ICommand
           A vault shared with you is not listed: what anyone writes there counts against its owner.
           With a key that opens only some of your vaults, the rows and the total are those vaults';
           your other vaults count against the limit too, so no percentage is shown.
-          Sizes are B, KB, MB and GB (1 KB = 1024 B); -h is accepted and changes nothing.
-          -b, --bytes   exact bytes
+          Sizes are B, KB, MB and GB (1 KB = 1024 B).
+          -h, --human-readable   accepted, changes nothing
+          -b, --bytes            exact bytes
 
           df
           df /Work

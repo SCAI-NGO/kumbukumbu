@@ -9,14 +9,15 @@ public sealed class Head(INoteReader notes) : ICommand
 
     public string Name => "head";
 
-    public string Usage => "head [-n N] [path]";
+    public string Usage => "head [-n N] [--version V] [path]";
 
     public string Summary => "first N lines (default 10)";
 
     public string Help => """
-        head [-n N] [path]
+        head [-n N] [--version V] [path]
           Print the first N lines (default 10) of a note, or of the piped input.
           -n N, -N, --lines=N   number of lines
+          --version V           of an earlier version of the note from 'history <path>'
 
           head -n 5 /Demo/welcome.md
           rg -l kumbu | head -3

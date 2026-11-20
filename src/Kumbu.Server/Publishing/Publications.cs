@@ -905,8 +905,10 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
         VaultPath? Attachment(string target) => resolver.Resolve(source, target) is { Kind: LinkKind.Attachment, Target: { } t } ? t : null;
 
         // A file of a skill's place stays out of a note's copy, as an unpublishable one does: a skill is shared as a whole.
+        // The mark decides whether an .svg is an image (the paths are the vault's own, and the skills vault has no other name).
+        var marked = access.IsSkillsVault ? access.Vault.Name : null;
         bool MayCopy(VaultPath p) =>
-            !unusable.Contains(p) && attachments.TryGetValue(p, out var a) && AttachmentFormat.ForPath(p)?.Kind == AttachmentKind.Image
+            !unusable.Contains(p) && attachments.TryGetValue(p, out var a) && AttachmentFormat.ForPath(p, marked)?.Kind == AttachmentKind.Image
             // An image larger than 15 MB is kept, not read (files spec, decision 12): left out as a file is, by its name.
             && !AttachmentFormat.IsLarge(a.Current.Size) && !Covered(record.Unpublishable, p.Value)
             && !InSkillPlace(access.Vault, p);

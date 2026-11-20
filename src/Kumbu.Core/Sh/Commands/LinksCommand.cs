@@ -16,11 +16,11 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
     public string Summary => "the links of a note (wikilinks and Markdown links) and where they lead; of a directory: the broken ones";
 
     public string Help => """
-        links <path>[#section]
+        links [--version V] <path>[#section]
           List the [[wikilinks]], ![[embeds]], Markdown links [text](target) and images ![alt](target)
           of a note (or of one section), one per line: line, the link as written, and where it leads: a note's or an
-          attachment's path, 'not found', 'ambiguous' with the candidates, 'attachment' for other
-          files, or 'this note' for [[#Heading]]. A link to a block ([[plan#^id]]) leads to the note and
+          attachment's path, 'not found', 'ambiguous' with the candidates, 'attachment (not a note)' for
+          other files, or 'this note' for [[#Heading]]. A link to a block ([[plan#^id]]) leads to the note and
           its block: 'not found: no block ^id in …' when the note has no such block.
           Links in code don't count. --version V lists the links of an earlier version, resolved
           against the notes as they are now.
@@ -67,7 +67,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var content = await notes.ReadAsync(path, ct);
-        if (content is null && fragment is null && (await notes.ListNotesUnderAsync(path, ct)).Count > 0)
+        if (content is null && fragment is null && await IsFolderAsync(path, ct))
         {
             return version is null
                 ? await CheckDirectoryAsync(vault, path, ct)
@@ -115,6 +115,13 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
             },
         };
     }
+
+    /// <summary>A folder exists when notes are below it, when it is a vault, or when attachments or a folder marker
+    /// are below it (as mkdir keeps an empty one); a path that is none of these stays "No such file or directory".</summary>
+    private async Task<bool> IsFolderAsync(VaultPath path, CancellationToken ct) =>
+        (await notes.ListNotesUnderAsync(path, ct)).Count > 0
+        || (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0]))
+        || (await StoreAttachments.UnderAsync(notes, path, ct)).Count > 0;
 
     private async Task<ShellResult> CheckDirectoryAsync(VaultPath vault, VaultPath dir, CancellationToken ct)
     {

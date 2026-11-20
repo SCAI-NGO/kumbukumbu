@@ -140,6 +140,8 @@ public static class SyncApi
             ?? throw ApiErrors.NotFound($"There is no vault '{root.Segments[0]}'.");
         var unlocked = access.Vault;
         if (unlocked.Pending) throw VaultBusyException.Being();
+        // The skills vault is never a member's alias: its own name and the caller's are one.
+        var skillsVault = access.IsSkillsVault ? unlocked.Name : null;
         var now = catalog.Now;
         unlocked.Touch(now);
 
@@ -147,7 +149,7 @@ public static class SyncApi
         var cursor = now.ToString("O", CultureInfo.InvariantCulture);
         var changedAt = unlocked.ChangedAt;
         var notes = unlocked.Notes;
-        var files = withFiles ? unlocked.Attachments.Where(a => withText || !IsText(a.Key)).ToDictionary() : [];
+        var files = withFiles ? unlocked.Attachments.Where(a => withText || !IsText(a.Key, skillsVault)).ToDictionary() : [];
         // Damaged attachment records count only for a client that knows attachments: the plain answer stays today's.
         var damaged = withFiles ? unlocked.DamagedPathIds.Count : unlocked.DamagedNotes;
         // The working set holds the vault's own paths; the answer is in the caller's view (a member's alias).
@@ -159,8 +161,8 @@ public static class SyncApi
         if (from is null)
         {
             if (since is null && EntityTags.NoneMatchNames(http.Request, new($"\"{state}\""))) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
-            var all = notes.Values.Select(n => Entry(access.ToCaller(n.Note.Path), n.Note.Version, withFiles))
-                .Concat(files.Values.Select(a => Entry(access.ToCaller(a.Attachment.Path), a.Attachment.Version, withFiles, a.Attachment.Current.Size)))
+            var all = notes.Values.Select(n => Entry(access.ToCaller(n.Note.Path), n.Note.Version, withFiles, skillsVault))
+                .Concat(files.Values.Select(a => Entry(access.ToCaller(a.Attachment.Path), a.Attachment.Version, withFiles, skillsVault, a.Attachment.Current.Size)))
                 .OrderBy(e => e.Path, TextOrder.Default)
                 .ToList();
             return TypedResults.Ok(new VersionsView(true, cursor, state, damaged, all, [], marker));
@@ -168,13 +170,13 @@ public static class SyncApi
 
         // Attachments' writes, moves and removals are logged with the notes'; a client that knows no attachments
         // must never see their paths, least of all in deleted, which would trash its copy of a file it keeps.
-        var touched = changedAt.Where(c => c.Value >= from && (withFiles || c.Key.IsNote) && (withText || !IsText(c.Key))).Select(c => c.Key).OrderBy(p => p.Value, TextOrder.Default).ToList();
+        var touched = changedAt.Where(c => c.Value >= from && (withFiles || c.Key.IsNote) && (withText || !IsText(c.Key, skillsVault))).Select(c => c.Key).OrderBy(p => p.Value, TextOrder.Default).ToList();
         var listed = new List<VersionEntry>();
         var deleted = new List<string>();
         foreach (var path in touched)
         {
-            if (notes.TryGetValue(path, out var entry)) listed.Add(Entry(access.ToCaller(path), entry.Note.Version, withFiles));
-            else if (files.TryGetValue(path, out var file)) listed.Add(Entry(access.ToCaller(path), file.Attachment.Version, withFiles, file.Attachment.Current.Size));
+            if (notes.TryGetValue(path, out var entry)) listed.Add(Entry(access.ToCaller(path), entry.Note.Version, withFiles, skillsVault));
+            else if (files.TryGetValue(path, out var file)) listed.Add(Entry(access.ToCaller(path), file.Attachment.Version, withFiles, skillsVault, file.Attachment.Current.Size));
             // A note that doesn't open isn't gone: the client mustn't trash its copy. It is counted in damaged.
             else if (!unlocked.IsDamaged(path)) deleted.Add(access.ToCaller(path).Value);
         }
@@ -182,11 +184,11 @@ public static class SyncApi
         return TypedResults.Ok(new VersionsView(false, cursor, state, damaged, listed, deleted, marker));
     }
 
-    /// <summary>Whether the path, current or gone, is one a skill folder keeps as text.</summary>
-    private static bool IsText(VaultPath path) => AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text;
+    /// <summary>Whether the path, current or gone, is one a skill folder keeps as text; <paramref name="skillsVault"/> as for <see cref="AttachmentFormat.ForPath"/>.</summary>
+    private static bool IsText(VaultPath path, string? skillsVault) => AttachmentFormat.ForPath(path, skillsVault)?.Kind == AttachmentKind.Text;
 
-    private static VersionEntry Entry(VaultPath path, string version, bool withKind, long? size = null) =>
-        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Value) : null, size);
+    private static VersionEntry Entry(VaultPath path, string version, bool withKind, string? skillsVault, long? size = null) =>
+        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Value, skillsVault) : null, size);
 
     /// <summary>
     /// Where a <c>since</c> answer starts, or null for the full list: no cursor, one that doesn't parse, one in the
