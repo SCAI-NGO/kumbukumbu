@@ -46,8 +46,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     internal SemaphoreSlim FileWrites { get; } = new(Math.Max(1, options.Value.Vaults.ConcurrentFileWrites));
 
     /// <summary>The large uploads one account streams at once, of the server's <see cref="FileWrites"/>: each holds its
-    /// slot for as long as its body takes, so one large upload per account at a time, and one account's slow or stopped
-    /// uploads can't take the slots of everyone else.</summary>
+    /// slot for as long as its body takes: one large upload per account at a time.</summary>
     internal const int LargeWritesPerAccount = 1;
 
     /// <summary>How long a large upload waits for its slots before it is refused (<see cref="TooManyUploadsException"/>):
@@ -55,8 +54,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// covers an upload ahead of it finishing, and a client told to come back retries rather than hangs. Settable for tests.</summary>
     internal TimeSpan FileWriteWait { get; set; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>How long a large upload may send nothing before it is ended (400, nothing stored): a client that stopped
-    /// gives its slot back rather than holding it. Settable for tests.</summary>
+    /// <summary>How long a large upload may send nothing before it is ended (400, nothing stored), its slot given back.
+    /// Settable for tests.</summary>
     internal TimeSpan LargeBodySilence { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>Per account (the caller's user id; "" for the dev token), its share of <see cref="FileWrites"/>. One per
