@@ -50,6 +50,10 @@ public sealed class LinkResolver
     /// <summary>Each note's and attachment's path inside the vault, made once rather than once per link.</summary>
     private readonly Dictionary<VaultPath, string> _inVault = [];
 
+    /// <summary>The notes, and the attachments, by their path inside the vault, for a link that names one exactly.</summary>
+    private readonly Dictionary<string, List<VaultPath>> _notesByPath = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<VaultPath>> _attachmentsByPath = new(StringComparer.OrdinalIgnoreCase);
+
     /// <param name="notes">Every note of one vault.</param>
     /// <param name="attachments">Every attachment of the vault; null if unknown, so a link to a file is then
     /// <see cref="LinkKind.Attachment"/> without a target, whether the file exists or not.</param>
@@ -64,7 +68,7 @@ public sealed class LinkResolver
         {
             if (note.Vault != vault) continue;
             var name = StripMd(note.Name);
-            Add(_byName, name, note);
+            Add(_byName, _notesByPath, name, note);
             if (noteAliases?.GetValueOrDefault(note) is not { } aliases) continue;
             foreach (var alias in aliases)
             {
@@ -81,15 +85,17 @@ public sealed class LinkResolver
         foreach (var attachment in attachments)
         {
             // A kept folder's marker is no file of the vault anyone links to.
-            if (attachment.Vault == vault && !FolderMarker.Is(attachment)) Add(_attachmentsByName, attachment.Name, attachment);
+            if (attachment.Vault == vault && !FolderMarker.Is(attachment)) Add(_attachmentsByName, _attachmentsByPath, attachment.Name, attachment);
         }
     }
 
-    private void Add(Dictionary<string, List<VaultPath>> byName, string name, VaultPath path)
+    private void Add(Dictionary<string, List<VaultPath>> byName, Dictionary<string, List<VaultPath>> byPath, string name, VaultPath path)
     {
-        _inVault[path] = "/" + string.Join('/', path.Segments.Skip(1));
+        var inVault = _inVault[path] = "/" + string.Join('/', path.Segments.Skip(1));
         if (!byName.TryGetValue(name, out var list)) byName[name] = list = [];
         list.Add(path);
+        if (!byPath.TryGetValue(inVault, out var paths)) byPath[inVault] = paths = [];
+        paths.Add(path);
     }
 
     /// <summary>A note's path inside its vault without ".md", an attachment's with its extension: the most specific
@@ -102,6 +108,19 @@ public sealed class LinkResolver
 
     /// <summary>Where a wikilink to <paramref name="target"/> in <paramref name="source"/> leads.</summary>
     public LinkResolution Resolve(VaultPath source, string target) => Resolve(source, target, wikilink: true);
+
+    /// <summary>The target as <see cref="Resolve(VaultPath, NoteLink)"/> reads it, and whether its case can change
+    /// where it leads: from one source, links of one kind whose texts are equal (ignoring case where it doesn't count)
+    /// lead to the same place. Every rule above ignores case, except the vault's name, which a relative path through ".."
+    /// may name, and the folder marker's name.</summary>
+    public static (string Text, bool CaseCounts) SameResolution(string target)
+    {
+        var text = target.Trim().Normalize(NormalizationForm.FormC);
+        var fileName = text[(text.LastIndexOf('/') + 1)..];
+        var climbs = (text.StartsWith("./", StringComparison.Ordinal) || text.StartsWith("../", StringComparison.Ordinal))
+            && text.Contains("..", StringComparison.Ordinal);
+        return (text, climbs || fileName.Equals(FolderMarker.Name, StringComparison.OrdinalIgnoreCase));
+    }
 
     private LinkResolution Resolve(VaultPath source, string target, bool wikilink)
     {
@@ -133,7 +152,7 @@ public sealed class LinkResolver
 
         var path = StripMd(full);
         var name = path[(path.LastIndexOf('/') + 1)..];
-        if (Find(_byName, LinkKind.Note, source, path, name, "/" + path + ".md", exact) is { } note) return note;
+        if (Find(_byName, _notesByPath, LinkKind.Note, source, path, name, "/" + path + ".md", exact) is { } note) return note;
 
         // A bare name that no note carries may be a note's alias; "Kumbu.md" names a file, never an alias,
         // and so does "shot.png": without the vault's attachments it may name one that exists.
@@ -154,15 +173,17 @@ public sealed class LinkResolver
     }
 
     private LinkResolution? FindAttachment(VaultPath source, string full, string fileName, bool exact) =>
-        _attachmentsByName is null ? null : Find(_attachmentsByName, LinkKind.Attachment, source, full, fileName, "/" + full, exact);
+        _attachmentsByName is null ? null : Find(_attachmentsByName, _attachmentsByPath, LinkKind.Attachment, source, full, fileName, "/" + full, exact);
 
     /// <summary>The note or attachment (by <paramref name="kind"/>) that <paramref name="path"/> names, as the rules
     /// above say; null if none matches.</summary>
     private LinkResolution? Find(
-        Dictionary<string, List<VaultPath>> byName, LinkKind kind, VaultPath source, string path, string name, string suffix, bool exact)
+        Dictionary<string, List<VaultPath>> byName, Dictionary<string, List<VaultPath>> byPath, LinkKind kind, VaultPath source,
+        string path, string name, string suffix, bool exact)
     {
         var named = byName.GetValueOrDefault(name) ?? [];
-        var candidates = named.Where(n => Matches(_inVault[n], suffix, exact)).ToList();
+        // A path that names one exactly is looked up by it: the notes at that path are all of that name, in the same order.
+        var candidates = exact ? [.. byPath.GetValueOrDefault(suffix) ?? []] : named.Where(n => Matches(_inVault[n], suffix, exact)).ToList();
 
         // A path with a folder ("Work/plan") is, as in Obsidian, first a path below the source's folder,
         // then a path from the vault's root, and only then a path suffix.

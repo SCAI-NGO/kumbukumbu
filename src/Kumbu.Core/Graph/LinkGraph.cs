@@ -117,18 +117,21 @@ public sealed class LinkGraph
         var links = new Dictionary<VaultPath, IReadOnlyList<ResolvedLink>>();
         var linked = new HashSet<VaultPath>();
         var ghosts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var read = 0;
         foreach (var source in sources)
         {
             ct.ThrowIfCancellationRequested();
-            // Resolve reads only the target and whether the link is a wikilink, so equal ones share one resolution.
-            var resolutions = new Dictionary<(string Target, bool Wiki), LinkResolution>();
+            // Resolve reads only the target, as SameResolution keys it, and whether the link is a wikilink, so the links
+            // of a note that it reads alike share one resolution. [Markdown, wikilink] for text that ignores case, and again
+            // for text whose case counts.
+            Dictionary<string, LinkResolution>[] ignoringCase = [new(StringComparer.OrdinalIgnoreCase), new(StringComparer.OrdinalIgnoreCase)];
+            Dictionary<string, LinkResolution>[] withCase = [new(StringComparer.Ordinal), new(StringComparer.Ordinal)];
             var resolved = notes[source].Links.Select(l =>
             {
-                if (!resolutions.TryGetValue((l.Target, l is WikiLink), out var resolution))
-                {
-                    resolutions[(l.Target, l is WikiLink)] = resolution = resolver.Resolve(source, l);
-                }
-
+                if (++read % 256 == 0) ct.ThrowIfCancellationRequested();
+                var (text, caseCounts) = LinkResolver.SameResolution(l.Target);
+                var cache = (caseCounts ? withCase : ignoringCase)[l is WikiLink ? 1 : 0];
+                if (!cache.TryGetValue(text, out var resolution)) cache[text] = resolution = resolver.Resolve(source, l);
                 return new ResolvedLink(l, resolution);
             }).ToList();
             links[source] = resolved;
@@ -164,27 +167,23 @@ public sealed class LinkGraph
             ct.ThrowIfCancellationRequested();
             var from = index[source.Value];
             // The links that share a resolution reach the same notes: their lines are gathered once, and an ambiguous
-            // link's candidates share that one list.
-            var groups = new Dictionary<LinkResolution, (EdgeFlags Flags, List<int> Lines, string? Ghost)>(ReferenceEqualityComparer.Instance);
+            // link's candidates share that one list. A ghost is the link's own, by its key.
+            var groups = new Dictionary<LinkResolution, (EdgeFlags Flags, List<int> Lines)>(ReferenceEqualityComparer.Instance);
+            var ghostGroups = new Dictionary<string, (EdgeFlags Flags, List<int> Lines)>(StringComparer.Ordinal);
             foreach (var (link, resolution) in Edged(links[source]))
             {
+                if (++read % 256 == 0) ct.ThrowIfCancellationRequested();
                 var flags = (link is WikiLink { Embed: true } or MarkdownLink { Embed: true } ? EdgeFlags.Embed : 0)
                     | (resolution.ViaAlias ? EdgeFlags.Alias : 0)
                     | (resolution.Kind == LinkKind.Ambiguous ? EdgeFlags.Ambiguous : 0);
-                if (!groups.TryGetValue(resolution, out var group))
-                {
-                    group = (EdgeFlags.None, [], Ghost(resolution) ? "?" + GhostKeyOf(source, link.Target) : null);
-                }
-
-                group.Lines.Add(link.Line);
-                groups[resolution] = (group.Flags | flags, group.Lines, group.Ghost);
+                if (Ghost(resolution)) Gather(ghostGroups, "?" + GhostKeyOf(source, link.Target), flags, link.Line);
+                else Gather(groups, resolution, flags, link.Line);
             }
 
             var byTarget = new Dictionary<int, (EdgeFlags Flags, List<int[]> Lines)>();
-            foreach (var (resolution, group) in groups)
+            void Reach(IEnumerable<int> targets, (EdgeFlags Flags, List<int> Lines) group)
             {
                 int[] lines = [.. group.Lines.Order().Distinct()];
-                IEnumerable<int> targets = group.Ghost is { } ghost ? [index[ghost]] : Targets(resolution).Select(t => index[t.Value]);
                 foreach (var to in targets)
                 {
                     if (!byTarget.TryGetValue(to, out var edge)) edge = (EdgeFlags.None, []);
@@ -192,6 +191,9 @@ public sealed class LinkGraph
                     byTarget[to] = (edge.Flags | group.Flags, edge.Lines);
                 }
             }
+
+            foreach (var (resolution, group) in groups) Reach(Targets(resolution).Select(t => index[t.Value]), group);
+            foreach (var (ghost, group) in ghostGroups) Reach([index[ghost]], group);
 
             foreach (var to in byTarget.Keys.Order())
             {
@@ -201,6 +203,14 @@ public sealed class LinkGraph
         }
 
         return new LinkGraph(vault, nodes, [.. edges], links, notes, attachments);
+    }
+
+    private static void Gather<TKey>(Dictionary<TKey, (EdgeFlags Flags, List<int> Lines)> groups, TKey key, EdgeFlags flags, int line)
+        where TKey : notnull
+    {
+        if (!groups.TryGetValue(key, out var group)) group = (EdgeFlags.None, []);
+        group.Lines.Add(line);
+        groups[key] = (group.Flags | flags, group.Lines);
     }
 
     // Links to a heading of the note itself name no target and make no edge, as backlinks skip them today.

@@ -94,6 +94,38 @@ public class LinkGraphTests
     }
 
     [Fact]
+    public void Links_to_an_ambiguous_name_written_in_any_case_give_each_candidate_one_edge_with_every_line()
+    {
+        var graph = Build(("/W/x/A.md", "[[Plan]]\n[[plan]]\n[[ PLAN ]]\n"), ("/W/y/Plan.md", ""), ("/W/z/Plan.md", ""));
+
+        Assert.Equal(2, graph.Edges.Count);
+        foreach (var candidate in new[] { "/W/y/Plan.md", "/W/z/Plan.md" })
+        {
+            var edge = Edge(graph, "/W/x/A.md", candidate);
+            Assert.Equal([0, 1, 2], edge.Lines);
+            Assert.Equal(EdgeFlags.Ambiguous, edge.Flags);
+        }
+    }
+
+    [Fact]
+    public void A_relative_link_that_names_the_vault_names_it_in_its_case()
+    {
+        var graph = Build(("/W/a/A.md", "[[../../W/B]]\n[[../../w/B]]\n"), ("/W/B.md", ""));
+
+        Assert.Equal([0], Edge(graph, "/W/a/A.md", "/W/B.md").Lines);
+        Assert.Equal(LinkKind.NotFound, graph.LinksOf(P("/W/a/A.md"))[1].Resolution.Kind);
+    }
+
+    [Fact]
+    public void A_link_by_the_kept_folder_file_name_reads_its_case()
+    {
+        var graph = LinkGraph.Build("W", Extracts(("/W/A.md", "[[.vaultkeep]]\n[[.VAULTKEEP]]\n"), ("/W/.vaultkeep.md", "")),
+            [P("/W/f/.Vaultkeep")], TestContext.Current.CancellationToken);
+
+        Assert.Equal([P("/W/f/.Vaultkeep"), P("/W/.vaultkeep.md")], graph.LinksOf(P("/W/A.md")).Select(l => l.Resolution.Target));
+    }
+
+    [Fact]
     public void Self_link_makes_no_edge()
     {
         var graph = Build(("/W/A.md", "[[#Heading]]\n# Heading\n"));
