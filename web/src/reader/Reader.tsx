@@ -487,6 +487,21 @@ export default function Reader() {
     }
   }, []);
 
+  // A code pasted into the same tab changes only the hash: it is read as a first load reads it, and the copy shown leaves.
+  // The copy's own addresses (`#/3`, `#kn-3…`, `#n3`) are no codes.
+  useEffect(() => {
+    const on = () => {
+      const hash = location.hash;
+      if (!hash || /^#\/\d+$/.test(hash) || /^#kn-\d+(\/.*)?$/.test(hash) || /^#n\d+$/.test(hash)) return;
+      history.replaceState(null, "", location.pathname + location.search);
+      setState({ kind: "loading" });
+      setWrong(false);
+      read(readWithCode(hash.slice(1)), true);
+    };
+    addEventListener("hashchange", on);
+    return () => removeEventListener("hashchange", on);
+  }, []);
+
   return (
     <main className="mx-auto max-w-[720px] px-5 py-10">
       {state.kind === "loading" && <p className="text-muted">Loading …</p>}

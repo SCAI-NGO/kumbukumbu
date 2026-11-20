@@ -89,6 +89,43 @@ describe("PublicationBar", () => {
     for (const name of ["Update copy", "Copy link", "Unpublish"]) expect(within(region).getByRole("button", { name })).toBeInTheDocument();
   });
 
+  describe("when the start's own text is not after the copy", () => {
+    const bundle = { ...older, depth: 1, notes: 2 };
+    const statusOf = async (published: object, lastWriteAt: string) => {
+      fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, published) });
+      renderBar(true, lastWriteAt);
+      // The copy button adds a status of its own, after the bar's.
+      return within(await bar()).getAllByRole("status")[0];
+    };
+    const before = new Date("2026-11-05T09:00:00").toISOString();
+
+    it("says a linked note or file changed, with the time on the copy's day", async () => {
+      expect(await statusOf(bundle, before)).toHaveTextContent(/^Published copy is older: a linked note or file changed 16:05 · with 1 linked note$/);
+    });
+
+    it("says the day and time when the change is on another day", async () => {
+      const later = new Date("2026-11-07T08:10:00").toISOString();
+      expect(await statusOf({ ...bundle, changedAt: later }, before)).toHaveTextContent(
+        /^Published copy is older: a linked note or file changed 7 Nov, 08:10 · with 1 linked note$/,
+      );
+    });
+
+    it("says it without a time when none is known", async () => {
+      expect(await statusOf({ ...bundle, changedAt: null }, before)).toHaveTextContent(/^Published copy is older: a linked note or file changed · with 1 linked note$/);
+    });
+
+    it("counts a write at the very time of the copy as not after it", async () => {
+      expect(await statusOf(bundle, snapshotAt)).toHaveTextContent(/^Published copy is older: a linked note or file changed 16:05/);
+    });
+
+    it("keeps today's text when the start itself changed after the copy", async () => {
+      const after = new Date("2026-11-05T16:05:00").toISOString();
+      expect(await statusOf(bundle, after)).toHaveTextContent(
+        /^Published copy is older than this note\. Published 5 Nov, 14:32 · changed 16:05 · with 1 linked note$/,
+      );
+    });
+  });
+
   it("updates the copy and keeps the link", async () => {
     const writeText = stubClipboard();
     let updated = false;

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { timeText } from "../components/Sheet";
 import { useSession } from "../state/session";
+import { MAX_ATTACHMENT_BYTES } from "../upload/planUpload";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 import { openPdf } from "./pdf";
 
@@ -117,6 +118,34 @@ describe("Lightbox", () => {
       ["Date", timeText("2026-10-27T18:42:00Z")],
       ["Writer", "ada"],
     ]);
+  });
+
+  describe("the info panel of a file over the size the server reads", () => {
+    const line = "Larger than 15 MB: Kumbu² keeps it, but doesn't search its text or show a thumbnail.";
+    const infoOf = async (path: string, extra: Record<string, unknown>) => {
+      api({ "GET /api/version/*": () => json(200, fileInfo(path, extra)) });
+      renderApp(opened(path, [path]));
+      await userEvent.click(await screen.findByRole("button", { name: "Info" }));
+      await screen.findByText("Size");
+    };
+
+    it.each(["/W/shots/big.pdf", "/W/shots/big.png"])("says so for %s over the limit", async (path) => {
+      await infoOf(path, { size: MAX_ATTACHMENT_BYTES + 1 });
+      expect(screen.getByText(line)).toBeInTheDocument();
+    });
+
+    it.each(["/W/shots/big.pdf", "/W/shots/big.png"])("says nothing for %s at exactly the limit", async (path) => {
+      await infoOf(path, { size: MAX_ATTACHMENT_BYTES });
+      expect(screen.queryByText(line)).not.toBeInTheDocument();
+    });
+
+    it("says nothing for a file of another kind, whatever its size", async () => {
+      api({ "GET /api/version/*": () => json(200, { ...fileInfo("/W/shots/data.xlsx"), kind: "file", mediaType: "application/octet-stream", size: MAX_ATTACHMENT_BYTES + 1 }) });
+      renderApp(opened("/W/shots/data.xlsx", ["/W/shots/data.xlsx"]));
+      await userEvent.click(await screen.findByRole("button", { name: "Info" }));
+      await screen.findByText("Size");
+      expect(screen.queryByText(line)).not.toBeInTheDocument();
+    });
   });
 
   it("copy link puts ![[name.png]] on the clipboard", async () => {

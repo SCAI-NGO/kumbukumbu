@@ -84,7 +84,7 @@ export default function PinDialog({ onClose, onSettings }: { onClose(): void; on
             <p className="text-sm text-muted">
               The PIN is set in{" "}
               <Link to="/settings/security#discreet-vaults" onClick={onSettings ?? onClose} className="font-medium text-accent-text underline underline-offset-2">
-                Settings → Discreet vaults
+                Settings → Security → Discreet vaults
               </Link>
               .
             </p>

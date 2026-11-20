@@ -372,8 +372,9 @@ export default function MobileShell() {
   }, []);
 
   // Skills sorts before Welcome, where a new user should start: the Skills vault only when there is no other.
+  // The store's own value, not the render's: the effect above may have just opened a note in another vault (a deep link).
   useEffect(() => {
-    if (!activeVault && vaults.data?.length) setActiveVault(keptVault ?? (vaults.data.find((v) => v.kind !== "skills") ?? vaults.data[0]).name);
+    if (!useEditor.getState().activeVault && vaults.data?.length) setActiveVault(keptVault ?? (vaults.data.find((v) => v.kind !== "skills") ?? vaults.data[0]).name);
   }, [activeVault, vaults.data, setActiveVault, keptVault]);
 
   // A note the caller can't change (any more: her role was lowered) is only read (`useNoteAccess`; each pane ends Write

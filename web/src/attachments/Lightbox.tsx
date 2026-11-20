@@ -10,6 +10,7 @@ import { Menu } from "../components/Menu";
 import { download } from "../data/exportUrl";
 import { sizeText, timeText } from "../components/Sheet";
 import { topDialog } from "../hooks/useDialog";
+import { MAX_ATTACHMENT_BYTES } from "../upload/planUpload";
 import MoveDialog from "../shell/MoveDialog";
 import DeleteFileDialog from "./DeleteFileDialog";
 import { useZoomPan } from "./gestures";
@@ -218,18 +219,23 @@ export default function Lightbox() {
           )}
         </div>
         {showInfo && (
-          <dl aria-label="Info" className="pointer-events-auto ml-auto grid w-full max-w-xs grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[12px] bg-[#1a1a1e] p-3 text-[13px]">
-            <InfoRow label="Folder">{folderOf(path).slice(1).split("/").join(" / ")}</InfoRow>
-            {extent && <InfoRow label={kind === "pdf" ? "Pages" : "Dimensions"}>{extent}</InfoRow>}
-            {facts && (
-              <>
-                <InfoRow label="Size">{sizeText(Number(facts.size))}</InfoRow>
-                {facts.date && <InfoRow label="Date">{timeText(facts.date)}</InfoRow>}
-                {facts.writer && <InfoRow label="Writer">{facts.writer}</InfoRow>}
-              </>
+          <div className="pointer-events-auto ml-auto w-full max-w-xs rounded-[12px] bg-[#1a1a1e] p-3 text-[13px]">
+            <dl aria-label="Info" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              <InfoRow label="Folder">{folderOf(path).slice(1).split("/").join(" / ")}</InfoRow>
+              {extent && <InfoRow label={kind === "pdf" ? "Pages" : "Dimensions"}>{extent}</InfoRow>}
+              {facts && (
+                <>
+                  <InfoRow label="Size">{sizeText(Number(facts.size))}</InfoRow>
+                  {facts.date && <InfoRow label="Date">{timeText(facts.date)}</InfoRow>}
+                  {facts.writer && <InfoRow label="Writer">{facts.writer}</InfoRow>}
+                </>
+              )}
+              {!readOnly && info.isError && <dd className="col-span-2 text-[#a09d96]">The rest couldn't be loaded.</dd>}
+            </dl>
+            {(kind === "pdf" || kind === "image") && facts && Number(facts.size) > MAX_ATTACHMENT_BYTES && (
+              <p className="mt-2 text-[#a09d96]">Larger than 15 MB: Kumbu² keeps it, but doesn't search its text or show a thumbnail.</p>
             )}
-            {!readOnly && info.isError && <dd className="col-span-2 text-[#a09d96]">The rest couldn't be loaded.</dd>}
-          </dl>
+          </div>
         )}
       </div>
 

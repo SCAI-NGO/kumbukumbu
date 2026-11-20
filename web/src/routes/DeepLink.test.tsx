@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -137,5 +137,53 @@ describe("DeepLink", () => {
     await waitFor(() => expect(path(router)).toBe("/notes/gartenarbeit/Roses.md"));
     await router.navigate(-1);
     expect(path(router)).toBe("/");
+  });
+});
+
+describe("a deep link to another vault", () => {
+  // Skills sorts first and Welcome is the shell's default: the link's Work comes last.
+  function threeVaults() {
+    const listed = (id: string, name: string, kind?: string) => ({ ...vault(name), id, ...(kind && { kind }) });
+    fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+      "GET /api/vaults": () => json(200, [listed("vs", "Skills", "skills"), listed("vw", "Welcome"), listed("vk", "Work")]),
+      "GET /api/vaults/Welcome/tree": () => json(200, tree("Welcome", [entry("/Welcome/Start.md")])),
+      "GET /api/vaults/Work/tree": () => json(200, tree("Work", [], [{ name: "HT", path: "/Work/HT", folders: [], notes: [entry("/Work/HT/Alpha.md")] }])),
+      "GET /api/notes/*": (r) =>
+        json(200, { path: decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), content: "Text.", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+      "GET /api/links/*": () => json(200, []),
+      "GET /api/backlinks/*": () => json(200, []),
+      "GET /api/changes": () => json(200, []),
+      "GET /api/member-notices": () => json(200, []),
+    });
+  }
+
+  it("a deep link shows its vault in the tree and the picker, not the one shown before", async () => {
+    threeVaults();
+    const router = renderApp("/n/vk/HT/Alpha.md");
+    await waitFor(() => expect(path(router)).toBe("/notes/Work/HT/Alpha.md"));
+    await screen.findByRole("heading", { name: "Alpha" });
+    expect(useEditor.getState().activeVault).toBe("Work");
+    // In jsdom the shell is the phone's: the tree is the drawer.
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    const drawer = screen.getByRole("dialog", { name: "File tree" });
+    expect(within(drawer).getByRole("heading", { level: 2 })).toHaveTextContent("Work");
+    expect(within(drawer).getByRole("button", { name: "Switch vault: Work" })).toBeInTheDocument();
+    expect(await within(drawer).findByRole("button", { name: "Alpha" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("from a note of the vault shown before, too", async () => {
+    threeVaults();
+    const router = renderApp("/notes/Welcome/Start.md");
+    await screen.findByRole("heading", { name: "Start" });
+    expect(useEditor.getState().activeVault).toBe("Welcome");
+    await router.navigate("/n/vk/HT/Alpha.md");
+    await waitFor(() => expect(path(router)).toBe("/notes/Work/HT/Alpha.md"));
+    await screen.findByRole("heading", { name: "Alpha" });
+    expect(useEditor.getState().activeVault).toBe("Work");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    const drawer = screen.getByRole("dialog", { name: "File tree" });
+    expect(within(drawer).getByRole("button", { name: "Switch vault: Work" })).toBeInTheDocument();
+    expect(await within(drawer).findByRole("button", { name: "Alpha" })).toHaveAttribute("aria-current", "page");
   });
 });

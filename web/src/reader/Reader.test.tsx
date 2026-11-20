@@ -191,6 +191,74 @@ describe("Reader", () => {
     expect(screen.queryByLabelText("Enter the code you were given")).not.toBeInTheDocument();
   });
 
+  it("opens the code of a changed address after a wrong one", async () => {
+    history.replaceState(null, "", "/s#WRONG");
+    stubFetch({ "POST /api/s": (init) => (JSON.parse(String(init?.body)).code === code ? json(200, copy("Which way is shorter?")) : none()) });
+    render(<Reader />);
+    expect(await screen.findByText("This code doesn't open a published note.")).toBeInTheDocument();
+
+    location.hash = `#${code}`;
+    expect(await screen.findByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
+    expect(screen.queryByText("This code doesn't open a published note.")).not.toBeInTheDocument();
+    expect(location.hash).toBe("");
+  });
+
+  it("reads no address within the copy, nor an empty one, as a code", async () => {
+    history.replaceState(null, "", `/s#${code}`);
+    const fetch = stubFetch({ "POST /api/s": () => json(200, copy("Which way is shorter?")) });
+    const posts = () => fetch.mock.calls.filter(([, init]) => init?.method === "POST").length;
+    render(<Reader />);
+    expect(await screen.findByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
+
+    for (const hash of ["#kn-1", "#/1", "#n1", ""]) {
+      location.hash = hash;
+      await new Promise((r) => setTimeout(r, 20));
+      expect(posts()).toBe(1);
+      expect(screen.getByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
+    }
+  });
+
+  it("drops the copy shown while the new code is read", async () => {
+    history.replaceState(null, "", `/s#${code}`);
+    const later = deferred();
+    let posts = 0;
+    const fetch = stubFetch({ "POST /api/s": () => (posts++ === 0 ? json(200, copy("Which way is shorter?")) : later.promise) });
+    render(<Reader />);
+    expect(await screen.findByRole("heading", { name: "Questions on routing" })).toBeInTheDocument();
+    const replaceState = vi.spyOn(history, "replaceState");
+
+    location.hash = "#OTHER";
+    expect(await screen.findByText("Loading …")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Questions on routing" })).not.toBeInTheDocument();
+    await waitFor(() => expect(posts).toBe(2));
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/s");
+    expect(replaceState.mock.invocationCallOrder[0]).toBeLessThan(fetch.mock.invocationCallOrder[1]);
+    expect(fetch.mock.calls[1][1]?.body).toBe(JSON.stringify({ code: "OTHER" }));
+    later.resolve(none());
+  });
+
+  it("sends one request for a changed address under StrictMode", async () => {
+    history.replaceState(null, "", "/s#WRONG");
+    const fetch = stubFetch({ "POST /api/s": () => none() });
+    const { unmount } = render(
+      <StrictMode>
+        <Reader />
+      </StrictMode>,
+    );
+    expect(await screen.findByText("This code doesn't open a published note.")).toBeInTheDocument();
+
+    location.hash = `#${code}`;
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    // A listener left behind would read the next code too: the first one cleans the hash, so only this shows it.
+    unmount();
+    location.hash = `#${code}`;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("says when the server reads no published notes, and when there were too many tries", async () => {
     stubFetch({ "GET /api/s": () => json(404, { error: "Published notes can't be read on this server.", type: "publishing-off" }) });
     const { unmount } = render(<Reader />);

@@ -192,8 +192,8 @@ describe("PinDialog", () => {
 
   it("says where the PIN is set, with a link to that section", () => {
     const { dialog } = renderDialog();
-    expect(within(dialog).getByText((_, el) => el?.tagName === "P" && el.textContent === "The PIN is set in Settings → Discreet vaults.")).toBeInTheDocument();
-    expect(within(dialog).getByRole("link", { name: "Settings → Discreet vaults" })).toHaveAttribute("href", "/settings/security#discreet-vaults");
+    expect(within(dialog).getByText((_, el) => el?.tagName === "P" && el.textContent === "The PIN is set in Settings → Security → Discreet vaults.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Settings → Security → Discreet vaults" })).toHaveAttribute("href", "/settings/security#discreet-vaults");
   });
 
   it("keeps that line, unchanged, after a wrong PIN: below the digits, above the server's sentence", async () => {
@@ -201,7 +201,7 @@ describe("PinDialog", () => {
     // same 400: the line on first render and after it is all there is to compare.
     fakeApi({ "POST /api/account/discreet/reveal": () => json(400, { error: wrongPin }) });
     const { dialog } = renderDialog();
-    const line = () => within(dialog).getByRole("link", { name: "Settings → Discreet vaults" }).closest("p")!;
+    const line = () => within(dialog).getByRole("link", { name: "Settings → Security → Discreet vaults" }).closest("p")!;
     const before = line().outerHTML;
     expect(within(dialog).getByText("4 to 6 digits").nextElementSibling).toBe(line());
     await enter(dialog, "0000");
@@ -213,12 +213,12 @@ describe("PinDialog", () => {
 
   it("the link closes the dialog, or does what the caller asks instead", async () => {
     const { dialog, onClose } = renderDialog();
-    await userEvent.click(within(dialog).getByRole("link", { name: "Settings → Discreet vaults" }));
+    await userEvent.click(within(dialog).getByRole("link", { name: "Settings → Security → Discreet vaults" }));
     expect(onClose).toHaveBeenCalledTimes(1);
     cleanup();
     const onSettings = vi.fn();
     const second = renderDialog(vi.fn(), onSettings);
-    await userEvent.click(within(second.dialog).getByRole("link", { name: "Settings → Discreet vaults" }));
+    await userEvent.click(within(second.dialog).getByRole("link", { name: "Settings → Security → Discreet vaults" }));
     expect(onSettings).toHaveBeenCalledTimes(1);
     expect(second.onClose).not.toHaveBeenCalled();
   });
