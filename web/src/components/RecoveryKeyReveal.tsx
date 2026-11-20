@@ -80,7 +80,18 @@ export function RecoveryKeyReveal({ value, onContinue }: { value: string; onCont
         I have stored my recovery key somewhere safe, such as a password manager.
       </label>
 
-      <button type="button" disabled={!saved || !stored} onClick={onContinue} className={primaryButtonClass}>
+      {!saved && (
+        <p id={`${checkId}-hint`} className="text-sm text-text-body">
+          Download or copy the key first.
+        </p>
+      )}
+      <button
+        type="button"
+        disabled={!saved || !stored}
+        aria-describedby={saved ? undefined : `${checkId}-hint`}
+        onClick={onContinue}
+        className={primaryButtonClass}
+      >
         Continue
       </button>
 

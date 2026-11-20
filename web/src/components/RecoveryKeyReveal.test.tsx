@@ -113,6 +113,41 @@ describe("RecoveryKeyReveal", () => {
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
   });
 
+  it("says why Continue waits until the key was copied or downloaded", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:kumbu/3", revokeObjectURL: () => {} }));
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    setup();
+    const hint = "Download or copy the key first.";
+    const next = screen.getByRole("button", { name: "Continue" });
+    expect(screen.getByText(hint)).toBeInTheDocument();
+    expect(next).toHaveAccessibleDescription(hint);
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(screen.queryByText(hint)).not.toBeInTheDocument();
+    // The box is still open: the line explains the key, not the checkbox.
+    expect(next).toBeDisabled();
+    await userEvent.click(screen.getByLabelText(/I have stored my recovery key/));
+    expect(next).toBeEnabled();
+  });
+
+  it("drops the line after Download too", async () => {
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:kumbu/4", revokeObjectURL: () => {} }));
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    setup();
+    await userEvent.click(screen.getByRole("button", { name: "Download" }));
+    expect(screen.queryByText("Download or copy the key first.")).not.toBeInTheDocument();
+  });
+
+  it("keeps the line after a failed copy", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
+    setup();
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await screen.findByText(/Copying didn't work/)).toBeInTheDocument();
+    expect(screen.getByText("Download or copy the key first.")).toBeInTheDocument();
+  });
+
   it("warns on reloading or closing the page until the key is saved", async () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     setup();
