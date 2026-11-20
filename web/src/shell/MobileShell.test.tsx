@@ -1250,7 +1250,7 @@ describe("More vaults… on a phone", () => {
     await userEvent.click(await within(tree).findByRole("button", { name: "Switch vault: Work" }));
     await userEvent.click(within(screen.getByRole("dialog", { name: "Vaults" })).getByRole("button", { name: "More vaults…" }));
     const pin = await screen.findByRole("dialog", { name: "More vaults" });
-    await userEvent.click(within(pin).getByRole("link", { name: "Settings → Discreet vaults" }));
+    await userEvent.click(within(pin).getByRole("link", { name: "Settings → Security → Discreet vaults" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/security"));
     expect(router.state.location.hash).toBe("#discreet-vaults");
     expect(screen.queryByRole("dialog", { name: "More vaults" })).not.toBeInTheDocument();
