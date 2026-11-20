@@ -14,13 +14,16 @@ const dayAndTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "sh
 const timeOnly = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 
+/** "16:05", or "6 Nov, 16:05" when it isn't the snapshot's day: a change's time, in the reader's own time. */
+const changedWhen = (snapshot: Date, changed: Date) => (sameDay(snapshot, changed) ? timeOnly : dayAndTime).format(changed);
+
 /** "Published 5 Nov, 14:32 · changed 16:05", in the reader's own time; the change's day only when it isn't the snapshot's. */
 function olderText(snapshotAt: string, changedAt: string | null) {
   const snapshot = new Date(snapshotAt);
   const changed = changedAt ? new Date(changedAt) : null;
   const published = `Published ${dayAndTime.format(snapshot)}`;
   if (!changed) return published;
-  return `${published} · changed ${(sameDay(snapshot, changed) ? timeOnly : dayAndTime).format(changed)}`;
+  return `${published} · changed ${changedWhen(snapshot, changed)}`;
 }
 
 /**
@@ -58,6 +61,8 @@ export default function PublicationBar({ path, owner, lastWriteAt }: { path: str
   const error = update.error ?? withdraw.error;
   const depth = Number(p.depth ?? 0);
   const bundle = depth > 0;
+  // This note's own text is not after the copy: what made the copy older is a linked note or an embedded file.
+  const linked = older && !!p.snapshotAt && !!lastWriteAt && new Date(lastWriteAt) <= new Date(p.snapshotAt);
   return (
     <>
       <section aria-label="Publication" data-tone={tone} className={barClass}>
@@ -67,7 +72,9 @@ export default function PublicationBar({ path, owner, lastWriteAt }: { path: str
           {!enabled
             ? "Published. Publishing is switched off on this server, so the link reads nothing until it is on again."
             : older
-              ? `Published copy is older than this note.${p.snapshotAt ? ` ${olderText(p.snapshotAt, p.changedAt)}` : ""}`
+              ? linked
+                ? `Published copy is older: a linked note or file changed${p.changedAt ? ` ${changedWhen(new Date(p.snapshotAt!), new Date(p.changedAt))}` : ""}`
+                : `Published copy is older than this note.${p.snapshotAt ? ` ${olderText(p.snapshotAt, p.changedAt)}` : ""}`
               : "Published, up to date"}
           {bundle && Number(p.notes ?? 1) > 1 && ` · with ${Number(p.notes) - 1} linked ${Number(p.notes) === 2 ? "note" : "notes"}`}
           {error && <span className="block text-text">{errorText(error)}</span>}
