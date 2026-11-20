@@ -765,9 +765,9 @@ describe("write follows the click", () => {
     try {
       click(see("right"));
       await act(() => vi.advanceTimersByTimeAsync(199));
-      expect(useEditor.getState().panes.right.mode).toBe("read");
+      expect(useEditor.getState().panes.right!.mode).toBe("read");
       await act(() => vi.advanceTimersByTimeAsync(1));
-      expect(useEditor.getState().panes.right.mode).toBe("write");
+      expect(useEditor.getState().panes.right!.mode).toBe("write");
     } finally {
       vi.useRealTimers();
     }
