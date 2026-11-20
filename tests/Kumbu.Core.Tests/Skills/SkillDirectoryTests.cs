@@ -126,6 +126,31 @@ public class SkillDirectoryTests
         Assert.False(skill.AtStart);
     }
 
+    /// <summary>Carol edits a long skill often, a few lines here and there; then Bob's agent changes one line.</summary>
+    [Fact]
+    public async Task A_long_skill_another_user_edited_often_stays_his_after_her_one_line_write()
+    {
+        var carol = WriterRef.ForMember("w-carol");
+        var first = new StoredNote(P("/Private/_skills/x/SKILL.md"), Marked + "See the plan.\n" + string.Concat(Enumerable.Range(0, Authorship.MaxRuns + 100).Select(i => $"Step {i}.\n")), 1, "", InMemoryNoteStore.Seeded, [], Ref: carol);
+        var note = first with { Authorship = Authorship.After(null, first) };
+        var lines = note.Content.Split('\n');
+        for (var edit = 0; !note.Authorship!.Dropped; edit++)
+        {
+            Assert.True(edit < 100);
+            for (var k = 0; k < 55; k++) lines[8 + 2 * ((edit * 55 + k) % 2090)] += " Checked.";
+            var next = NoteWriter.Next(note, string.Join('\n', lines), "", carol, InMemoryNoteStore.Seeded.AddMinutes(edit + 1));
+            note = next with { Authorship = Authorship.After(note, next) };
+        }
+
+        var hers = NoteWriter.Next(note, note.Content.Replace("See the plan.\n", "See the roadmap.\n"), "claude", WriterRef.ForOwner(WriterRef.Agent, "k1"), InMemoryNoteStore.Seeded.AddHours(4));
+        _store.Put(hers with { Authorship = Authorship.After(note, hers) });
+
+        var skill = await One("/Private/_skills/x");
+
+        Assert.True(skill.ByOther);
+        Assert.False(skill.AtStart);
+    }
+
     [Fact]
     public async Task A_line_with_no_record_counts_as_the_files_last_writer()
     {

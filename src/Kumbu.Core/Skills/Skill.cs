@@ -8,8 +8,8 @@ namespace Kumbu.Core.Skills;
 /// <summary>
 /// A skill as a caller sees it: a system skill (<see cref="Folder"/> null) or a folder in a skill location, with where
 /// it comes from. <see cref="LastEditor"/> is the label of the last writer of any of its files, <see cref="ByOther"/>
-/// whether another user last wrote one of them or wrote a line still in one, <see cref="Source"/> the manifest's <c>kumbu-source</c> (a claim until
-/// <see cref="SourceVerified"/>), <see cref="Warnings"/> the rules it breaks.
+/// whether another user last wrote one of them or wrote a line still in one, <see cref="Source"/> the manifest's
+/// <c>kumbu-source</c> (a claim until <see cref="SourceVerified"/>), <see cref="Warnings"/> the rules it breaks.
 /// </summary>
 public sealed record Skill(string Name, VaultPath? Folder, string Description, string? Source, string? LastEditor, bool ByOther, IReadOnlyList<string> Warnings)
 {

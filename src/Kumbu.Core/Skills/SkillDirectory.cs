@@ -74,7 +74,10 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
     /// notes, as the note's <see cref="Authorship"/> records it. A skill is all its files and all their lines:
     /// <c>SKILL.md</c> may send the agent to a reference or a script that someone else rewrote, and a member's line stays
     /// his after the owner's rename, <c>replace</c> or restore rewrote the file around it (decided 2026-11-19). A line the
-    /// record doesn't know counts as the file's last writer's. Asked in her own vaults too, shared or not: a member's
+    /// record doesn't know counts as the file's last writer's when it is older than the record: such text was written
+    /// before 0.6.0, and counting it as another user's would stop her own older skills from starting. A record that
+    /// started again (<see cref="Authorship.Dropped"/>) no longer knows whose its lines are, so that note counts as another
+    /// user's. Asked in her own vaults too, shared or not: a member's
     /// write stays another user's after the vault stops being shared with them.
     /// </summary>
     private async Task<(string? Editor, bool ByOther)> WritersAsync(
@@ -83,17 +86,21 @@ public sealed class SkillDirectory(INoteStore notes, IWriterLabels labels)
         var prefix = folder.Value + "/";
         var writes = new List<(string Label, WriterRef? Ref, DateTime At)>();
         var lineWriters = new List<WriterRef?>();
+        var restarted = false;
         foreach (var path in notePaths.Where(p => p.Value.StartsWith(prefix, StringComparison.Ordinal)))
         {
             if (await notes.GetAsync(path, ct) is not { } note) continue;
             writes.Add((note.LastWriter, note.Ref, note.LastWriteAt));
-            lineWriters.AddRange(Authorship.Of(note).Writes.Select(w => w.Ref));
+            var record = Authorship.Of(note);
+            lineWriters.AddRange(record.Writes.Select(w => w.Ref));
+            restarted |= record.Dropped;
         }
 
         writes.AddRange(attachments.Where(a => a.Path.Value.StartsWith(prefix, StringComparison.Ordinal)).Select(a => (a.LastWriter, a.Ref, a.LastWriteAt)));
         if (writes.Count == 0) return (null, false);
         var last = writes.MaxBy(w => w.At);
         var editor = (await labels.RenderAsync(vault, last.Label, last.Ref, ct)).Display;
+        if (restarted) return (editor, true);
         foreach (var writer in writes.Select(w => w.Ref).Concat(lineWriters).Distinct())
         {
             if (!await labels.IsOwnAsync(vault, writer, ct)) return (editor, true);
