@@ -376,7 +376,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
 
         var (bytes, mediaType) = (await Store.OpenFileAsync(CodeOf(published), 0, Ct))!.Value;
         Assert.Equal("image/jpeg", mediaType);
-        Assert.Equal(ImageMetadata.Strip(ImageMetadataTests.JpegWithGps(6), "image/jpeg"), bytes);
+        Assert.Equal(ImageMetadata.Strip(ImageMetadataTests.JpegWithGps(6), "image/jpeg", Ct), bytes);
         Assert.Equal(-1, bytes.AsSpan().IndexOf("GPS48N"u8));
 
         var (_, access) = await AliceAsync(alice);
@@ -396,7 +396,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
             "Routing/odd.png",
             ImageMetadataTests.Png(ImageMetadataTests.Ihdr, ImageMetadataTests.PngChunk("ABCD", [1, 2, 3]), ImageMetadataTests.PngChunk("IDAT", [0x78, 0x9C]), ImageMetadataTests.PngChunk("IEND", [])));
         Assert.Null(ImageMetadata.Strip(ImageMetadataTests.Png(
-            ImageMetadataTests.Ihdr, ImageMetadataTests.PngChunk("ABCD", [1, 2, 3]), ImageMetadataTests.PngChunk("IDAT", [0x78, 0x9C]), ImageMetadataTests.PngChunk("IEND", [])), "image/png"));
+            ImageMetadataTests.Ihdr, ImageMetadataTests.PngChunk("ABCD", [1, 2, 3]), ImageMetadataTests.PngChunk("IDAT", [0x78, 0x9C]), ImageMetadataTests.PngChunk("IEND", [])), "image/png", Ct));
         await alice.CreateAsync("Routing/Questions.md", "a ![[secret.png]] b\n![[gone.png]]\n![[report.pdf]]\n![[odd.png]]");
         var (_, access) = await AliceAsync(alice);
         await PlantMarksAsync(access.Vault, "/Work/Private");
@@ -646,7 +646,7 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
     {
         var alice = await RestClient.NewAsync(Api, vault: "Work");
         var jpeg = ImageMetadataTests.JpegWithGps(6);
-        var size = ImageMetadata.Strip(jpeg, "image/jpeg")!.Length;
+        var size = ImageMetadata.Strip(jpeg, "image/jpeg", Ct)!.Length;
         await alice.CreateFileAsync("a.jpg", jpeg);
         await alice.CreateFileAsync("b.jpg", jpeg);
         await alice.CreateAsync("Two.md", "![[a.jpg]]\n![[b.jpg]]");

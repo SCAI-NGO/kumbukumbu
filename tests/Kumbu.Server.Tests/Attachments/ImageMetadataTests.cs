@@ -9,6 +9,8 @@ namespace Kumbu.Server.Tests.Attachments;
 
 public class ImageMetadataTests
 {
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     /// <summary>The TIFF block the server writes for an orientation N: IFD0 with the orientation alone.</summary>
     private static byte[] MinimalExif(int orientation) =>
         [0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, (byte)orientation, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -143,7 +145,7 @@ public class ImageMetadataTests
             Assert.True(Holds(input, leak));
         }
 
-        var output = ImageMetadata.Strip(input, "image/jpeg");
+        var output = ImageMetadata.Strip(input, "image/jpeg", Ct);
 
         Assert.NotNull(output);
         foreach (var leak in new[] { "Alice", "PixelCam", "GPS48N", "xap", "Photoshop" })
@@ -165,7 +167,7 @@ public class ImageMetadataTests
     {
         var input = JpegWithGps(6);
 
-        var output = ImageMetadata.Strip(input, "image/jpeg")!;
+        var output = ImageMetadata.Strip(input, "image/jpeg", Ct)!;
 
         var segments = Segments(output);
         Assert.Equal(0xE0, segments[0].Marker);
@@ -181,7 +183,7 @@ public class ImageMetadataTests
     {
         foreach (var input in new[] { JpegWithGps(1), Jpeg(CameraTiff(null)), Jpeg(null) })
         {
-            var output = ImageMetadata.Strip(input, "image/jpeg")!;
+            var output = ImageMetadata.Strip(input, "image/jpeg", Ct)!;
             Assert.DoesNotContain(Segments(output), s => s.Marker == 0xE1);
             Assert.Equal((40, 20), ImageHeader.Read(output, out _));
         }
@@ -244,7 +246,7 @@ public class ImageMetadataTests
             PngChunk("IDAT", [3, 4]),
             PngChunk("IEND", []));
 
-        var output = ImageMetadata.Strip(input, "image/png");
+        var output = ImageMetadata.Strip(input, "image/png", Ct);
 
         Assert.NotNull(output);
         var chunks = PngChunks(output);
@@ -261,7 +263,7 @@ public class ImageMetadataTests
     {
         var input = Png(Ihdr, PngChunk("ABCD", [1, 2, 3]), PngChunk("IDAT", [0x78, 0x9C]), PngChunk("IEND", []));
 
-        Assert.Null(ImageMetadata.Strip(input, "image/png"));
+        Assert.Null(ImageMetadata.Strip(input, "image/png", Ct));
     }
 
     internal static byte[] WebpChunk(string fourcc, ReadOnlySpan<byte> data) =>
@@ -302,7 +304,7 @@ public class ImageMetadataTests
     {
         foreach (var (orientation, flags) in new[] { (1, 0x00), (6, 0x08) })
         {
-            var output = ImageMetadata.Strip(Webp(orientation), "image/webp");
+            var output = ImageMetadata.Strip(Webp(orientation), "image/webp", Ct);
 
             Assert.NotNull(output);
             Assert.Equal(output.Length - 8, (int)BinaryPrimitives.ReadUInt32LittleEndian(output.AsSpan(4)));
@@ -338,7 +340,7 @@ public class ImageMetadataTests
         byte[] image = [0x2C, 0, 0, 0, 0, 2, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0];
         byte[] input = [.. head, .. netscape, .. comment, .. xmp, .. control, .. image, 0x3B];
 
-        var output = ImageMetadata.Strip(input, "image/gif");
+        var output = ImageMetadata.Strip(input, "image/gif", Ct);
 
         Assert.Equal([.. head, .. netscape, .. control, .. image, 0x3B], output);
     }
@@ -347,19 +349,19 @@ public class ImageMetadataTests
     public void Bytes_that_dont_parse_are_refused()
     {
         var jpeg = JpegWithGps(6);
-        Assert.Null(ImageMetadata.Strip(jpeg.AsSpan(0, jpeg.AsSpan().LastIndexOf(Eoi)), "image/jpeg"));
+        Assert.Null(ImageMetadata.Strip(jpeg.AsSpan(0, jpeg.AsSpan().LastIndexOf(Eoi)), "image/jpeg", Ct));
 
         var png = Png(Ihdr, PngChunk("IDAT", [0x78, 0x9C, 1, 2, 3, 4]), PngChunk("IEND", []));
-        Assert.NotNull(ImageMetadata.Strip(png, "image/png"));
-        Assert.Null(ImageMetadata.Strip(png.AsSpan(0, 8 + 25 + 10), "image/png"));
+        Assert.NotNull(ImageMetadata.Strip(png, "image/png", Ct));
+        Assert.Null(ImageMetadata.Strip(png.AsSpan(0, 8 + 25 + 10), "image/png", Ct));
 
         var webp = Webp(6);
-        Assert.NotNull(ImageMetadata.Strip(webp, "image/webp"));
+        Assert.NotNull(ImageMetadata.Strip(webp, "image/webp", Ct));
         byte[] overlong = [.. webp[..4], .. Le32(webp.Length), .. webp[8..]];
-        Assert.Null(ImageMetadata.Strip(overlong, "image/webp"));
+        Assert.Null(ImageMetadata.Strip(overlong, "image/webp", Ct));
 
-        Assert.Null(ImageMetadata.Strip("%PDF-1.7\n%Alice"u8, "application/pdf"));
-        Assert.Null(ImageMetadata.Strip(png, "image/jpeg"));
+        Assert.Null(ImageMetadata.Strip("%PDF-1.7\n%Alice"u8, "application/pdf", Ct));
+        Assert.Null(ImageMetadata.Strip(png, "image/jpeg", Ct));
     }
 
     internal static byte[] Deflated(byte[] data)
@@ -409,7 +411,7 @@ public class ImageMetadataTests
             0xFF, 0xD9,
         ];
 
-        var output = ImageMetadata.Strip(input, "image/jpeg");
+        var output = ImageMetadata.Strip(input, "image/jpeg", Ct);
 
         Assert.Equal(
         [
@@ -428,8 +430,8 @@ public class ImageMetadataTests
         byte[] withoutFrame = [0xFF, 0xD8, .. Segment(0xDB, [0, .. new byte[64]]), .. Scan, 0xFF, 0xD9];
         byte[] withoutScan = [0xFF, 0xD8, .. Tables, 0xFF, 0xD9];
 
-        Assert.Null(ImageMetadata.Strip(withoutFrame, "image/jpeg"));
-        Assert.Null(ImageMetadata.Strip(withoutScan, "image/jpeg"));
+        Assert.Null(ImageMetadata.Strip(withoutFrame, "image/jpeg", Ct));
+        Assert.Null(ImageMetadata.Strip(withoutScan, "image/jpeg", Ct));
     }
 
     [Fact]
@@ -442,7 +444,7 @@ public class ImageMetadataTests
         byte[] second = [.. Segment(0xDA, [1, 1, 0, 1, 63, 0]), 0x56, 0xFF, 0xD3, 0x78];
         byte[] input = [.. head, .. dht, .. first, .. dht, .. between, .. second, 0xFF, 0xD9];
 
-        var output = ImageMetadata.Strip(input, "image/jpeg");
+        var output = ImageMetadata.Strip(input, "image/jpeg", Ct);
 
         Assert.Equal([.. head, .. dht, .. first, .. dht, .. second, 0xFF, 0xD9], output);
     }
@@ -459,14 +461,14 @@ public class ImageMetadataTests
             .. Segment(0xE2, [.. "ICC_PROFILE\0"u8, 2, 2, .. icc[60..]]),
             .. Tables, .. Scan, 0xFF, 0xD9,
         ];
-        var stripped = ImageMetadata.Strip(jpeg, "image/jpeg")!;
+        var stripped = ImageMetadata.Strip(jpeg, "image/jpeg", Ct)!;
         var chunks = Segments(stripped).Where(s => s.Marker == 0xE2).ToList();
         Assert.Equal(2, chunks.Count);
         Assert.Equal(BlankedIccProfile(), chunks[0].Data[14..].Concat(chunks[1].Data[14..]).ToArray());
         Assert.False(Holds(stripped, "PixelCam"));
 
         // PNG: the profile inflated, blanked, deflated, under a name of no one's.
-        var png = ImageMetadata.Strip(Png(Ihdr, PngChunk("iCCP", [.. "PixelCam profile\0"u8, 0, .. Deflated(icc)]), PngChunk("IDAT", [0x78, 0x9C]), PngChunk("IEND", [])), "image/png")!;
+        var png = ImageMetadata.Strip(Png(Ihdr, PngChunk("iCCP", [.. "PixelCam profile\0"u8, 0, .. Deflated(icc)]), PngChunk("IDAT", [0x78, 0x9C]), PngChunk("IEND", [])), "image/png", Ct)!;
         var iccp = PngChunks(png).Single(c => c.Type == "iCCP");
         Assert.Equal([.. "ICC profile\0"u8, 0], iccp.Data[..13]);
         Assert.Equal(BlankedIccProfile(), Inflated(iccp.Data[13..]));
@@ -476,7 +478,7 @@ public class ImageMetadataTests
         var webp = ImageMetadata.Strip(Riff(
             WebpChunk("VP8X", [0x20, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0]),
             WebpChunk("ICCP", icc),
-            WebpChunk("VP8 ", [0, 0, 0, 0x9D, 0x01, 0x2A, 0x2C, 0x01, 0x90, 0x00])), "image/webp")!;
+            WebpChunk("VP8 ", [0, 0, 0, 0x9D, 0x01, 0x2A, 0x2C, 0x01, 0x90, 0x00])), "image/webp", Ct)!;
         Assert.Equal(BlankedIccProfile(), WebpChunks(webp).Single(c => c.FourCc == "ICCP").Data);
     }
 
@@ -491,7 +493,7 @@ public class ImageMetadataTests
             WebpChunk("ANIM", [0, 0, 0, 0, 0, 0]),
             WebpChunk("ANMF", [.. frameHeader, .. WebpChunk("ABCD", "Alice"u8), .. Vp8L, .. WebpChunk("XMP ", "<x:xmpmeta>Alice</x:xmpmeta>"u8)]));
 
-        var output = ImageMetadata.Strip(input, "image/webp")!;
+        var output = ImageMetadata.Strip(input, "image/webp", Ct)!;
 
         Assert.Equal(Riff(
             WebpChunk("VP8X", [0x02, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0]),
@@ -503,12 +505,12 @@ public class ImageMetadataTests
     public void Webp_with_a_misplaced_or_odd_vp8x_or_no_frame_is_refused()
     {
         byte[] vp8x = WebpChunk("VP8X", [0, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0]);
-        Assert.NotNull(ImageMetadata.Strip(Riff(vp8x, Vp8L), "image/webp"));
+        Assert.NotNull(ImageMetadata.Strip(Riff(vp8x, Vp8L), "image/webp", Ct));
 
-        Assert.Null(ImageMetadata.Strip(Riff(Vp8L, vp8x), "image/webp"));
-        Assert.Null(ImageMetadata.Strip(Riff(WebpChunk("VP8X", [0, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0, 0]), Vp8L), "image/webp"));
-        Assert.Null(ImageMetadata.Strip(Riff(vp8x, WebpChunk("ICCP", IccProfile())), "image/webp"));
-        Assert.Null(ImageMetadata.Strip(Riff(vp8x, WebpChunk("ANMF", new byte[16])), "image/webp"));
+        Assert.Null(ImageMetadata.Strip(Riff(Vp8L, vp8x), "image/webp", Ct));
+        Assert.Null(ImageMetadata.Strip(Riff(WebpChunk("VP8X", [0, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0, 0]), Vp8L), "image/webp", Ct));
+        Assert.Null(ImageMetadata.Strip(Riff(vp8x, WebpChunk("ICCP", IccProfile())), "image/webp", Ct));
+        Assert.Null(ImageMetadata.Strip(Riff(vp8x, WebpChunk("ANMF", new byte[16])), "image/webp", Ct));
     }
 
     [Fact]
@@ -529,10 +531,10 @@ public class ImageMetadataTests
             0x3B,
         ];
 
-        var output = ImageMetadata.Strip(input, "image/gif");
+        var output = ImageMetadata.Strip(input, "image/gif", Ct);
 
         Assert.Equal([.. head, 0x21, 0xFF, 11, .. "NETSCAPE2.0"u8, 3, 1, 0, 0, 0, .. control, .. image, 0x3B], output);
-        Assert.Null(ImageMetadata.Strip([.. head, .. control, 0x3B], "image/gif"));
+        Assert.Null(ImageMetadata.Strip([.. head, .. control, 0x3B], "image/gif", Ct));
     }
 
     [Fact]
@@ -542,8 +544,8 @@ public class ImageMetadataTests
         byte[] text = PngChunk("tEXt", "Author\0Alice"u8);
         text[^1] ^= 1;
 
-        Assert.Null(ImageMetadata.Strip(Png(Ihdr, text, idat, PngChunk("IEND", [])), "image/png"));
-        Assert.Null(ImageMetadata.Strip(Png(Ihdr, Ihdr, idat, PngChunk("IEND", [])), "image/png"));
+        Assert.Null(ImageMetadata.Strip(Png(Ihdr, text, idat, PngChunk("IEND", [])), "image/png", Ct));
+        Assert.Null(ImageMetadata.Strip(Png(Ihdr, Ihdr, idat, PngChunk("IEND", [])), "image/png", Ct));
     }
 
     /// <summary>An SVG as Inkscape saves it: a DTD, comments, its own namespaces with the file's name and the
@@ -570,7 +572,7 @@ public class ImageMetadataTests
     [Fact]
     public void Svg_keeps_its_drawing_and_loses_comments_metadata_and_foreign_namespaces()
     {
-        var stripped = Encoding.UTF8.GetString(ImageMetadata.Strip(Encoding.UTF8.GetBytes(InkscapeSvg), "image/svg+xml")!);
+        var stripped = Encoding.UTF8.GetString(ImageMetadata.Strip(Encoding.UTF8.GetBytes(InkscapeSvg), "image/svg+xml", Ct)!);
 
         foreach (var gone in new[] { "Alice", "alice", "DOCTYPE", "<!--", "xml-stylesheet", "inkscape", "sodipodi", "rdf", "metadata", "purl.org" })
         {
@@ -589,7 +591,7 @@ public class ImageMetadataTests
     [Fact]
     public void Svg_without_a_namespace_keeps_its_elements()
     {
-        var stripped = Encoding.UTF8.GetString(ImageMetadata.Strip("<svg width=\"4\" height=\"4\"><!-- x --><rect width=\"4\" height=\"4\"/></svg>"u8, "image/svg+xml")!);
+        var stripped = Encoding.UTF8.GetString(ImageMetadata.Strip("<svg width=\"4\" height=\"4\"><!-- x --><rect width=\"4\" height=\"4\"/></svg>"u8, "image/svg+xml", Ct)!);
 
         Assert.Equal("<svg width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\" /></svg>", stripped);
     }
@@ -612,20 +614,87 @@ public class ImageMetadataTests
             </svg>
             """;
 
-        var stripped = XDocument.Parse(Encoding.UTF8.GetString(ImageMetadata.Strip(Encoding.UTF8.GetBytes(svg), "image/svg+xml")!));
+        var stripped = XDocument.Parse(Encoding.UTF8.GetString(ImageMetadata.Strip(Encoding.UTF8.GetBytes(svg), "image/svg+xml", Ct)!));
 
         string? Href(string id) => stripped.Descendants().Single(e => (string?)e.Attribute("id") == id).Attributes().SingleOrDefault(a => a.Name.LocalName == "href")?.Value;
         foreach (var gone in new[] { "linked", "file", "broken", "plain" }) Assert.Null(Href(gone));
         Assert.Null(stripped.Descendants().Single(e => e.Name.LocalName == "feImage").Attribute("href"));
         Assert.Equal("#linked", Href("local"));
-        Assert.Equal(ImageMetadata.Strip(JpegWithGps(6), "image/jpeg"), Convert.FromBase64String(Href("photo")!["data:image/jpeg;base64,".Length..]));
-        Assert.Equal(ImageMetadata.Strip(Encoding.UTF8.GetBytes(InkscapeSvg), "image/svg+xml"), Convert.FromBase64String(Href("drawing")!["data:image/svg+xml;base64,".Length..]));
+        Assert.Equal(ImageMetadata.Strip(JpegWithGps(6), "image/jpeg", Ct), Convert.FromBase64String(Href("photo")!["data:image/jpeg;base64,".Length..]));
+        Assert.Equal(ImageMetadata.Strip(Encoding.UTF8.GetBytes(InkscapeSvg), "image/svg+xml", Ct), Convert.FromBase64String(Href("drawing")!["data:image/svg+xml;base64,".Length..]));
+    }
+
+    [Fact]
+    public void Svg_keeps_its_shapes_in_order_with_comments_and_editor_elements_between_them()
+    {
+        var svg = """<svg xmlns="http://www.w3.org/2000/svg"><rect id="a"/><!--c--><inkscape:x xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"/><circle id="b"/><metadata>m</metadata><g><!--d--><path id="c"/><?pi x?></g></svg>""";
+
+        var stripped = Encoding.UTF8.GetString(ImageMetadata.Strip(Encoding.UTF8.GetBytes(svg), "image/svg+xml", Ct)!);
+
+        Assert.Equal("""<svg xmlns="http://www.w3.org/2000/svg"><rect id="a" /><circle id="b" /><g><path id="c" /></g></svg>""", stripped);
+    }
+
+    public static TheoryData<string, string> Drawings => new()
+    {
+        {
+            InkscapeSvg,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"200\" height=\"100\" viewBox=\"0 0 200 100\">\n"
+            + "  \n  \n  <title>Pump plan</title>\n  <style>rect { fill: #36c; }</style>\n"
+            + "  <defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"red\" /></linearGradient></defs>\n"
+            + "  <g><rect width=\"200\" height=\"100\" xml:space=\"preserve\" /><use xlink:href=\"#g\" /></g>\n"
+            + "  <text x=\"10\" y=\"50\">Pump <tspan>A</tspan></text>\n</svg>"
+        },
+        {
+            """
+            <svg:svg xmlns:svg="http://www.w3.org/2000/svg" width="10" height="10">
+              <svg:style><![CDATA[ .a > b { fill: red } ]]></svg:style>
+              <svg:g>
+                <!-- one -->
+                <svg:text xml:space="preserve">Tom &amp; Jerry <!-- two -->&lt;3</svg:text>
+                <svg:metadata><svg:g/></svg:metadata>
+                <svg:g><svg:g><?editor keep?><svg:rect width="1" height="1"/></svg:g></svg:g>
+              </svg:g>
+            </svg:svg>
+            """,
+            "<svg:svg xmlns:svg=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">\n"
+            + "  <svg:style><![CDATA[ .a > b { fill: red } ]]></svg:style>\n  <svg:g>\n    \n"
+            + "    <svg:text xml:space=\"preserve\">Tom &amp; Jerry &lt;3</svg:text>\n    \n"
+            + "    <svg:g><svg:g><svg:rect width=\"1\" height=\"1\" /></svg:g></svg:g>\n  </svg:g>\n</svg:svg>"
+        },
+        {
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"0 0 4 4\">\n"
+            + "\t<defs>\n\t\t<path id=\"p\" d=\"M0 0h4v4z\"/>\n\t</defs>\n\t<use xlink:href=\"#p\" href=\"#p\"/>\n"
+            + "\t<image href=\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjwhLS0geCAtLT48cmVjdC8+PC9zdmc+\"/>\n"
+            + "\t<foreignObject width=\"4\" height=\"4\"><div xmlns=\"http://www.w3.org/1999/xhtml\">Hi</div></foreignObject>\n"
+            + "\t<x:extra xmlns:x=\"urn:x\"><rect/></x:extra>\n</svg>",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"0 0 4 4\">\n"
+            + "\t<defs>\n\t\t<path id=\"p\" d=\"M0 0h4v4z\" />\n\t</defs>\n\t<use xlink:href=\"#p\" href=\"#p\" />\n"
+            + "\t<image href=\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IC8+PC9zdmc+\" />\n"
+            + "\t<foreignObject width=\"4\" height=\"4\" />\n\t\n</svg>"
+        },
+        { """<svg xmlns="http://www.w3.org/2000/svg"><rect/>plain text</svg>""", """<svg xmlns="http://www.w3.org/2000/svg"><rect />plain text</svg>""" },
+    };
+
+    [Theory]
+    [MemberData(nameof(Drawings))]
+    public void Svg_strips_to_exactly_its_drawing(string svg, string expected)
+    {
+        Assert.Equal(expected, Encoding.UTF8.GetString(ImageMetadata.Strip(Encoding.UTF8.GetBytes(svg), "image/svg+xml", Ct)!));
+    }
+
+    [Fact]
+    public void Stripping_an_svg_stops_when_it_is_given_up()
+    {
+        using var given = new CancellationTokenSource();
+        given.Cancel();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => ImageMetadata.Strip(Encoding.UTF8.GetBytes(InkscapeSvg), "image/svg+xml", given.Token));
     }
 
     [Fact]
     public void What_isnt_an_svg_strips_to_nothing()
     {
-        Assert.Null(ImageMetadata.Strip("<html/>"u8, "image/svg+xml"));
-        Assert.Null(ImageMetadata.Strip("<svg"u8, "image/svg+xml"));
+        Assert.Null(ImageMetadata.Strip("<html/>"u8, "image/svg+xml", Ct));
+        Assert.Null(ImageMetadata.Strip("<svg"u8, "image/svg+xml", Ct));
     }
 }

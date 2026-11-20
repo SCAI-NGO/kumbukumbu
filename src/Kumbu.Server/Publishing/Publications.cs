@@ -922,7 +922,7 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
                 {
                     var state = attachments[path].Current;
                     var raw = EncryptedNoteStore.TryParseBlobId(state.BlobId, out var id) ? await catalog.ReadBlobAsync(access.Vault, id, ct) : null;
-                    stripped[path] = file = raw is null ? null : ImageMetadata.Strip(raw, state.MediaType);
+                    stripped[path] = file = raw is null ? null : ImageMetadata.Strip(raw, state.MediaType, ct);
                 }
 
                 if (file is not null && total + file.Length <= CopyLimit)
