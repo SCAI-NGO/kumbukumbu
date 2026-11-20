@@ -927,3 +927,75 @@ describe("What's on and the badge, as the discreet vaults are hidden again", () 
   });
 
 });
+
+describe("the Access lists, as the discreet vaults are hidden again", () => {
+  const made = { createdAt: "2026-10-01T09:00:00Z", lastUsedAt: null, revokedAt: null, expiresAt: null };
+  const lists = {
+    "API keys": {
+      tab: "keys",
+      endpoint: "GET /api/keys",
+      name: "diary",
+      answer: (hidden: boolean) => (hidden ? [] : [{ ...made, id: "k1", name: "diary", prefix: "Ab12Cd", vaults: { Tagebuch: "write" }, publish: [] }]),
+    },
+    "WebDAV shares": {
+      tab: "dav",
+      endpoint: "GET /api/dav-shares",
+      name: "Letters",
+      answer: (hidden: boolean) => ({
+        enabled: true,
+        shares: hidden ? [] : [{ ...made, id: "s1", username: "alice.s1", label: "Letters", vaults: { Tagebuch: "write" }, lostVaults: [] }],
+      }),
+    },
+    Apps: {
+      tab: "apps",
+      endpoint: "GET /api/connections",
+      name: "Notebook",
+      answer: (hidden: boolean) =>
+        hidden
+          ? []
+          : [{ ...made, id: "c1", name: "Notebook", url: "https://kumbu.example.org/mcp/c/Zk3", vaults: { Tagebuch: "write" }, actsAs: {}, state: "waiting", reason: null, client: null, publish: [] }],
+    },
+  };
+  const ways = {
+    here: (queryClient: QueryClient, router: ReturnType<typeof renderApp>, pathname: string) =>
+      act(() => hideAgain(queryClient, router.navigate, { tell: false, pathname })),
+    "in another tab": () =>
+      act(() => {
+        const other = new BroadcastChannel(DISCREET_CHANNEL);
+        other.postMessage("hidden");
+        other.close();
+      }),
+  };
+
+  it.each(Object.keys(lists).flatMap((list) => Object.keys(ways).map((way) => [list, way])))(
+    "hiding again empties the %s list on screen and asks again, hidden %s",
+    async (list, way) => {
+      const { tab, endpoint, name, answer } = lists[list as keyof typeof lists];
+      let hidden = false;
+      let asked = 0;
+      fakeApi({
+        "GET /api/session": () => json(200, { user, previousSignInAt: null, discreet: { revealed: !hidden, until: null } }),
+        "GET /api/vaults": () => json(200, hidden ? [vault("Work")] : [vault("Work"), vault("Tagebuch", true)]),
+        "GET /api/keys": () => json(200, []),
+        "GET /api/connections": () => json(200, []),
+        "GET /api/dav-shares": () => json(200, { enabled: true, shares: [] }),
+        [endpoint]: () => (asked++, json(200, answer(hidden))),
+      });
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const pathname = `/settings/access/${tab}`;
+      const router = renderApp(pathname, queryClient);
+      expect(await screen.findByText(name)).toBeInTheDocument();
+      expect(screen.getByRole("tabpanel")).toHaveTextContent("Tagebuch");
+      await waitFor(() => expect(useDiscreet.getState().revealed).toBe(true));
+      const before = asked;
+      hidden = true;
+      await ways[way as keyof typeof ways](queryClient, router, pathname);
+      await waitFor(() => {
+        expect(screen.queryByText(name)).not.toBeInTheDocument();
+        expect(document.body).not.toHaveTextContent("Tagebuch");
+      });
+      await waitFor(() => expect(asked).toBe(before + 1));
+      expect(router.state.location.pathname).toBe(pathname);
+    },
+  );
+});
