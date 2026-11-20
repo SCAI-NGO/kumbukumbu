@@ -5,6 +5,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Kumbu.Server.Api;
 
@@ -38,7 +39,7 @@ public static partial class FavouritesApi
         // As /account/calendar: a person's setting, for her session only.
         var account = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         account.MapGet("/account/favourites", ReadAsync).Errors(401, 403);
-        account.MapPut("/account/favourites", ReplaceAsync).Errors(400, 401, 403, 409);
+        account.MapPut("/account/favourites", ReplaceAsync).WithMetadata(new RequestSizeLimitAttribute(Favourites.MaxBody)).Errors(400, 401, 403, 409, 413);
     }
 
     private static async Task<Ok<FavouritesView>> ReadAsync(RequestCaller caller, Favourites favourites, CancellationToken ct)
@@ -96,6 +97,8 @@ public static partial class FavouritesApi
         if (f.Kind != Favourites.Note) return new StoredFavourite(f.Kind, null, vaultId, null, default);
 
         if (string.IsNullOrEmpty(f.Path)) throw ApiErrors.BadRequest("A note's favourite names its path in the vault.");
+        if (f.Path.Length > Favourites.MaxPathLength)
+            throw ApiErrors.BadRequest($"A note's favourite names a path of at most {Favourites.MaxPathLength} characters.");
         var path = ApiPaths.Parse(vault, f.Path, note: true);
         if (ArchiveFolder.Contains(path)) throw ApiErrors.BadRequest($"{path.Value} is archived: an archived note can't be a favourite.");
         return new StoredFavourite(Favourites.Note, null, vaultId, string.Join('/', path.Segments.Skip(1)), default);

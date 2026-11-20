@@ -13,7 +13,7 @@
 // 2. The palette's vaults and notes follow the discreet state → "palette: …" (Zahnarzt and Home's rows gone).
 // 3. Hiding the vaults again closes an open palette or drops its rows of hidden vaults at once → "palette: hidden from
 //    elsewhere while it is open, the palette closes …"; where the address goes then is "palette: hidden from elsewhere
-//    … the address leaves the note (F-10)", fixme while F-10 stands.
+//    … the address leaves the note (F-10)".
 // 4. Recent in the empty palette: a discreet note opened before is not offered once hidden → "palette: …".
 // Workspace (2026-11-18-workspace-design.md, anti-goal 3, §3 "Discreet vaults"):
 // 5. Hiding closes a pane whose note is in a discreet vault, both panes alike → "split view: …" (right, then left).
@@ -25,7 +25,7 @@
 // 8. A window's content follows the discreet state → "windows: hidden with ✕ …" (What's on, Recent, Settings' Vaults and
 //    Security). Hidden while a window is open, the window stays without Home → the same test, its second half (What's
 //    on, hidden from elsewhere: the pill is out of reach under a window); ✕ then shows the vault list, and Recent and
-//    Settings after it → "windows: hidden from elsewhere while a window is open … (F-10, F-11)", fixme while F-10 stands.
+//    Settings after it → "windows: hidden from elsewhere while a window is open … (F-10, F-11)".
 // Console (2026-11-18-console-autocomplete-design.md, "Data"; the console resets on hiding):
 // 9. Completion's listings go with the reset: `cat /H` Tab completes nothing, the vaults listed by Tab or offered as
 //    chips leave Home out → "console: …".
@@ -217,20 +217,9 @@ test("discreet-0-6-0 palette: hidden from elsewhere while it is open, the palett
   }
 });
 
-// F-10, a race, and not one of the open palette's. Hidden from elsewhere with the palette open (this test's steps): the
-// address kept the Home note in 2 of 5 repeats on the phone, and in about 1 of 10 runs on the desktop. Hidden from
-// elsewhere with the palette closed: 5 of 5 repeats on the phone were clean, then the next run on the phone kept the
-// address too, and another put Zahnarzt back into the palette's Recent while hidden. Under a window: see the windows
-// fixme test. Hidden with ✕ in the tab itself, it was never seen (the green tests). Evidence: every history.pushState/replaceState recorded with an init script shows exactly one
-// write after the hide, `replaceState /notes/Home/Zahnarzt.md`, from React Router's history.replace (a
-// `navigate(…, { replace: true })`), made once the discreet state was reset, so the neutral window let it through; the
-// page then says "There is no such note" under that address. Likely places: web/src/discreet/hideAgain.ts:183-201 (the
-// palette's overlay closed in the same step, reset() before navigate); a replace navigation to the current note as the
-// palette closes (web/src/palette/Palette.tsx, the URL effects in web/src/shell/MobileShell.tsx around line 336); and
-// web/src/discreet/neutralWindow.ts write(), which guards a replace without a URL only, not one naming a vault that was
-// discreet a moment before.
+// F-10: a vault list read before the hide was heard once left the note in the address; the hide now covers every
+// vault shown in the mode.
 test("discreet-0-6-0 palette: hidden from elsewhere (here with the palette open), the address leaves the note (F-10) @palette @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
-  test.fixme(true, "F-10 (High, bug, intermittent): hidden from elsewhere, palette open or not, the address bar can show /notes/Home/Zahnarzt.md in the clear; with the palette open about 2 in 5 phone runs, 1 in 10 desktop; one replaceState to /notes/Home/… after the reset");
   const { context, page, note } = await start(freshSession, aliceApi, folder);
   try {
     await reveal(page, testInfo);
@@ -442,7 +431,7 @@ test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings sh
     await expect(page.getByText("Zahnarzt")).toHaveCount(0);
 
     // Shown again, What's on open over Zahnarzt, hidden from elsewhere: the window stays, without Home. Where the shell
-    // behind it goes, and ✕, are the fixme test's (F-10).
+    // behind it goes, and ✕, are the next test's (F-10, F-11).
     await reveal(page, testInfo);
     await runFromPalette(page, "Zahnarzt", "Zahnarzt, Home");
     await expect(page.locator("article").getByRole("heading", { name: "Zahnarzt", level: 1 })).toBeVisible();
@@ -459,13 +448,10 @@ test("discreet-0-6-0 windows: hidden with ✕, What's on, Recent and Settings sh
   }
 });
 
-// F-10 under a window: once (desktop, 1 in 4 runs of this test), after a hide from elsewhere the shell behind the
-// windows was on Home's note in the clear ("Switch vault: Home", the tree headed Home, "There is no vault 'Home'"), and
-// ✕ went back one history entry, to the Settings window before, rather than replacing it with the location behind as a
-// hide under a window makes it do. F-11 is reached only by this path (the pill is out of reach under a window), so it
-// waits here too.
+// F-10 under a window: a vault list read before the hide was heard once left the shell behind on Home's note in the
+// clear; the hide now covers every vault shown in the mode, so the shell behind shows nothing of Home. F-11 (✕ then
+// shows the vault list) is reached only by this path (the pill is out of reach under a window).
 test("discreet-0-6-0 windows: hidden from elsewhere while a window is open over a Home note, the window stays without Home, and ✕ shows the vault list (F-10, F-11) @windows @serial @phone", async ({ freshSession, aliceApi, folder }, testInfo) => {
-  test.fixme(true, "F-10 (High, bug, intermittent): hidden from elsewhere under a window, the shell behind can go back to Home's note in the clear; then F-11 (Low, unclear): ✕ on a window over a note hidden again shows the last ordinary note, not the vault list the windows spec names");
   const { context, page, note } = await start(freshSession, aliceApi, folder);
   let home: Awaited<ReturnType<typeof makeAgent>> | undefined;
   try {

@@ -114,6 +114,57 @@ public class SkillDirectoryTests
     }
 
     [Fact]
+    public async Task A_line_another_user_wrote_keeps_the_skill_his_after_her_write()
+    {
+        var carols = new StoredNote(P("/Private/_skills/x/SKILL.md"), Marked + "# Steps\nCarol's step.\n", 1, "", InMemoryNoteStore.Seeded, [], Ref: WriterRef.ForMember("w-carol"));
+        var next = NoteWriter.Next(carols, Marked + "# Steps of the plan\nCarol's step.\n", "claude", WriterRef.ForOwner(WriterRef.Agent, "k1"), InMemoryNoteStore.Seeded.AddHours(1));
+        _store.Put(next with { Authorship = Authorship.After(carols, next) });
+
+        var skill = await One("/Private/_skills/x");
+
+        Assert.True(skill.ByOther);
+        Assert.False(skill.AtStart);
+    }
+
+    /// <summary>Carol edits a long skill often, a few lines here and there; then Bob's agent changes one line.</summary>
+    [Fact]
+    public async Task A_long_skill_another_user_edited_often_stays_his_after_her_one_line_write()
+    {
+        var carol = WriterRef.ForMember("w-carol");
+        var first = new StoredNote(P("/Private/_skills/x/SKILL.md"), Marked + "See the plan.\n" + string.Concat(Enumerable.Range(0, Authorship.MaxRuns + 100).Select(i => $"Step {i}.\n")), 1, "", InMemoryNoteStore.Seeded, [], Ref: carol);
+        var note = first with { Authorship = Authorship.After(null, first) };
+        var lines = note.Content.Split('\n');
+        for (var edit = 0; !note.Authorship!.Dropped; edit++)
+        {
+            Assert.True(edit < 100);
+            for (var k = 0; k < 55; k++) lines[8 + 2 * ((edit * 55 + k) % 2090)] += " Checked.";
+            var next = NoteWriter.Next(note, string.Join('\n', lines), "", carol, InMemoryNoteStore.Seeded.AddMinutes(edit + 1));
+            note = next with { Authorship = Authorship.After(note, next) };
+        }
+
+        var hers = NoteWriter.Next(note, note.Content.Replace("See the plan.\n", "See the roadmap.\n"), "claude", WriterRef.ForOwner(WriterRef.Agent, "k1"), InMemoryNoteStore.Seeded.AddHours(4));
+        _store.Put(hers with { Authorship = Authorship.After(note, hers) });
+
+        var skill = await One("/Private/_skills/x");
+
+        Assert.True(skill.ByOther);
+        Assert.False(skill.AtStart);
+    }
+
+    [Fact]
+    public async Task A_line_with_no_record_counts_as_the_files_last_writer()
+    {
+        var content = Marked + "# Steps\nAn old step.\n";
+        var unrecorded = new Authorship(VersionToken.Hash(content), InMemoryNoteStore.Seeded, false, [], [new Authorship.Run(Kumbu.Core.Sh.Lines.Split(content).Count, -1)]);
+        _store.Put(new StoredNote(P("/Private/_skills/x/SKILL.md"), content, 12, "claude", InMemoryNoteStore.Seeded, [], Ref: WriterRef.ForOwner(WriterRef.Agent, "k1"), Authorship: unrecorded));
+
+        var skill = await One("/Private/_skills/x");
+
+        Assert.False(skill.ByOther);
+        Assert.True(skill.AtStart);
+    }
+
+    [Fact]
     public async Task A_skill_in_a_vaults_skills_folder_never_replaces_a_system_skill()
     {
         Put("/Work/_skills/project-memory/SKILL.md", "---\nname: project-memory\ndescription: Theirs.\n---\n");

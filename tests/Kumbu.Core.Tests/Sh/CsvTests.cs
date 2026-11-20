@@ -4,6 +4,7 @@ using System.Text;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Sh.Commands;
 using Kumbu.Core.Tests.Fakes;
 using Microsoft.Extensions.Time.Testing;
 
@@ -180,6 +181,42 @@ public class CsvTests
         Assert.Equal("Name\tText\tN\nrose\ta b\t1\ntulip\ttwo lines\t2", await Ok("csv /Work/odd.csv --tsv"));
         Assert.Equal("Name\tN\ntulip\t2", await Ok("csv /Work/odd.csv --tsv --rows 2 --cols Name,N"));
         Assert.Equal("2", await Ok("csv /Work/odd.csv --tsv --cols N --rows 2- | tail -n 1"));
+    }
+
+    [Fact]
+    public async Task Tsv_gives_each_row_its_own_cells()
+    {
+        _store.AddTextFile("/Work/ragged.csv", "a,b,c\n1,2,3\n4,5\n");
+
+        Assert.Equal("a\tb\tc\n1\t2\t3\n4\t5", await Ok("csv /Work/ragged.csv --tsv"));
+    }
+
+    [Fact]
+    public async Task Tsv_keeps_a_named_column_of_a_short_row_empty()
+    {
+        _store.AddTextFile("/Work/ragged.csv", "a,b,c\n1,2,3\n4,5\n");
+
+        Assert.Equal("a\tc\n1\t3\n4\t", await Ok("csv /Work/ragged.csv --tsv --cols a,c"));
+    }
+
+    [Fact]
+    public async Task Tsv_longer_than_its_budget_is_refused_with_how_to_narrow_it()
+    {
+        _sh.Register(new Csv(_store) { TsvBudget = 40 });
+        _store.AddTextFile("/Work/costs.csv", Costs);
+
+        Assert.Contains("narrow it with --rows or --cols", await Fails("csv /Work/costs.csv --tsv"));
+        Assert.Equal("Amount\n12.50\n3.20\n40.00", await Ok("csv /Work/costs.csv --tsv --cols Amount"));
+    }
+
+    [Fact]
+    public async Task Tsv_stops_when_the_call_is_cancelled()
+    {
+        _store.AddTextFile("/Work/costs.csv", Costs);
+        using var cancel = new CancellationTokenSource();
+        _store.BlobReadToEnd = cancel.Cancel;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new Csv(_store).RunAsync(["/Work/costs.csv", "--tsv"], null, cancel.Token));
     }
 
     [Fact]

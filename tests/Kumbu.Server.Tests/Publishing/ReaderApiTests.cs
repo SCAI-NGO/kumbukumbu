@@ -287,6 +287,24 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
         await AssertCopyAsync(shown);
     }
 
+    /// <summary>Sets a field of <paramref name="user"/>'s document that the readers have no use for to what no reader could
+    /// read: they look at whether the account is active, and at nothing else of it.</summary>
+    internal static Task SetUnreadableAsync(IMongoDatabase db, string userId) =>
+        db.GetCollection<BsonDocument>("users").UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", userId), Builders<BsonDocument>.Update.Set("favouritesSealed", "x"), cancellationToken: Ct);
+
+    [Fact]
+    public async Task A_published_note_opens_whatever_else_its_owners_account_holds()
+    {
+        var published = await PublishedAsync();
+        using var reader = new Reader(Api, "203.0.113.112");
+        await SetUnreadableAsync(app.Database, published.Alice.User.Id);
+
+        using var response = await reader.PostAsync(published.Formatted);
+
+        await AssertCopyAsync(response);
+    }
+
     [Fact]
     public async Task Switched_off_reads_nothing()
     {
@@ -418,7 +436,7 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.OK, file.StatusCode);
         Assert.Equal("image/jpeg", file.Content.Headers.ContentType!.MediaType);
-        Assert.Equal(ImageMetadata.Strip(ImageMetadataTests.JpegWithGps(6), "image/jpeg"), await file.Content.ReadAsByteArrayAsync(Ct));
+        Assert.Equal(ImageMetadata.Strip(ImageMetadataTests.JpegWithGps(6), "image/jpeg", Ct), await file.Content.ReadAsByteArrayAsync(Ct));
         Assert.Equal(Security.FileContentPolicy, Assert.Single(file.Headers.GetValues("Content-Security-Policy")));
 
         foreach (var bad in new[] { "1", "-1", "x", "99999999999" })
@@ -448,7 +466,7 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.OK, file.StatusCode);
         Assert.Equal("image/svg+xml", file.Content.Headers.ContentType!.MediaType);
-        Assert.Equal(ImageMetadata.Strip(Encoding.UTF8.GetBytes(ImageMetadataTests.InkscapeSvg), "image/svg+xml"), await file.Content.ReadAsByteArrayAsync(Ct));
+        Assert.Equal(ImageMetadata.Strip(Encoding.UTF8.GetBytes(ImageMetadataTests.InkscapeSvg), "image/svg+xml", Ct), await file.Content.ReadAsByteArrayAsync(Ct));
         Assert.Equal(Security.FileContentPolicy, Assert.Single(file.Headers.GetValues("Content-Security-Policy")));
         Assert.Equal("nosniff", Assert.Single(file.Headers.GetValues("X-Content-Type-Options")));
     }

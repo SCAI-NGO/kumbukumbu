@@ -14,7 +14,7 @@ public class GraphReaderTests
 
     /// <summary>The store's notes as they are; a graph built from <paramref name="graphNotes"/>, which may say otherwise.</summary>
     private static GraphReader Reader(InMemoryNoteStore store, params (string Path, string Content)[] graphNotes) =>
-        new(store, LinkGraph.Build("W", graphNotes.ToDictionary(n => P(n.Path), n => LinkExtract.Of(P(n.Path), n.Content)), []));
+        new(store, LinkGraph.Build("W", graphNotes.ToDictionary(n => P(n.Path), n => LinkExtract.Of(P(n.Path), n.Content)), [], TestContext.Current.CancellationToken));
 
     [Fact]
     public async Task Backlinks_parse_no_note()

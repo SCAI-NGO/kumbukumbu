@@ -19,14 +19,15 @@ public static class ImageMetadata
 {
     /// <summary>The image without EXIF, XMP, IPTC, comments and text; an orientation other than 1 kept as a minimal
     /// EXIF; an SVG as <see cref="Svg"/> keeps it. Null if the bytes don't parse as <paramref name="mediaType"/>
-    /// (image/jpeg, image/png, image/gif, image/webp, image/svg+xml) or it is another type. Never throws for malformed content.</summary>
-    public static byte[]? Strip(ReadOnlySpan<byte> file, string mediaType) => mediaType.ToLowerInvariant() switch
+    /// (image/jpeg, image/png, image/gif, image/webp, image/svg+xml) or it is another type. Never throws for malformed content;
+    /// an SVG's strip ends with <see cref="OperationCanceledException"/> once <paramref name="ct"/> is cancelled.</summary>
+    public static byte[]? Strip(ReadOnlySpan<byte> file, string mediaType, CancellationToken ct = default) => mediaType.ToLowerInvariant() switch
     {
         "image/jpeg" => Jpeg(file),
         "image/png" => Png(file),
         "image/gif" => Gif(file),
         "image/webp" => WebP(file),
-        "image/svg+xml" => Svg(file),
+        "image/svg+xml" => Svg(file, ct),
         _ => null,
     };
 
@@ -41,7 +42,7 @@ public static class ImageMetadata
     /// processing instructions and the DTD; the drawing's text, styles and whitespace as they were. A reference keeps
     /// only what lies inside the file (<see cref="Reference"/>).
     /// </summary>
-    private static byte[]? Svg(ReadOnlySpan<byte> file)
+    private static byte[]? Svg(ReadOnlySpan<byte> file, CancellationToken ct)
     {
         if (SvgImage.Problem("", file) is not null) return null;
         XDocument document;
@@ -57,15 +58,30 @@ public static class ImageMetadata
 
         var root = document.Root!;
         var drawing = root.Name.Namespace;
-        root.DescendantNodes().Where(n => n is XComment or XProcessingInstruction).Remove();
-        root.Descendants().Where(e => e.Name.Namespace != drawing || e.Name.LocalName == "metadata").Remove();
-        foreach (var element in root.DescendantsAndSelf())
+        bool Unkept(XNode n) => n is XComment or XProcessingInstruction || n is XElement e && (e.Name.Namespace != drawing || e.Name.LocalName == "metadata");
+
+        // Each element gets the children it keeps back at once, in their order.
+        var stack = new Stack<XElement>([root]);
+        while (stack.TryPop(out var element))
         {
+            ct.ThrowIfCancellationRequested();
+            if (element.Nodes().Any(Unkept))
+            {
+                var children = element.Nodes().Where(n => !Unkept(n)).ToList();
+                element.RemoveNodes();
+                element.Add(children);
+            }
+
             element.Attributes().Where(a => a.IsNamespaceDeclaration ? !SvgNamespaces.Contains(a.Value) : !SvgNamespaces.Contains(a.Name.NamespaceName)).Remove();
             foreach (var href in element.Attributes().Where(a => a.Name.LocalName == "href" && !a.IsNamespaceDeclaration).ToList())
             {
-                if (Reference(href.Value) is { } kept) href.Value = kept;
+                if (Reference(href.Value, ct) is { } kept) href.Value = kept;
                 else href.Remove();
+            }
+
+            foreach (var child in element.Elements())
+            {
+                stack.Push(child);
             }
         }
 
@@ -85,7 +101,7 @@ public static class ImageMetadata
     /// image on the author's disk names the folder it lies in (<c>/home/&lt;name&gt;/…</c>), and a published picture
     /// fetches nothing from elsewhere anyway.
     /// </summary>
-    private static string? Reference(string value)
+    private static string? Reference(string value, CancellationToken ct)
     {
         if (value.StartsWith('#')) return value;
         const string Base64 = ";base64,";
@@ -94,7 +110,7 @@ public static class ImageMetadata
         var mediaType = value[5..marker];
         var bytes = new byte[value.Length - marker - Base64.Length];
         if (!Convert.TryFromBase64String(value[(marker + Base64.Length)..], bytes, out var length)) return null;
-        return Strip(bytes.AsSpan(0, length), mediaType) is { } stripped ? $"data:{mediaType}{Base64}{Convert.ToBase64String(stripped)}" : null;
+        return Strip(bytes.AsSpan(0, length), mediaType, ct) is { } stripped ? $"data:{mediaType}{Base64}{Convert.ToBase64String(stripped)}" : null;
     }
 
     /// <summary>A big-endian TIFF block whose IFD0 holds the orientation alone.</summary>
