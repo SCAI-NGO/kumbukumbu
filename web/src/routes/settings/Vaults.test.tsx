@@ -196,6 +196,29 @@ describe("Settings: Vaults", () => {
     expect(screen.getByRole("alertdialog", { name: "Delete Work?" })).toBeInTheDocument();
   });
 
+  it("a re-encrypt answered after its vault is hidden again shows no re-encrypted line", async () => {
+    let answer: () => void = () => {};
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    api({
+      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: [], members: [] }),
+      "POST /api/vaults/Diary/rekey": async () => (await answered, json(200, { revokedApiKeys: 0, disconnectedApps: 0, revokedShares: 0 })),
+    });
+    renderApp("/settings/vaults");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Re-encrypt Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" });
+    await userEvent.type(await within(dialog).findByLabelText("Your password"), "my password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
+
+    act(() => useDiscreet.setState({ gone: new Set(["Diary"]), names: new Set() }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await act(async () => {
+      answer();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(vaultsSection).not.toHaveTextContent("Diary is re-encrypted");
+  });
+
   it("a pending vault shows as being re-encrypted", async () => {
     api({
       "GET /api/vaults": () =>

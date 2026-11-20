@@ -104,7 +104,8 @@ function VaultsSection() {
       )}
       {rekeyed && <Done>{rekeyed.text}</Done>}
       {deleting !== null && <DeleteVaultDialog vault={deleting} onClose={() => setDeleting(null)} />}
-      {rekeying !== null && <RekeyVaultDialog vault={rekeying} onDone={(text) => setRekeyed({ vault: rekeying, text })} onClose={() => setRekeying(null)} />}
+      {/* A re-encrypt answered once its vault is hidden again leaves no line. */}
+      {rekeying !== null && <RekeyVaultDialog vault={rekeying} onDone={(text) => !goneVault(useDiscreet.getState(), rekeying) && setRekeyed({ vault: rekeying, text })} onClose={() => setRekeying(null)} />}
     </Section>
   );
 }
