@@ -27,7 +27,8 @@ public sealed class Ls(INoteReader notes) : ICommand
           access: whoever may read the vault may read it.
 
           -l, --long      add what each entry weighs and when it last changed (UTC, as 'history' shows it): a note its
-                          size, a folder the newest change below it, an attachment its summary; columns aligned
+                          size, a folder the newest change below it, an attachment its summary; columns aligned;
+                          the list of vaults stays as it is
           -a, --archive   list the vault's _archive/ too; -la and -al combine the two flags
 
           ls

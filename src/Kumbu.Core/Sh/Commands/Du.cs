@@ -33,10 +33,11 @@ public sealed class Du(INoteReader notes) : ICommand
           summed (they end with '/'), largest first, then a total line; no path sizes the vaults.
           du of a whole vault is smaller than its line in df: df counts everything the vault keeps in
           the database (history, trash, moves, embeddings, checkpoints), du only what is there now.
-          Sizes are B, KB, MB and GB (1 KB = 1024 B); -h is accepted and changes nothing.
-          -s, --summarize     the total only
-          -d, --max-depth N   N levels deep instead of one (-d 0 is -s)
-          -b, --bytes         exact bytes
+          Sizes are B, KB, MB and GB (1 KB = 1024 B).
+          -h, --human-readable   accepted, changes nothing
+          -s, --summarize        the total only
+          -d, --max-depth N      N levels deep instead of one (-d 0 is -s)
+          -b, --bytes            exact bytes
           There is no globbing: du lists a folder's children itself.
 
           du /Work

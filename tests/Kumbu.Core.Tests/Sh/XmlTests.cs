@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Tests.Fakes;
 
@@ -367,5 +368,15 @@ public class XmlTests
         Assert.Contains("\n  xml /Work/feed.xml '//item/title'", help);
         Assert.Contains("\n  xml ", (await Run("help")).Output);
         Assert.Contains("\n  xml ", Manual.ToolDescription);
+    }
+
+    [Fact]
+    public async Task Help_says_what_its_budget_stops()
+    {
+        var help = Regex.Replace((await Run("help xml")).Output, @"\s+", " ");
+
+        Assert.Equal(TimeSpan.FromSeconds(10), new Kumbu.Core.Sh.Commands.Xml(_store).Budget);
+        Assert.Contains("an XPath and its printing stop after 10 seconds", help);
+        Assert.DoesNotContain("A call stops after 10 seconds", help);
     }
 }

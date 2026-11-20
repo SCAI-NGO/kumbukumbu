@@ -35,13 +35,13 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
 
     public string Summary => "ranked search by words and meaning; finds sections and PDF pages";
 
-    public string Help => """
+    public string Help => $"""
         semsearch [-n N] [-C|-l] [--words|--meaning] [--tag T] [--archive] <query> [path]
           Ranked search for the sections that best match a question or a topic, in every vault or below
           a path. Combines two rankings: by meaning (embeddings: the same idea in other words, also across
           languages) and by words (BM25: exact terms, names, abbreviations). The meaning score gets a
           bonus for the words of the query a section contains.
-          Prints the best sections (-n, default 10): path#Section with their lines and score, then the
+          Prints the best sections (-n N, --max N; default {DefaultMax}): path#Section with their lines and score, then the
           section's whole text. A short section is often merged with its neighbours under their parent
           heading: path#Section then names that parent, and the lines are exact. Scores are comparable
           within one search, not across searches. cat "path#Section" reads the whole section. For exact

@@ -28,12 +28,12 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
 
     public string Name => "pdf";
 
-    public string Usage => "pdf [info] <path> [pages]";
+    public string Usage => "pdf <path> [pages] [--images|--images=all] [--crop x,y,w,h] [--rotate D] [--size small|medium|large] | pdf info <path>";
 
     public string Summary => "read a PDF page by page: text, rendered pages, a part of one";
 
     public string Help => $"""
-        pdf <path> [pages] [--images | --images=all] [--crop x,y,w,h] [--rotate D] [--size small|medium|large]
+        pdf <path> [pages] [--images|--images=all] [--crop x,y,w,h] [--rotate D] [--size small|medium|large]
         pdf info <path>
           Read a PDF page by page. pages is N, N-M or N- (to the end), all pages if omitted. Each page
           starts with a line naming it, its type and what was found on it, followed by its text:

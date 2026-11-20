@@ -54,6 +54,20 @@ public sealed class FileApiTests(KumbuAppFactory app)
         }
     }
 
+    [Fact]
+    public async Task An_upload_finds_a_skills_folder_by_the_mark_not_the_name()
+    {
+        var alice = await RestClient.MarkedUnderAnotherNameAsync(Api);
+        var bytes = "a\0b"u8.ToArray();
+
+        using var unmarked = await alice.SendContentAsync(HttpMethod.Put, "/api/files/Skills/x/tool.bin", new ByteArrayContent(bytes));
+        using var marked = await alice.PutFileAsync("x/tool.bin", bytes);
+
+        Assert.Equal(HttpStatusCode.Created, unmarked.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, marked.StatusCode);
+        Assert.Equal($"tool.bin: {AttachmentFormat.SkillFolderMessage}.", await RestClient.ErrorAsync(marked));
+    }
+
     internal static readonly byte[] Pdf = "%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n"u8.ToArray();
 
     private async Task<long> BlobCountAsync(RestClient user)

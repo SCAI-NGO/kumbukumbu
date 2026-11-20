@@ -40,6 +40,19 @@ public sealed class DavLargeFileTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_large_put_finds_a_skills_folder_by_the_mark_not_the_name()
+    {
+        var dav = await DavSkillTextTests.MarkedUnderAnotherNameAsync(app);
+        var bytes = LargeFiles.Of(16 * 1024 * 1024, 23);
+
+        using var unmarked = await dav.SendAsync(HttpMethod.Put, "/dav/Skills/x/big.bin", new LargeFiles.Streamed(bytes, true));
+        using var marked = await dav.SendAsync(HttpMethod.Put, "/dav/Tools/x/big.bin", new LargeFiles.Streamed(bytes, true));
+
+        Assert.True(unmarked.StatusCode == HttpStatusCode.Created, await unmarked.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, marked.StatusCode);
+    }
+
+    [Fact]
     public async Task A_put_larger_than_the_64_MiB_of_other_requests_is_stored()
     {
         var dav = await DavClient.NewAsync(Api);

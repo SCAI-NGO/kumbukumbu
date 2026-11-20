@@ -13,18 +13,19 @@ public sealed class Wc(INoteReader notes) : ICommand
 
     public string Name => "wc";
 
-    public string Usage => "wc [-l|-w|-m|-c] [path]";
+    public string Usage => "wc [-l] [-w] [-m] [-c] [--version V] [path]";
 
     public string Summary => "count lines, words, characters, bytes";
 
     public string Help => """
-        wc [-l] [-w] [-m] [-c] [path]
+        wc [-l] [-w] [-m] [-c] [--version V] [path]
           Count the lines, words and bytes of a note, or of the piped input.
           A last line without a newline counts as a line.
           -l, --lines   lines
           -w, --words   words (separated by whitespace)
           -m, --chars   characters
           -c, --bytes   bytes (UTF-8)
+          --version V   of an earlier version of the note from 'history <path>'
           Counts print in the order lines, words, characters, bytes; then the path, if one was given.
 
           wc /Demo/welcome.md

@@ -10,8 +10,8 @@ public static class Manual
           ls [-l] [-a|--archive] [path]   list a directory (directories end with '/'); -l adds sizes and times; no path lists the vaults
           cat <path>[#section] [<path>…]  print a note or one section (several paths: each under a header); its version token comes as a separate block, followed by its link into the web app (show it to the user)
           outline <path>                  the headings of a note, with line ranges and sizes
-          rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault; -g GLOB filters paths
-          rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
+          rg [options] <regex> [path...]  search notes, text files and PDF text, prints path:line:text; no path searches every vault; -g GLOB filters paths
+          rg --files [path...]            list note and text file paths; find a note by name: rg --files | rg -i kumbu
           semsearch <query> [path]        ranked search by words and meaning; finds the best sections and PDF pages (--archive: also archived notes)
           img <path>                      look at an image attachment, whole or a part of it
           pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
@@ -34,11 +34,11 @@ public static class Manual
           diff <path> [from [to]]         what changed between versions (default: last change); --word
           diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history
-          mv <path>… <target>             move or rename notes, or folders (/Work/old/); links are rewritten
+          mv <path>… <target>             move or rename notes, attachments or folders (/Work/old/); links are rewritten
           archive <path>                  move a note, attachment or folder (/Work/old/) into the vault's archive; links follow (help archive)
           mkdir <path>                    make a folder; an empty folder stays until you remove it
-          rm <path> [<path>…]             move notes or empty folders to the trash (kept 30 days)
-          trash [path]                    list removed notes and folders
+          rm <path> [<path>…]             move notes, attachments or empty folders to the trash (kept 30 days)
+          trash [path]                    list removed notes, attachments and folders
           df [-h] [-b] [/vault]           what your own vaults take, history and trash included, against your limit
           du [-h] [-b] [-s] [-d N] [path] sizes of what is below a path now, largest first
           mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
@@ -54,7 +54,7 @@ public static class Manual
         Calendar: a note is an entry when its frontmatter has when (2026-11-20, 2026-11-20T14:00 or 2026-W47) or its name is a day or a week (2026-11-12.md, 2026-W46.md); until ends it (an entry over days, or a time with an end), task: open makes it a to-do, upcoming: 7d shows it that early; calendar notifications is what's on in every vault, in the user's time zone; calendar set, move, close, reopen and unset change only those keys and leave a version (calendar set <note> --until 2026-11-22 gives an entry its end). On a board card the column is the status and due its date: change them with the board tool.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
         Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.
-        Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints). rg searches notes only there, not PDFs.
+        Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints). rg searches notes and text files there, not PDFs.
         To change notes use the 'write', 'edit' and 'replace' tools, never this shell: content does not go through sh.
         Pipes: cat /Work/plan.md | rg -n TODO, rg -l Hecate | head -5, ls /Work | wc -l.
         '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg, csv.
@@ -72,8 +72,9 @@ public static class Manual
     public const string WriteDescription = """
         Create a note, or replace a note's whole content, in Kumbu² (a Markdown second brain; read it with the sh tool).
 
-        To create: leave out version. The path must end in .md and lie in an existing vault (sh: ls); missing
-        directories are fine. It fails if the note exists.
+        To create: leave out version. The path names a note (ending in .md), an SVG (.svg) or a text file in a
+        skill's folder (a script, say), in an existing vault (sh: ls); missing directories are fine.
+        It fails if the path exists. Any other file goes in with the upload tool.
         To replace: pass the version token you got from 'cat' (or from an earlier write or edit). If the note
         changed since, the write fails: cat it again and redo the change, so nobody's edit is lost.
         For small changes, appending or one section, use the edit tool instead; it doesn't resend the whole note.
@@ -83,8 +84,9 @@ public static class Manual
         Link to other notes as [text](/Folder/Note.md) (the path inside the vault, without the vault's name; %20 for spaces).
 
         Returns the new version token. Earlier versions stay recoverable (sh: history, restore).
-        message: optionally one line on why you wrote, kept with the version and shown by history. A write that
-        changes nothing makes no version and so keeps no message.
+        message: optionally one line on why you wrote, kept with this version in the note's history; an SVG's or a
+        skill file's history keeps none. Shown by history. A write that changes nothing makes no version and so keeps
+        no message.
         The answer carries the note's link into the web app (it opens after sign-in): show it to the user.
         """;
 
@@ -135,8 +137,8 @@ public static class Manual
 
     public const string UploadDescription = """
         Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): any file, an image, a
-        PDF, a spreadsheet, a CSV. The write tool writes notes, SVGs and a skill's text files; everything else is
-        uploaded here. Two steps:
+        PDF, a spreadsheet, a CSV. Notes and a skill's text files are written with the write tool, an SVG with
+        either tool; everything else is uploaded here. Two steps:
 
         1. Call upload with the path the file is to have, e.g. /Work/images/diagram.png (the vault must exist and you
            need write access). It answers a one-time URL and a curl line.

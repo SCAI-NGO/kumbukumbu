@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
 using Kumbu.Core.Attachments;
+using Kumbu.Server.Tests.Api;
 
 namespace Kumbu.Server.Tests.Dav;
 
@@ -50,6 +51,32 @@ public sealed class DavSkillTextTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, put.StatusCode);
         Assert.Contains(AttachmentFormat.SkillFolderMessage, await put.Content.ReadAsStringAsync(Ct));
         Assert.Equal(HttpStatusCode.Created, outside.StatusCode);
+    }
+
+    /// <summary>A share of a skills vault marked under the name Tools and of a vault named Skills that isn't marked,
+    /// each with a folder x.</summary>
+    internal static async Task<DavClient> MarkedUnderAnotherNameAsync(KumbuAppFactory app)
+    {
+        var owner = await RestClient.MarkedUnderAnotherNameAsync(app.PublicApi);
+        var dav = await DavClient.NewAsync(app.PublicApi, owner, vaults: new Dictionary<string, string> { ["Tools"] = "write", ["Skills"] = "write" });
+        foreach (var folder in new[] { "/dav/Tools/x/", "/dav/Skills/x/" })
+        {
+            using var made = await dav.SendAsync(new HttpMethod("MKCOL"), folder);
+            Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        }
+
+        return dav;
+    }
+
+    [Fact]
+    public async Task Put_finds_a_skills_folder_by_the_mark_not_the_name()
+    {
+        var dav = await MarkedUnderAnotherNameAsync(app);
+        using var marked = await dav.SendAsync(HttpMethod.Put, "/dav/Tools/x/notes", new ByteArrayContent(Script));
+        using var unmarked = await dav.SendAsync(HttpMethod.Put, "/dav/Skills/x/notes", new ByteArrayContent(Script));
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, marked.StatusCode);
+        Assert.Contains(AttachmentFormat.SkillFolderMessage, await marked.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(HttpStatusCode.Created, unmarked.StatusCode);
     }
 
     [Fact]

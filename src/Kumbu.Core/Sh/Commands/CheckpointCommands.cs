@@ -14,7 +14,7 @@ public sealed class Mkcp(Checkpoints checkpoints) : ICommand
     public string Help => $"""
         mkcp <path> <name>
           Make a named checkpoint: the current state of a note, a folder or a whole vault, kept under
-          <name> until 'rmcp' removes it. Unlike the history (10 versions per note), a checkpoint is
+          <name> until 'rmcp' removes it. Unlike the history ({NoteWriter.HistoryLimit} versions per note), a checkpoint is
           never pushed out and never expires. Names are unique per vault; {Checkpoint.NameRule} characters.
           A vault keeps at most {checkpoints.Limit} checkpoints.
           Set checkpoints only when the user asks for one. In a shared vault it takes maintain.
@@ -48,8 +48,9 @@ public sealed class Lscp(Checkpoints checkpoints) : ICommand
     public string Help => """
         lscp [path]
           List the named checkpoints: name, what it covers, when and by whom it was made, notes.
-          With a vault, that vault's checkpoints and how many more it can keep; with a folder or note,
-          the checkpoints that cover it or lie below it. No path lists every vault's.
+          With a vault, that vault's checkpoints; with a folder or note, the checkpoints that cover it
+          or lie below it. No path lists every vault's. Any path but / ends with how many checkpoints
+          its vault has of the most it can keep: <n> of <limit> checkpoints in <vault>.
 
           lscp /Demo
         """;

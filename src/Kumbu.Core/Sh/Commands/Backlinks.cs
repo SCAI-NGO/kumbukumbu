@@ -13,7 +13,7 @@ public sealed class Backlinks(INoteReader notes) : ICommand
 
     private static readonly Option[] Spec = [new(null, "archive"), new(null, "unlinked")];
 
-    public string Usage => "backlinks [--archive] <path>";
+    public string Usage => "backlinks [--archive] [--unlinked] <path>";
 
     public string Summary => "the notes that link to a note or attachment";
 

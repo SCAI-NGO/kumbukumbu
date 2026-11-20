@@ -137,4 +137,50 @@ public sealed class SvgWriteTests
         Assert.Equal(AttachmentFormat.TextMediaType, (await store.GetAttachmentAsync(P("/Skills/pdf/logo.svg"), Ct))!.Current.MediaType);
         Assert.Equal("not even XML", (await shell.RunAsync("cat /Skills/pdf/logo.svg", Ct)).Output);
     }
+
+    private const string NotKept = "\nmessage not kept: an SVG's or a skill file's history keeps no messages";
+
+    [Fact]
+    public async Task A_message_on_an_SVG_write_is_not_kept_and_the_answer_says_so()
+    {
+        var (_, writer, _) = Make();
+
+        var created = await writer.WriteAsync("/Work/diagram.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>", null, Ct, message: "first sketch");
+
+        Assert.False(created.IsError, created.Output);
+        Assert.Equal("created /Work/diagram.svg" + NotKept, created.Output);
+        Assert.NotNull(created.Version);
+    }
+
+    [Fact]
+    public async Task A_failed_SVG_write_with_a_message_answers_the_error_alone()
+    {
+        var (_, writer, _) = Make();
+
+        var broken = await writer.WriteAsync("/Work/diagram.svg", "<svg", null, Ct, message: "first sketch");
+
+        Assert.True(broken.IsError);
+        Assert.DoesNotContain("message not kept", broken.Output);
+    }
+
+    [Fact]
+    public async Task An_SVG_write_without_a_message_answers_as_before()
+    {
+        var (_, writer, _) = Make();
+
+        Assert.Equal("created /Work/diagram.svg", (await writer.WriteAsync("/Work/diagram.svg", Drawing, null, Ct)).Output);
+        Assert.Equal("created /Work/blank.svg", (await writer.WriteAsync("/Work/blank.svg", Drawing, null, Ct, message: "  ")).Output);
+    }
+
+    [Fact]
+    public async Task An_unchanged_SVG_write_with_a_message_answers_as_before()
+    {
+        var (_, writer, _) = Make();
+        var created = await writer.WriteAsync("/Work/diagram.svg", Drawing, null, Ct);
+
+        var again = await writer.WriteAsync("/Work/diagram.svg", Drawing, created.Version!.Token, Ct, message: "no change");
+
+        Assert.False(again.IsError, again.Output);
+        Assert.Equal("/Work/diagram.svg is unchanged", again.Output);
+    }
 }

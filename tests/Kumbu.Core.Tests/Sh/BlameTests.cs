@@ -270,10 +270,23 @@ public class BlameTests
         Assert.Equal($"total: seed {shown} lines in {shown} notes", lines[^1]);
     }
 
+    // --lines prints a note's lines; on a folder it would be ignored, so it is refused (help-texts spec §3.10).
+    // Lines_prints_every_line_with_its_own_time_and_text keeps it working on a note.
+    [Theory]
+    [InlineData("blame --lines /Work")]
+    [InlineData("blame --lines /Work/Protocols/")]
+    [InlineData("blame /Work/Protocols --lines")]
+    public async Task Blame_lines_on_a_folder_is_refused(string line)
+    {
+        await Write(Veyalt, "/Work/Protocols/a.md", "v1\n");
+
+        Assert.Equal(ShellResult.Error("blame: --lines takes a note, not a folder"), await Run(line));
+    }
+
     [Fact]
     public async Task Its_help_says_who_wrote_what()
     {
-        Assert.StartsWith("blame [--lines] <path>\n  Who wrote what:", (await Run("help blame")).Output);
+        Assert.StartsWith("blame [--lines] <path>[#section]\n  Who wrote what:", (await Run("help blame")).Output);
         Assert.Matches(@"\n  blame \[--lines\] <path>\[#section\] +who wrote what", (await Run("help")).Output);
         Assert.Contains("\n  blame [--lines] <path>          who wrote what", Manual.ToolDescription);
     }

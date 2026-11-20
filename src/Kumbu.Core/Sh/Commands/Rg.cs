@@ -56,7 +56,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     public string Summary => "search notes, text files and PDF text (prints path:line:text); --files lists what it searches";
 
-    public string Help => """
+    public string Help => $"""
         rg [options] <regex> [path...]
           Search the notes below each path (a directory or a note) for lines matching a regex.
           Without a path, search every vault. Prints path:line:text, sorted by path; context lines
@@ -71,8 +71,8 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           nothing matches, a hint line names the PDFs with such pages. Look at pages with 'pdf'. PDFs are
           searched in the current state only, not with --checkpoint; --files and --tag leave them out.
           With --regions a match in a PDF also says where on the page it lies.
-          Text files are searched as notes are (UTF-8 without NUL bytes, up to 15 MB: a CSV, a script), up to
-          64 MB of them a search (a notice says where rg stopped); --tag leaves them out.
+          Text files are searched as notes are (UTF-8 without NUL bytes, up to {AttachmentFormat.MaxBytes / (1024 * 1024)} MB: a CSV, a script), up to
+          {MaxTextBytes / (1024 * 1024)} MB of them a search (a notice says where rg stopped); --tag leaves them out.
           Images and other files are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
           List the paths of all notes and text files below each path; with no path, of every one (with --tag, of notes).
@@ -81,11 +81,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           -F, --fixed-strings        the pattern is a literal string, not a regex
           -w, --word-regexp          match whole words only
           -v, --invert-match         select lines that do not match
-          -l, --files-with-matches   print only the paths of notes and PDFs with a match
-          -c, --count                print path:count per note or PDF (piped: one total)
+          -l, --files-with-matches   print only the paths of notes, text files and PDFs with a match (not piped)
+          -c, --count                print path:count per note, text file or PDF (piped: one total)
           -n, --line-number          show line numbers (default for notes; piped: off; PDFs: off)
           -N, --no-line-number       hide line numbers
-          -m, --max-count N          at most N matching lines per note or PDF
+          -m, --max-count N          at most N matching lines per note, text file or PDF
           -e, --regexp PATTERN       a pattern, for one that starts with '-'; repeat for several
           --version V                search an earlier version (from 'history') of the one note given
           --tag T                    only notes that carry #T (nested too, ignoring case; 'help tags');
@@ -96,11 +96,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                                      match= around the match itself where it is narrower, guessed from its share of
                                      the piece's characters. They show where the text lies, not that anyone can
                                      see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
-                                     Regions come from the PDF itself each time, for up to 8 PDFs a search; not with
+                                     Regions come from the PDF itself each time, for up to {MaxRegionPdfs} PDFs a search; not with
                                      -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
-          --archive                  search a vault's archive (_archive/) too: its notes and PDFs; a path inside it always is
-          -g, --glob GLOB            only paths matching GLOB, or not matching !GLOB (ripgrep's rules, {a,b} too; repeatable)
+          --archive                  search a vault's archive (_archive/) too: its notes, text files and PDFs; a path inside it always is
+          -g, --glob GLOB            only paths matching GLOB, or not matching !GLOB (ripgrep's rules, {"{a,b}"} too; repeatable)
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search
         never backtracks. Quote patterns that contain spaces or | ( ) < > & ; $.
@@ -771,7 +771,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             return ShellResult.Error($"rg: reads from the pipe, so it takes no path (got '{operands[0]}')");
         }
 
-        if (options.Has("files-with-matches")) return ShellResult.Error("rg: -l lists notes, so it needs paths, not piped input");
+        if (options.Has("files-with-matches")) return ShellResult.Error("rg: -l lists notes, text files and PDFs, so it needs paths, not piped input");
 
         var lines = Lines.Split(input);
         var matches = search.Matches(lines);
@@ -784,7 +784,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, IReadOnlyList<Glob> globs, bool archive, string? input, CancellationToken ct)
     {
-        if (input is not null) return ShellResult.Error("rg: --files lists notes; it does not read from a pipe");
+        if (input is not null) return ShellResult.Error("rg: --files lists notes and text files; it does not read from a pipe");
         if (tags.Count > 0)
         {
             if (operands.Count > 1) return ShellResult.Error("rg: --files with --tag takes one path");

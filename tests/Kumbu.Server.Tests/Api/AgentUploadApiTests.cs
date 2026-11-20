@@ -354,6 +354,19 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_svg_in_a_vault_named_Skills_that_isnt_marked_is_embedded_as_an_image()
+    {
+        var user = await RestClient.MarkedUnderAnotherNameAsync(Api);
+        var skills = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == "Skills");
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            user.User, user.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [skills.Id] = KeyRight.Write }, Ct);
+
+        using var put = await PutAsync(await UrlAsync(user, key, "/Skills/x/diagram.svg"), Bytes(FileApiTests.Svg));
+
+        Assert.Equal("![diagram.svg](/x/diagram.svg)", (await CreatedAsync(put))["markdown"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Answers_markdown_and_link()
     {
         var user = await RestClient.NewAsync(Api, vault: "V");

@@ -75,6 +75,9 @@ public sealed class DavTree(INoteStore notes, IAttachmentStore attachments, DavC
         return Held(path) is { } held && await StoredContentAsync(held.Original, ct) is { } content ? content with { Name = path.Name } : null;
     }
 
+    /// <summary>The share's name for the vault marked as the skills vault (<see cref="INoteReader.SkillsVaultAsync"/>).</summary>
+    public Task<string?> SkillsVaultAsync(CancellationToken ct) => notes.SkillsVaultAsync(ct);
+
     private async Task<DavContent?> StoredContentAsync(VaultPath path, CancellationToken ct)
     {
         if (FolderMarker.Is(path)) return null;

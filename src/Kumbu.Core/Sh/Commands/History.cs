@@ -21,8 +21,9 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
 
     public string Help => $"""
         history [--since T] <path>
-          List the versions of a note, newest first: version, time written (UTC), writer, lines.
-          The first line is the current version. Up to {NoteWriter.HistoryLimit} earlier versions are kept. Writes by one
+          List the versions of a note, newest first: version, time written (UTC), writer, lines, then
+          '— message' if the write gave one; the current version ends in (current) and is the first line.
+          Up to {NoteWriter.HistoryLimit} earlier versions are kept. Writes by one
           writer close together in time form a changeset (it ends after {Changeset.Idle.TotalMinutes} minutes without a write,
           {Changeset.HumanIdle.TotalMinutes} for a person in the web app or Obsidian, or after {Changeset.MaxLength.TotalHours} hour), and a changeset
           gives each note one version, whatever tool wrote it, so the state before a session survives. A note's first
@@ -34,7 +35,8 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
           (restored) came back from the trash, with the writer and time of the restore; the next write
           leaves one line of that version, unmarked.
 
-          An attachment (an image or a PDF) lists the same way, with its kind and size instead of lines.
+          An attachment (any file: an image, a PDF, a text file …) lists the same way, with its kind and size
+          instead of lines and no message.
           --since T lists only the versions written since then (as for a directory, below).
 
         history [--since T] <directory>
@@ -42,7 +44,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
           writer, note, version, lines added and removed, and the changeset: writes by one writer
           close together in time, which count as one version per note. Moves and removals (to the
           trash) get a row of their own (a folder move one row). --since takes 30m, 2h, 1d or a UTC time;
-          without it, the last 50. Only what the histories still hold (10 versions per note, one per
+          without it, the last {DefaultLimit}. Only what the histories still hold ({NoteWriter.HistoryLimit} versions per note, one per
           changeset). Then 'diff <note> <version>' shows a change.
 
           history /Demo/welcome.md

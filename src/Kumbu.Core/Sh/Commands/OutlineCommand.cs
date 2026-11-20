@@ -14,7 +14,7 @@ public sealed class OutlineCommand(INoteReader notes) : ICommand
     public string Summary => "the headings of a note, with line ranges and sizes";
 
     public string Help => """
-        outline <path>
+        outline [--version V] <path>
           List the sections of a note: line range, heading, and size in tokens (about). Duplicate
           headings under one parent show their index. Headings in code blocks and frontmatter don't count.
           Read a section with: cat "<path>#Heading" (nested: #Parent#Child).

@@ -59,17 +59,18 @@ internal sealed partial class SkillUpdateTaker(
             var copy = await CopyAsync(path, ct);
             var upstream = await UpstreamAsync(copy, ct);
             var held = await HeldAsync(copy.Folder, ct);
+            var skillsVault = copy.Access.IsSkillsVault ? copy.Access.Name : null;
             var changes = new List<SkillFileChange>();
             foreach (var (relative, bytes) in upstream.Files)
             {
                 var at = SkillCopier.Inside(copy.Folder, relative);
                 var next = relative == SkillPaths.Manifest ? Encoding.UTF8.GetBytes(Manifest(bytes, upstream)) : bytes;
-                changes.Add(held.TryGetValue(relative, out var mine) ? Compare(relative, at, mine, next) : Added(relative, at, next));
+                changes.Add(held.TryGetValue(relative, out var mine) ? Compare(relative, at, mine, next, skillsVault) : Added(relative, at, next, skillsVault));
             }
 
             foreach (var (relative, mine) in held.Where(h => !upstream.Files.Any(f => f.Path == h.Key)))
             {
-                changes.Add(new SkillFileChange(relative, "removed", IsText(mine.Path) ? TextDiff.Hunks(TextOf(mine), "", words: false) : []));
+                changes.Add(new SkillFileChange(relative, "removed", IsText(mine.Path, skillsVault) ? TextDiff.Hunks(TextOf(mine), "", words: false) : []));
             }
 
             return (upstream, [.. changes.OrderBy(c => c.Path != SkillPaths.Manifest).ThenBy(c => c.Path, StringComparer.Ordinal)]);
@@ -251,17 +252,18 @@ internal sealed partial class SkillUpdateTaker(
         return held;
     }
 
-    private static SkillFileChange Compare(string relative, VaultPath at, Held mine, byte[] next)
+    private static SkillFileChange Compare(string relative, VaultPath at, Held mine, byte[] next, string? skillsVault)
     {
-        if (!IsText(at)) return new SkillFileChange(relative, mine.Bytes!.AsSpan().SequenceEqual(next) ? "same" : "changed", []);
+        if (!IsText(at, skillsVault)) return new SkillFileChange(relative, mine.Bytes!.AsSpan().SequenceEqual(next) ? "same" : "changed", []);
         var hunks = TextDiff.Hunks(TextOf(mine), Encoding.UTF8.GetString(next), words: false);
         return new SkillFileChange(relative, hunks.Count == 0 ? "same" : "changed", hunks);
     }
 
-    private static SkillFileChange Added(string relative, VaultPath at, byte[] next) =>
-        new(relative, "added", IsText(at) ? TextDiff.Hunks("", Encoding.UTF8.GetString(next), words: false) : []);
+    private static SkillFileChange Added(string relative, VaultPath at, byte[] next, string? skillsVault) =>
+        new(relative, "added", IsText(at, skillsVault) ? TextDiff.Hunks("", Encoding.UTF8.GetString(next), words: false) : []);
 
-    private static bool IsText(VaultPath path) => path.IsNote || AttachmentFormat.ForPath(path)?.Kind == AttachmentKind.Text;
+    /// <summary>Whether a file of her copy is diffed as text: a note, or a skill's text file by <paramref name="skillsVault"/>, her name for the marked vault.</summary>
+    private static bool IsText(VaultPath path, string? skillsVault) => path.IsNote || AttachmentFormat.ForPath(path, skillsVault)?.Kind == AttachmentKind.Text;
 
     private static string TextOf(Held file) => file.Text ?? Encoding.UTF8.GetString(file.Bytes!);
 

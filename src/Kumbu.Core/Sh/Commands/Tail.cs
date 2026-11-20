@@ -9,15 +9,16 @@ public sealed class Tail(INoteReader notes) : ICommand
 
     public string Name => "tail";
 
-    public string Usage => "tail [-n N|+N] [path]";
+    public string Usage => "tail [-n N|-n +N] [--version V] [path]";
 
     public string Summary => "last N lines (default 10), or from line N on";
 
     public string Help => """
-        tail [-n N|+N] [path]
+        tail [-n N|-n +N] [--version V] [path]
           Print the last N lines (default 10) of a note, or of the piped input.
           -n N, -N, --lines=N   number of lines
           -n +N                 everything from line N on (1-based)
+          --version V           of an earlier version of the note from 'history <path>'
 
           tail -n 3 /Demo/welcome.md
           cat /Demo/welcome.md | tail -n +5 | head -n 2

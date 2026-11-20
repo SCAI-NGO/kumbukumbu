@@ -426,13 +426,21 @@ public class SkillsCommandTests
         var result = await Run("skills install x");
 
         Assert.Equal(
-            "skills: no subcommand 'install'; skills reads and finds (ls, find, cat, copy, check). Bringing skills in, sharing and updates are the user's, in the Skills screen",
+            "skills: no subcommand 'install'; skills reads, finds and copies a built-in skill (ls, find, cat, copy, check). Bringing skills in, sharing and updates are the user's, in the Skills screen",
             result.Output);
         Assert.Equal(ShellErrorKind.Invalid, result.Kind);
     }
 
     [Fact]
-    public async Task Help_skills_explains_them() => Assert.Contains("only reads and finds", (await Run("help skills")).Output);
+    public async Task Help_skills_explains_them()
+    {
+        var help = (await Run("help skills")).Output;
+
+        Assert.Contains("skills reads, finds and copies a built-in skill; it changes no skill", help);
+        Assert.Contains("write and edit change SKILL.md and a skill's other notes; its other text files are replaced whole with write", help);
+        Assert.DoesNotContain("only reads and finds", help);
+        Assert.Contains("find, read, check and copy", (await Run("help")).Output);
+    }
 
     [Fact]
     public async Task The_tool_description_lists_skills() => Assert.Contains("skills ls|find|cat|copy|check", Manual.ToolDescription);
