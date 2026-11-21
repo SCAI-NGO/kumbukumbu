@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import type { VaultView } from "../api/notes";
 import ConfirmTyped from "../components/ConfirmTyped";
 import { useEditor } from "../state/editor";
-import { afterVaultGone } from "./openInPane";
+import { useLeaveGoneVault } from "./openInPane";
 
 /**
  * "Delete <vault>?", with its name typed and the password: from Settings and from the vault's menu. Away from the
@@ -15,8 +14,7 @@ import { afterVaultGone } from "./openInPane";
  */
 export default function DeleteVaultDialog({ vault, onClose }: { vault: string; onClose(): void }) {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const location = useLocation();
+  const leaveGone = useLeaveGoneVault();
   // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
   const [password, setPassword] = useState("");
   const remove = useMutation({
@@ -25,8 +23,7 @@ export default function DeleteVaultDialog({ vault, onClose }: { vault: string; o
       // Out of the list at once: the shell, finding no vault chosen, picks the first one it lists.
       queryClient.setQueryData<VaultView[]>(["vaults"], (list) => list?.filter((v) => v.name !== vault));
       useEditor.getState().forgetVault(vault);
-      const to = afterVaultGone(location, vault);
-      if (to) navigate(to, { replace: true });
+      leaveGone(vault, `${vault} was deleted.`);
       // Nothing of the vault stays in the caches: its tree, and every note, link and history read from it.
       queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
       await Promise.all(["vaults", "keys", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
