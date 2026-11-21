@@ -11,6 +11,7 @@ import { download } from "../data/exportUrl";
 import { sizeText, timeText } from "../components/Sheet";
 import { topDialog } from "../hooks/useDialog";
 import { MAX_ATTACHMENT_BYTES } from "../upload/planUpload";
+import { MAX_PIXELS, MAX_SIDE } from "../upload/shrinkImage";
 import MoveDialog from "../shell/MoveDialog";
 import DeleteFileDialog from "./DeleteFileDialog";
 import { useZoomPan } from "./gestures";
@@ -75,6 +76,11 @@ export default function Lightbox() {
   // The server's kind once it is known (it knows which vault holds skills), until then the path's.
   const served = readOnly ? (shownVersion ?? checkpointFile) : info.data;
   const kind = served ? fileKindOfEntry(served) : fileKindOf(path, vault);
+  // An image is drawn only once its stored size is known to be within the bound the upload keeps (a file over 15 MB
+  // was kept without it): the browser would decode whatever its header declares.
+  const sized = served && "width" in served && served.width != null && served.height != null ? { width: Number(served.width), height: Number(served.height) } : null;
+  const undrawable = !!sized && (sized.width * sized.height > MAX_PIXELS || sized.width > MAX_SIDE || sized.height > MAX_SIDE);
+  const waiting = kind === "image" && !served && (readOnly ? (version ? history.isPending : checkpointTree.isPending) : info.isPending);
   const name = titleOf(path);
 
   const [showInfo, setShowInfo] = useState(false);
@@ -182,8 +188,15 @@ export default function Lightbox() {
 
   return (
     <main aria-label={name} className="fixed inset-0 z-50 overflow-hidden bg-black text-[#eceae4]">
-      {kind === "file" ? (
-        <FileCard name={name} size={facts ? Number(facts.size) : undefined} onDownload={() => download(downloadUrl)} />
+      {kind === "file" || (kind === "image" && undrawable) ? (
+        <FileCard
+          name={name}
+          size={facts ? Number(facts.size) : undefined}
+          note={kind === "image" ? `Too large to draw here: ${sized?.width} × ${sized?.height} px.` : undefined}
+          onDownload={() => download(downloadUrl)}
+        />
+      ) : waiting ? (
+        <p className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-[#a09d96]">Loading …</p>
       ) : kind === "text" ? (
         <TextFile key={stageKey} vault={vault} path={inVault(path)} at={source} />
       ) : kind === "pdf" ? (
@@ -334,14 +347,15 @@ function InfoRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** A file of no kind Kumbu² shows (decision 5 of the files spec): its icon, name and size, and the download. */
-function FileCard({ name, size, onDownload }: { name: string; size?: number; onDownload(): void }) {
+/** A file of no kind Kumbu² shows (decision 5 of the files spec), or an image too large to draw: its icon, name and
+ * size, and the download. */
+function FileCard({ name, size, note = noPreviewText, onDownload }: { name: string; size?: number; note?: string; onDownload(): void }) {
   return (
     <section aria-label={name} className="absolute inset-x-6 top-1/2 mx-auto flex max-w-xs -translate-y-1/2 flex-col items-center gap-2 text-center">
       <FileIcon size={48} strokeWidth={1.5} aria-hidden className="text-[#a09d96]" />
       <p className="max-w-full text-[15px] font-medium [overflow-wrap:anywhere]">{name}</p>
       {size !== undefined && <p className="text-[13px] text-[#a09d96]">{sizeText(size)}</p>}
-      <p className="text-[13px] text-[#a09d96]">{noPreviewText}</p>
+      <p className="text-[13px] text-[#a09d96]">{note}</p>
       <button
         type="button"
         onClick={onDownload}
