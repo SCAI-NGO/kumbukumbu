@@ -37,6 +37,10 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
     private readonly EmbeddingProviderOptions _options;
     private readonly string? _apiKey;
     private readonly Func<HttpClient> _http;
+    /// <summary>The largest answer read: 32 MiB, twice what a batch of 128 vectors of 4,096 dimensions takes as JSON, so a
+    /// provider (or whatever answers in its place) can't make the server hold more.</summary>
+    public const long MaxAnswerBytes = 32L << 20;
+
     private readonly ILogger _log;
     private readonly TimeProvider _time;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
@@ -115,12 +119,14 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
                 using var http = _http();
                 // The attempt's own timeout (above) applies, not the client's default of 100 s.
                 http.Timeout = Timeout.InfiniteTimeSpan;
+                http.MaxResponseContentBufferSize = MaxAnswerBytes;
                 using var response = await http.SendAsync(request, timeout.Token);
                 if (response.IsSuccessStatusCode) return Vectors(await response.Content.ReadFromJsonAsync<EmbeddingsResponse>(timeout.Token), texts.Count, query);
 
-                // The body isn't read: an error message may quote the input.
+                // The body isn't read: an error message may quote the input. Nor the reason phrase, the provider's own words:
+                // the standard phrase of the status says the same.
                 var status = (int)response.StatusCode;
-                problem = $"answered {status} {response.ReasonPhrase}";
+                problem = $"answered {status} {Microsoft.AspNetCore.WebUtilities.ReasonPhrases.GetReasonPhrase(status)}".TrimEnd();
                 if (!IsTransient(response.StatusCode))
                 {
                     // A refused key or a wrong model fails every request; a 400 or 413 only these texts.
@@ -135,6 +141,10 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
             {
                 problem = $"didn't answer within {limit.TotalSeconds:0} s";
                 timedOut = true;
+            }
+            catch (HttpRequestException e) when (e.HttpRequestError == HttpRequestError.ConfigurationLimitExceeded)
+            {
+                throw Fail($"answered with more than {MaxAnswerBytes >> 20} MiB, larger than any embeddings answer", providerDown: true, query);
             }
             catch (HttpRequestException e)
             {

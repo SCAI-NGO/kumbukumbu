@@ -78,6 +78,10 @@ builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddSingleton<Memberships>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
+// Every embedding provider's client (EmbeddingDrivers.HttpClientName), the admin's and people's own TensorX keys: no
+// redirects, which would carry the vault's text and the key to wherever the answer points, as the server's other
+// outbound clients follow none.
+builder.Services.AddSingleton<IConfigureOptions<Microsoft.Extensions.Http.HttpClientFactoryOptions>, EmbeddingClients>();
 // The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit. Every address
 // connected to is refused on the server's listeners before a byte is sent (SidecarPeers.ConnectAsync); no proxy, whose
 // address the callback would see instead. No redirects: the callback only connects to the configured host and port.

@@ -378,4 +378,27 @@ public sealed class OpenAiCompatibleDriverTests
         Assert.DoesNotContain("Geheimprojekt", everything);
         Assert.DoesNotContain("secret", everything, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task An_error_is_told_by_its_status_never_by_the_providers_reason_phrase()
+    {
+        var rig = Make(new FakeHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest) { ReasonPhrase = "Rejected: Geheimprojekt" })));
+
+        var e = await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => rig.Driver.EmbedAsync(["a"], query: false, Ct));
+
+        Assert.Contains("answered 400 Bad Request", e.Message);
+        Assert.DoesNotContain("Geheimprojekt", e.Message + string.Join('\n', rig.Log.Lines));
+    }
+
+    [Fact]
+    public async Task An_answer_larger_than_any_embeddings_answer_fails_without_being_read_whole()
+    {
+        var huge = new string('1', (int)OpenAiCompatibleDriver.MaxAnswerBytes + 1);
+        var rig = Make(new FakeHandler(_ => Task.FromResult(Json(HttpStatusCode.OK, huge))));
+
+        var e = await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => rig.Driver.EmbedAsync(["a"], query: false, Ct));
+
+        Assert.Contains("larger than", e.Message);
+        Assert.Single(rig.Handler.Requests);
+    }
 }
