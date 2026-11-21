@@ -1494,11 +1494,16 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             vault.DisplayName = display;
+            vault.ForgetRebased();
             // A load that read the meta before the commit has published by the time _loading is ours. A request may hold an
             // older object: the current one must not lose the name either.
             await UnderLoadingAsync(() =>
             {
-                if (Current(vault.Id) is { } current) current.DisplayName = display;
+                if (Current(vault.Id) is { } current)
+                {
+                    current.DisplayName = display;
+                    current.ForgetRebased();
+                }
             });
         }
         finally

@@ -3,7 +3,11 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Discreet;
+using Kumbu.Server.Tests.Sharing;
+using Kumbu.Server.Vaults;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -161,6 +165,47 @@ public sealed class GraphApiTests(KumbuAppFactory app)
         using var local = await user.SendAsync(HttpMethod.Get, $"/api/graph/local?path={Uri.EscapeDataString("/Arbeit/plan.md")}",
             headers: new Dictionary<string, string> { ["If-None-Match"] = etag });
         Assert.Equal(HttpStatusCode.OK, local.StatusCode);
+    }
+
+    private async Task<UnlockedVault> LoadedAsync(RestClient owner)
+    {
+        var id = await owner.VaultIdAsync();
+        return app.PublicApi.Services.GetRequiredService<VaultCatalog>().OpenVaults.Single(v => v.Id == id);
+    }
+
+    // A graph under a member's name for the vault is kept for her next read, not for names she gave up.
+    [Fact]
+    public async Task A_member_who_renames_the_vault_leaves_no_graph_under_her_old_names()
+    {
+        var alice = await WorkAsync();
+        var bob = await RestClient.NewAsync(app.PublicApi, "Home");
+        var membership = await alice.ShareWithAsync(bob, "beds", MemberRole.Read);
+        for (var i = 0; i < 6; i++)
+        {
+            using (var renamed = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{membership}/alias", new { alias = $"beds{i}" }))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+            }
+
+            using var graph = await bob.GetAsync($"/api/graph?vault=beds{i}");
+            Assert.Equal(HttpStatusCode.OK, graph.StatusCode);
+        }
+
+        Assert.Equal(1, (await LoadedAsync(alice)).RebasedGraphs);
+    }
+
+    [Fact]
+    public async Task A_graph_is_kept_under_a_few_other_names_at_most_each_in_the_memory_figure()
+    {
+        var vault = await LoadedAsync(await WorkAsync());
+        await vault.GraphAsync(Ct);
+        var alone = vault.ApproxBytes;
+
+        await vault.GraphAsync("Other", Ct);
+        Assert.True(vault.ApproxBytes > alone, "a graph under another name counts");
+        for (var i = 0; i < 10; i++) await vault.GraphAsync($"Other{i}", Ct);
+
+        Assert.Equal(UnlockedVault.RebasedNames, vault.RebasedGraphs);
     }
 
     [Fact]

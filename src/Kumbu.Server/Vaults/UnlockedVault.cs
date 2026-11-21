@@ -40,7 +40,12 @@ public sealed class UnlockedVault
     private long _graphCounter;
     private (LinkGraph Graph, object Notes, object Attachments)? _graph;
     private readonly Lock _rebasedLock = new();
-    private (LinkGraph? Source, Dictionary<string, LinkGraph> ByName) _rebased = (null, new(StringComparer.Ordinal));
+    /// <summary>The graph under other names than the stored one, the most recently read last.</summary>
+    private (LinkGraph? Source, List<(string Name, LinkGraph Graph)> ByName) _rebased = (null, []);
+
+    /// <summary>The most names the graph is kept under besides the stored one: a display name and a few members' aliases
+    /// read at once. A name read beyond them drops the one read longest ago.</summary>
+    internal const int RebasedNames = 4;
 
     public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks locks)
     {
@@ -188,9 +193,37 @@ public sealed class UnlockedVault
         if (string.Equals(name, Name, StringComparison.Ordinal)) return graph;
         lock (_rebasedLock)
         {
-            if (!ReferenceEquals(_rebased.Source, graph)) _rebased = (graph, new(StringComparer.Ordinal));
-            if (!_rebased.ByName.TryGetValue(name, out var rebased)) _rebased.ByName[name] = rebased = graph.Rebased(p => p.WithVault(name));
+            if (!ReferenceEquals(_rebased.Source, graph)) _rebased = (graph, []);
+            var byName = _rebased.ByName;
+            var at = byName.FindIndex(r => string.Equals(r.Name, name, StringComparison.Ordinal));
+            var rebased = at >= 0 ? byName[at].Graph : graph.Rebased(p => p.WithVault(name));
+            if (at >= 0) byName.RemoveAt(at);
+            else if (byName.Count == RebasedNames) byName.RemoveAt(0);
+            byName.Add((name, rebased));
             return rebased;
+        }
+    }
+
+    /// <summary>Drops the graph under every other name, once one of them is given up (a rename): the names still in use
+    /// are rebased again on their next read.</summary>
+    internal void ForgetRebased()
+    {
+        lock (_rebasedLock) _rebased = (null, []);
+    }
+
+    internal int RebasedGraphs
+    {
+        get
+        {
+            lock (_rebasedLock) return _rebased.ByName.Count;
+        }
+    }
+
+    private long RebasedBytes
+    {
+        get
+        {
+            lock (_rebasedLock) return _rebased.ByName.Sum(r => Size(r.Graph));
         }
     }
 
@@ -264,11 +297,12 @@ public sealed class UnlockedVault
     public DateTime LastUsed => new(Interlocked.Read(ref _lastUsed), DateTimeKind.Utc);
 
     /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included), the link extracts and
-    /// the graph built from them included; of attachments only their records, never their bytes.</summary>
+    /// the graph built from them included, under every name it is kept under; of attachments only their records, never
+    /// their bytes.</summary>
     public long ApproxBytes =>
         Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note)) + Embeddings.Values.Sum(e => 4L * e.Chunks.Sum(c => c.Vector.Length))
         + Attachments.Values.Sum(a => Size(a.Attachment)) + AttachmentTrash.Sum(t => Size(t.Trashed.Attachment))
-        + Extracts.Values.Sum(e => Size(e.Extract)) + (_graph?.Graph is { } graph ? Size(graph) : 0);
+        + Extracts.Values.Sum(e => Size(e.Extract)) + (_graph?.Graph is { } graph ? Size(graph) : 0) + RebasedBytes;
 
     public void Touch(DateTime now) => Interlocked.Exchange(ref _lastUsed, now.Ticks);
 
