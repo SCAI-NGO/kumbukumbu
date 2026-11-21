@@ -5,6 +5,20 @@ import { copyName, copyText } from "./duplicate";
 const note = (...fm: string[]) => `---\n${fm.join("\n")}\n---\nBody\n`;
 
 describe("copyText", () => {
+  it("reads_a_long_frontmatter_line_without_a_colon_in_one_pass", () => {
+    const long = "a" + " \t".repeat(100_000) + "b";
+    const start = performance.now();
+    expect(copyText(note(long, "when: 2026-11-21", "c: 3"))).toBe(note(long, "c: 3"));
+    expect(copyText(note(long + ": 1", "c: 3"))).toBe(note(long + ": 1", "c: 3"));
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
+  it("reads_keys_as_before_quoted_spaced_and_with_colons_in_the_value", () => {
+    expect(copyText(note("when \t : x", "b: 2"))).toBe(note("b: 2"));
+    expect(copyText(note("'when': x", "url: http://a:b"))).toBe(note("url: http://a:b"));
+    expect(copyText(note("whenever: x", "-when: y", "#when: z"))).toBe(note("whenever: x", "-when: y", "#when: z"));
+  });
+
   it("removes_calendar_keys", () => {
     for (const key of ["when", "until", "due", "task", "upcoming", "tz", "closed", "reason"]) {
       expect(copyText(note("a: 1", `${key}: x`, "b: 2"))).toBe(note("a: 1", "b: 2"));

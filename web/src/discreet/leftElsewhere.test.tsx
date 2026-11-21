@@ -237,6 +237,18 @@ describe("a vault marked discreet in another session", () => {
     expect(useEditor.getState().draft).toEqual(draft);
   });
 
+  it("closes the palette, with what was typed into it", async () => {
+    const { at } = server(["Work", "Tagebuch"]);
+    const { queryClient } = await tabOn("/notes/Work/inbox.md", at);
+    act(() => useEditor.setState({ overlay: "palette" }));
+    await userEvent.type(await screen.findByRole("combobox", { name: "Find a command, vault or note" }), "Liebes");
+
+    await markedElsewhere(queryClient, at, ["Work"]);
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Favourites and commands" })).not.toBeInTheDocument());
+    expect(useEditor.getState().overlay).toBe("none");
+  });
+
   it("forgets the console's scrollback, directory and history", async () => {
     const { at } = server(["Work", "Tagebuch"]);
     const { queryClient } = await tabOn("/notes/Work/inbox.md", at);

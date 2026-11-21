@@ -331,6 +331,12 @@ public sealed class AccountLimits : IDisposable
     /// </summary>
     public const int GitHubFetchesPerUser = 30;
 
+    /// <summary>
+    /// Checks of a TensorX key of a person's own, a minute per user (BYOK spec): each sends a request to TensorX with a key
+    /// she typed. A person saves a key now and then and retypes a wrong one once or twice; a loop of guesses gets 5 a minute.
+    /// </summary>
+    public const int EmbeddingsKeyChecksPerUser = 5;
+
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     /// <summary>No username is longer; a longer one only needs a partition, not a distinct one.</summary>
@@ -353,6 +359,7 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _metadataFetchByHost = Limiter(MetadataFetchesPerHost);
     private readonly PartitionedRateLimiter<string> _aliasRenameByUser;
     private readonly PartitionedRateLimiter<string> _gitHubFetchByUser = Limiter(GitHubFetchesPerUser);
+    private readonly PartitionedRateLimiter<string> _embeddingsKeyCheckByUser = Limiter(EmbeddingsKeyChecksPerUser);
     private readonly PartitionedRateLimiter<string> _readerReadByAddress;
     private readonly PartitionedRateLimiter<string> _readerReadByNetwork;
     private readonly PartitionedRateLimiter<string> _readerReads;
@@ -435,6 +442,9 @@ public sealed class AccountLimits : IDisposable
 
     /// <summary>A request of the user's that asks GitHub, counted per user across her sessions.</summary>
     public TimeSpan? GitHubFetch(string userId) => Take(_gitHubFetchByUser, userId);
+
+    /// <summary>A check of a TensorX key the user typed, counted per user across her sessions.</summary>
+    public TimeSpan? EmbeddingsKeyCheck(string userId) => Take(_embeddingsKeyCheckByUser, userId);
 
     public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";
 
@@ -536,6 +546,7 @@ public sealed class AccountLimits : IDisposable
         _metadataFetchByHost.Dispose();
         _aliasRenameByUser.Dispose();
         _gitHubFetchByUser.Dispose();
+        _embeddingsKeyCheckByUser.Dispose();
         _readerReadByAddress.Dispose();
         _readerReadByNetwork.Dispose();
         _readerReads.Dispose();

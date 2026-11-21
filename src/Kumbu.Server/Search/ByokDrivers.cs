@@ -63,7 +63,8 @@ public sealed class ByokDrivers(IHttpClientFactory http, ILoggerFactory logs, Ti
         catch (EmbeddingUnavailableException)
         {
             if (!refused) return KeyCheck.Unreachable;
-            _refused[route] = time.GetUtcNow();
+            // Remembered only for a key in use, whose settings say so; a refused guess that is never saved leaves nothing.
+            if (_drivers.ContainsKey(route)) _refused[route] = time.GetUtcNow();
             return KeyCheck.Refused;
         }
     }

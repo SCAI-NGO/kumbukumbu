@@ -76,6 +76,22 @@ describe("renderSvg", () => {
     await expect(renderSvg(png, SMALL, { width: 10, height: 10 })).rejects.toMatchObject({ code: "not_image" });
   });
 
+  it("refuses an SVG that declares entities, as the server's check does, and still draws one with a plain DOCTYPE", async () => {
+    const laughs =
+      '<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]>' +
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>&b;</text><rect width="10" height="10" fill="red"/></svg>';
+    await expect(renderSvg(new TextEncoder().encode(laughs), SMALL, { width: 10, height: 10 })).rejects.toMatchObject({ code: "not_image" });
+    // The same in UTF-16, which an XML parser reads as well.
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(laughs.replace('<?xml version="1.0"?>', '<?xml version="1.0" encoding="UTF-16"?>'), "utf16le")]);
+    await expect(renderSvg(utf16, SMALL, { width: 10, height: 10 })).rejects.toMatchObject({ code: "not_image" });
+
+    const inkscape =
+      '<?xml version="1.0" encoding="UTF-8" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">' +
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="red"/></svg>';
+    const r = await renderSvg(new TextEncoder().encode(inkscape), SMALL, { width: 10, height: 10 });
+    expect(isRed(await pixel(r.data, r.width / 2, r.height / 2))).toBe(true);
+  });
+
   // An external reference resolved on the server would be SSRF; Skia resolves none.
   it("fetches nothing an SVG refers to (images, files, @import, use, paint servers, masks, clips, filters, fonts, feImage, a nested SVG), and still renders it", async () => {
     const seen: string[] = [];

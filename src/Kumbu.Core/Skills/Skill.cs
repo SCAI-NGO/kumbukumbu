@@ -36,14 +36,15 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
     /// One line for a listing: "name (system): description" or "name (/Work/_skills/x, shared by "Alice", last changed by
     /// Bob, another user, from github:…): description [warning: …]", where "from …" gives way to "origin edited" or
     /// "unverified origin" unless the sealed origin agrees. A name that breaks the rules is quoted,
-    /// control and format characters are stripped and line breaks become spaces, so no line can pass for another origin;
+    /// control and format characters are stripped and line breaks become spaces, and a folder, label or source that holds a
+    /// bracket or a comma is quoted, so no line can pass for another origin;
     /// with <paramref name="maxDescription"/> a longer description, a longer name or folder path, and the warnings (all
     /// together) are each cut to it and end with "…".
     /// </summary>
     public string Line(int? maxDescription = null)
     {
         var name = Cut(Clean(Name), maxDescription);
-        var line = new StringBuilder(SkillManifest.IsValidName(Name) ? name : $"\"{name.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"");
+        var line = new StringBuilder(SkillManifest.IsValidName(Name) ? name : Quoted(name));
         var origin = new List<string>();
         if (Folder is null)
         {
@@ -51,12 +52,12 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
         }
         else
         {
-            origin.Add(Cut(Clean(Folder.Value), maxDescription));
-            if (SharedBy is not null) origin.Add($"shared by {Clean(SharedBy)}");
-            if (LastEditor is not null) origin.Add($"last changed by {Clean(LastEditor)}");
+            origin.Add(Part(Cut(Clean(Folder.Value), maxDescription)));
+            if (SharedBy is not null) origin.Add($"shared by {Part(Clean(SharedBy))}");
+            if (LastEditor is not null) origin.Add($"last changed by {Part(Clean(LastEditor))}");
             if (ByOther) origin.Add("another user");
             if (OriginEdited) origin.Add("origin edited");
-            else if (Source is not null) origin.Add(SourceVerified ? $"from {Clean(Source)}" : "unverified origin");
+            else if (Source is not null) origin.Add(SourceVerified ? $"from {Part(Clean(Source))}" : "unverified origin");
         }
 
         line.Append(" (").AppendJoin(", ", origin).Append(')');
@@ -65,6 +66,12 @@ public sealed record Skill(string Name, VaultPath? Folder, string Description, s
         if (Warnings.Count > 0) line.Append(" [warning: ").Append(Cut(string.Join("; ", Warnings.Select(Clean)), maxDescription)).Append(']');
         return line.ToString();
     }
+
+    private static string Quoted(string text) => $"\"{text.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
+
+    /// <summary>A part of the origin that a person named (a folder, a label, a source's path), quoted where it holds what
+    /// could close the origin or start another part of it (a quote alone can't: the owner's name is quoted already), so "Bob · k), from github:…" can't pass for the server's own.</summary>
+    private static string Part(string text) => text.AsSpan().IndexOfAny("(),") >= 0 ? Quoted(text) : text;
 
     private static string Cut(string text, int? max)
     {

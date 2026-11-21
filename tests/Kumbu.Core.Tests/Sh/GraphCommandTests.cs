@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Tests.Fakes;
@@ -249,6 +250,23 @@ public class GraphCommandTests
         var result = await Run(sh, line);
         Assert.True(result.IsError);
         Assert.StartsWith(message, result.Output);
+    }
+
+    [Theory]
+    [InlineData("graph /W/a.md")]
+    [InlineData("graph --orphans /W")]
+    [InlineData("graph --hubs")]
+    [InlineData("graph --unresolved")]
+    [InlineData("graph --path /W/a.md /W/b.md")]
+    public async Task Tags_are_taken_as_often_as_the_REST_filter_takes_them(string line)
+    {
+        var sh = TestShell.Of(("/W/a.md", "x\n"), ("/W/b.md", "x\n"));
+        var tags = (int n) => string.Concat(Enumerable.Repeat(" --tag t", n));
+
+        Assert.False((await Run(sh, line + tags(GraphFilter.MaxFilters))).IsError);
+        var refused = await Run(sh, line + tags(GraphFilter.MaxFilters + 1));
+        Assert.True(refused.IsError);
+        Assert.Equal($"graph: --tag can be given at most {GraphFilter.MaxFilters} times", refused.Output);
     }
 
     [Fact]

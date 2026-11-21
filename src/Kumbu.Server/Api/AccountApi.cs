@@ -653,8 +653,9 @@ public static class AccountApi
     internal static DeletionReceiptView ReceiptView(DeletedUser deleted, SearchIndex index, KumbuOptions options) => new(
         deleted.Id, deleted.Username, deleted.DeletedBy, deleted.DeletedAt, deleted.Summary.Vaults, deleted.Summary.Notes, deleted.Summary.Attachments, deleted.Summary.ApiKeys,
         deleted.Summary.Connections, deleted.Summary.Invitations,
-        // Where a vault's text may have gone: the admin's providers, and TensorX with people's own keys where offered.
-        [.. index.Providers.All.Where(p => p.External).Select(p => p.Label), .. index.Providers.Byok is null ? Array.Empty<string>() : [Search.Byok.Preset.Label!]],
+        // Where a vault's text may have gone: the admin's providers, and TensorX with people's own keys where offered, or
+        // where this user had saved one, also once BYOK is switched off.
+        [.. index.Providers.All.Where(p => p.External).Select(p => p.Label), .. index.Providers.Byok is null && !deleted.HadOwnEmbeddingsKey ? Array.Empty<string>() : [Search.Byok.Preset.Label!]],
         string.IsNullOrWhiteSpace(options.Privacy.Contact) ? null : options.Privacy.Contact.Trim(), deleted.Listed,
         deleted.Summary.Memberships, deleted.Summary.SharedVaults, deleted.Summary.Memberships > 0 ? SharedNotesSentence : null,
         [.. (deleted.Summary.Closing?.Values ?? []).Order()]);

@@ -2,6 +2,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Kumbu.Server.Search;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Discreet;
@@ -156,6 +157,63 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
             using var chosen = await ChooseAsync(user, user.Vault, Byok.Provider);
             Assert.Equal(HttpStatusCode.BadRequest, chosen.StatusCode);
         }
+    }
+
+    [Fact]
+    public async Task Checking_keys_is_limited_per_user_and_a_refused_key_that_isnt_saved_is_forgotten()
+    {
+        var user = await RestClient.NewAsync(Api());
+        var keys = Enumerable.Range(0, AccountLimits.EmbeddingsKeyChecksPerUser + 1).Select(i => $"sk-guess-key-{i:0000}").ToList();
+        foreach (var key in keys) _tensorx.Refused.Add(key);
+
+        foreach (var key in keys.SkipLast(1))
+        {
+            using var refused = await SaveKeyAsync(user, key);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        }
+
+        var asked = _tensorx.Keys.Count;
+        using var limited = await SaveKeyAsync(user, keys[^1]);
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.NotNull(limited.Headers.RetryAfter);
+        Assert.Equal(asked, _tensorx.Keys.Count);
+
+        var drivers = user.Api.Services.GetRequiredService<ByokDrivers>();
+        Assert.All(keys, key => Assert.Null(drivers.RefusedAt(key)));
+    }
+
+    [Theory]
+    [InlineData("tensorx-byok")]
+    [InlineData("an-admins-provider")]
+    public async Task The_clients_for_embedding_providers_follow_no_redirect(string provider)
+    {
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var requests = new List<string>();
+        var serving = Task.Run(async () =>
+        {
+            // Two connections at most: the request, and the redirect's if it were followed.
+            for (var i = 0; i < 2; i++)
+            {
+                using var socket = await listener.AcceptSocketAsync(Ct);
+                var buffer = new byte[4096];
+                var n = await socket.ReceiveAsync(buffer, Ct);
+                lock (requests) requests.Add(System.Text.Encoding.ASCII.GetString(buffer, 0, n).Split("\r\n")[0]);
+                await socket.SendAsync(System.Text.Encoding.ASCII.GetBytes(
+                    $"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{port}/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), Ct);
+            }
+
+            listener.Stop();
+        }, Ct);
+
+        var client = app.PublicApi.Services.GetRequiredService<IHttpClientFactory>().CreateClient(EmbeddingDrivers.HttpClientName(provider));
+        using var response = await client.PostAsync($"http://127.0.0.1:{port}/v1/embeddings", new StringContent("{}"), Ct);
+
+        Assert.Equal(HttpStatusCode.TemporaryRedirect, response.StatusCode);
+        lock (requests) Assert.Equal(["POST /v1/embeddings HTTP/1.1"], requests);
+        listener.Stop();
+        await Assert.ThrowsAnyAsync<Exception>(() => serving);
     }
 
     [Fact]
@@ -325,6 +383,29 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
         var on = user.On(Api());
         Assert.Equal("internal", await ProviderOfAsync(on, "Garten"));
         Assert.Null(await StoredCopyAsync(on, "Garten"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_deletion_receipt_names_tensorx_for_a_user_with_a_key_whether_byok_is_on_or_off(bool byok)
+    {
+        var user = await WithKeyAsync();
+        var plain = await RestClient.NewAsync(Api(byok), "Notizen");
+        var api = Api(byok);
+        var admin = await RestClient.NewAsync(api, vault: "Admin", role: Roles.Admin);
+
+        async Task<string[]> ProvidersAsync(RestClient whom)
+        {
+            using var response = await admin.SendAsync(
+                HttpMethod.Post, $"/api/admin/users/{whom.User.Id}/delete", new { password = RestClient.Password, confirm = whom.Username });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            return [.. (await RestClient.JsonAsync(response))["externalProviders"]!.AsArray().Select(p => p!.GetValue<string>())];
+        }
+
+        Assert.Contains(Byok.Preset.Label!, await ProvidersAsync(user));
+        // Without a key of her own, TensorX is named only while people may bring one: the text may have gone there then.
+        Assert.Equal(byok, (await ProvidersAsync(plain)).Contains(Byok.Preset.Label!));
     }
 
     [Fact]

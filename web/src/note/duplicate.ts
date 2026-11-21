@@ -10,8 +10,24 @@ const dropped = (key: string) => CALENDAR.has(key.toLowerCase()) || BOARD.has(ke
 
 const PREFIX = "Copy of ";
 
-/** The key a line starts, as `Frontmatter.Set` on the server reads it: a quoted key is the same key. */
-const keyOf = (line: string) => /^(?:"([^"]*)"|'([^']*)'|([^\s:#"'-][^:]*?))[ \t]*:/.exec(line)?.slice(1).find((k) => k !== undefined);
+/**
+ * The key a line starts, as `Frontmatter.Set` on the server reads it: a quoted key is the same key. Read in one pass
+ * (the text before the line's first colon, its trailing blanks off), not with a lazy pattern, which is quadratic on a
+ * long line without a colon.
+ */
+function keyOf(line: string): string | undefined {
+  const first = line.charAt(0);
+  if (first === '"' || first === "'") {
+    const close = line.indexOf(first, 1);
+    return close > 0 && /^[ \t]*:/.test(line.slice(close + 1)) ? line.slice(1, close) : undefined;
+  }
+  if (first === "" || /[\s:#"'-]/.test(first)) return undefined;
+  const colon = line.indexOf(":");
+  if (colon < 0) return undefined;
+  let end = colon;
+  while (line[end - 1] === " " || line[end - 1] === "\t") end--;
+  return line.slice(0, end);
+}
 
 /** A line that belongs to the key above it: indented or a `- ` item. */
 const continues = (line: string) => /^[ \t]|^-(\s|$)/.test(line) && line.trim() !== "";

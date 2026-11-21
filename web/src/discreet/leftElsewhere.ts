@@ -21,7 +21,7 @@ const named = (data: unknown, names: ReadonlySet<string>) => {
  * Vaults this tab showed that the list no longer has, as another session of the user marked them discreet (or they
  * were taken from her): a view of one gives way to the vault overview at once, the editor forgets them as a session's
  * end does (an unsaved draft stays, and opens again once they are shown), and their cached answers go, what was found
- * or changed in them too; the console forgets its scrollback and history, as hiding again does. Text unsaved in the
+ * or changed in them too; the palette closes and the console forgets its scrollback and history, as hiding again does. Text unsaved in the
  * open note of one is kept as the draft only when there is no draft already: there is one draft, and the earlier one
  * stays, so that text is then lost. Kept or not, the note goes: the server takes no save of it now, and the editor's
  * guard would keep it on screen.
@@ -50,6 +50,8 @@ export function leaveVaults(queryClient: QueryClient, navigate: NavigateFunction
     else if (besideStays) navigate(noteUrl(right.path), { replace: true });
     else if ((shown !== null && names.has(shown)) || open) navigate("/", { replace: true });
     useEditor.getState().forgetShown(names);
+    // What the palette has typed may name what was in them; it closes, as hiding again closes it.
+    if (useEditor.getState().overlay === "palette") useEditor.setState({ overlay: "none" });
   } finally {
     if (!hiding) useDiscreet.setState({ hiding: false });
   }

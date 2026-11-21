@@ -62,7 +62,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     }
 
     /// <summary>The message is one line of at most 200 characters (UTF-16 code units); blank is none. Trimmed. Control
-    /// characters and the Unicode line and paragraph separators are refused, so a message can't fake a line of <c>history</c>.</summary>
+    /// characters and the Unicode line and paragraph separators are refused, so a message can't fake a line of <c>history</c>;
+    /// format characters (bidirectional overrides, zero-width ones) are dropped and a run of spaces becomes one, as for
+    /// names that cross between users, so it can't fake <c>history</c>'s marks either ("  (current)").</summary>
     public static bool TryMessage(string? message, string tool, out string? clean, out ShellResult? error)
     {
         clean = message?.Trim();
@@ -73,11 +75,34 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             return true;
         }
 
-        if (clean.Length <= MaxMessage && !clean.Any(c => char.IsControl(c) || c is '\u2028' or '\u2029')) return true;
+        if (clean.Length <= MaxMessage && !clean.Any(c => char.IsControl(c) || c is '\u2028' or '\u2029'))
+        {
+            clean = OneSpace(clean);
+            if (clean.Length == 0) clean = null;
+            return true;
+        }
 
         clean = null;
         error = ShellResult.Error($"{tool}: message is one line of at most {MaxMessage} characters") with { Kind = ShellErrorKind.Invalid };
         return false;
+    }
+
+    private static string OneSpace(string text)
+    {
+        var shown = new System.Text.StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (char.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.Format) continue;
+            if (char.IsWhiteSpace(c))
+            {
+                if (shown.Length > 0 && shown[^1] != ' ') shown.Append(' ');
+                continue;
+            }
+
+            shown.Append(c);
+        }
+
+        return shown.ToString().Trim();
     }
 
     /// <summary>

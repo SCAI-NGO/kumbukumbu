@@ -32,6 +32,9 @@ export type RenderedImage = Rendered & {
 
 const notImage = () => new PdfError("The file is not an image Kumbu² can read.", "not_image");
 
+// "<!ENTITY" anywhere, in UTF-8 or UTF-16 alike: the NUL bytes of UTF-16's ASCII are dropped before looking.
+const declaresEntities = (bytes: Uint8Array) => Buffer.from(bytes.filter((b) => b !== 0)).includes("<!ENTITY", 0, "latin1");
+
 // From the image's pixels to the turned frame: whole-number matrices, so a turn at scale 1 moves
 // pixels and blends none.
 function turn(rotate: number, ow: number, oh: number): [number, number, number, number, number, number] {
@@ -112,9 +115,11 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
 // is drawn as if square, 300 × 300 (300 the width a browser gives an SVG that names none). Skia's
 // own size can differ from that box (for a viewBox alone it is 150 px high, for mm it converts), so
 // the image is drawn into the box with its own aspect, from the top left. Skia loads nothing an SVG refers to:
-// no <image href>, no file, no @import (pdf/test/svg.test.ts keeps it that way).
+// no <image href>, no file, no @import (pdf/test/svg.test.ts keeps it that way). An SVG that declares
+// entities is refused before Skia's parser, which would expand them: the server's check never lets one in
+// (an entity it ignores the declaration of is undeclared), and the two parsers should agree.
 export async function renderSvg(svg: Uint8Array, t: Target, size?: { width: number; height: number }, crop?: Crop, rotate = 0): Promise<RenderedImage> {
-  if (imageHeader(svg)) throw notImage();
+  if (imageHeader(svg) || declaresEntities(svg)) throw notImage();
   let image: Image;
   try {
     image = await loadImage(Buffer.from(svg.buffer, svg.byteOffset, svg.byteLength));
