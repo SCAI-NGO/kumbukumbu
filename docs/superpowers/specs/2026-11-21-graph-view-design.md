@@ -1,6 +1,6 @@
 # The graph column: a local graph beside the note
 
-Date: 2026-11-21. Status: approved by the maintainer on 2026-11-21, after a UX review and a builder check (its answers marked) (findings and decisions with their reasons in the maintainer's working notes, "Graph view 2026-11-21"). Target: 0.7.0, prepared on a feature branch while 0.6.0 is in post-production.
+Date: 2026-11-21. Status: approved by the maintainer on 2026-11-21 (§12, the dialog, added the same day after its own UX review), after a UX review and a builder check (its answers marked) (findings and decisions with their reasons in the maintainer's working notes, "Graph view 2026-11-21"). Target: 0.7.0, prepared on a feature branch while 0.6.0 is in post-production.
 
 ## Why
 
@@ -17,7 +17,7 @@ The graph view is what still keeps a power user with about 1,600 notes in Obsidi
 
 - **No server change** (maintainer: late 0.6.0 changes would make merging painful). Only `web/`; the generated `web/src/api/schema.d.ts` gains the graph endpoints the server already has.
 - No global graph in this change. It comes later on the same physics, drawn on a canvas.
-- Nothing changes below 1920 px of viewport width.
+- No column below 1920 px of viewport width (or 2880 px in the split view): there the graph opens as a dialog (§12).
 - No computed similarity, no cache, no suggestion data: that is the backend's, later (see "The similarity to come").
 - No shared graph of both split panes (see §3); kept as an idea.
 
@@ -39,7 +39,7 @@ The later global graph keeps `d3-force` as its physics and swaps only the drawin
 
 ## 1. Widths
 
-- **Single note: from 1920 px** of viewport width (`min-width: 120rem`). **Split view: from 2880 px** (`180rem`), the graph a third column. Between 1920 and 2880 px the split view shows no graph column. *Maintainer: first written as 1980 and 2970, a slip; with 1980 no Full HD screen would get it.*
+- **Single note: from 1920 px** of viewport width (`min-width: 120rem`). **Split view: from 2880 px** (`180rem`), the graph a third column. Between 1920 and 2880 px the split view shows no graph column, and the graph opens as a dialog instead (§12). *Maintainer: first written as 1980 and 2970, a slip; with 1980 no Full HD screen would get it.*
 - The column sits right of the side panel: tree (318 px by default) | note(s) | side panel (300 px) | graph. A fixed **560 px**; at 1920 px with the tree open that leaves the note about 740 px, at 2880 px in the split view about 850 px per pane. Its own column and not a side panel tab, because 300 px is too narrow for a graph.
 - Two hooks beside `useWide` (`web/src/hooks/useWide.ts`), on `mediaQueryHook`. Shown when the width fits and a note is shown, under the same conditions as the side panel (`MobileShell.tsx`: not for a note on its way out, nor one whose path isn't shown).
 - **Collapsible**, as the side panel: collapsed or not remembered per device in `localStorage`; starts expanded, so it is found. Shortcut **Ctrl+Shift+G** (Cmd+Shift+G on a Mac), not while a dialog is open; hiding it while it holds the focus moves the focus to its toggle, as the side panel does.
@@ -143,3 +143,21 @@ Vitest, written first.
 - How the arrow keys pick "the nearest node in that direction".
 - Whether the toolbar is one row of icons with tooltips or a compact menu.
 - The pull request's split: one for the column with nodes, edges and physics; one for the toolbar, preview, split-view line and suggestions stub, if the first grows large.
+
+## 12. On narrower screens: the graph dialog
+
+*Maintainer, after learning that nothing showed below 1920 px: phones and narrow windows need the graph too, as a dialog called up for the note shown; and the split view between 1920 and 2880 px as well.* The rule is one: **where no column fits, the graph is a dialog.**
+
+| Viewport | One note | Split view |
+|---|---|---|
+| below 1920 px | dialog | dialog |
+| 1920 to 2880 px | column | dialog |
+| from 2880 px | column | column |
+
+- **One entry:** the Waypoints button in the top bar and Ctrl+Shift+G (Cmd+Shift+G) everywhere. Where the column fits they show and hide it (`aria-expanded`), else they open the dialog (`aria-haspopup="dialog"`). On a phone the button sits beside Outline and, like it, **only in read mode**: in edit mode a dialog would fight the keyboard and the caret *(UX review)*. Elsewhere it shows in both modes, as the column does.
+- **The dialog** holds the same graph as the column (toolbar, drawing, list, foot lines, preferences shared), for the focused pane's note, with the other pane's ring and distance line in the split view (§3). **Full screen on a phone**, since a graph needs room; a large centred dialog from `sm` up. Its title is the note's title, "Graph" below it. Escape, its close button and, from `sm` up, a tap beside it close it, as our sheets do; Android's back button closes none of our sheets and doesn't close this one either *(UX review)*. The simulation runs only while it is open.
+- **A tap shows first, opening is a step of its own.** *Maintainer: the preview is the user's check, "do I really want this".* In the dialog a tap, a click and Enter on a node select it and show its card (title, tags, first paragraph, "changed …"); the card's **Open** opens the note in the focused pane and closes the dialog; from `sm` up an **Open beside** opens it in the right pane, as Ctrl+click does in the column. A ghost's card has no button; an attachment's Open opens its window over the shell. The selected node keeps the focus ring; a tap on the background or on another node moves or clears the selection. Why the same for mouse and keyboard: opening closes the dialog, so a slip costs the whole view. In the column a click still opens directly, since the column stays. The toolbar's Preview switch governs the hover card only; the card after a tap always shows *(UX review)*.
+- **Touch** *(UX review)*: on a coarse pointer each node gets an invisible hit circle of at least 22 px radius (44 px across), since a node is 4 to 22 px in radius; **pinch** zooms around the fingers' midpoint and a drag on the background pans, with `touch-action: none` on the drawing so the browser doesn't zoom the page; a double tap on the background fits the graph.
+- **A narrow toolbar** *(UX review)*: on a phone the toolbar needs about 420 px and has 360. In the dialog below `sm` the row keeps depth, List and Fit, and an **Options** disclosure opens a second row with the five switches and "Size by".
+- **Code:** `GraphColumn` splits into the graph (`GraphView`: toolbar, drawing, cards, list, foot) and its two frames, the column and `GraphDialog.tsx`; `GraphCanvas` gains a select mode (a tap selects instead of opening), pinch and the hit circles. `useGraphWide` decides column or dialog from the width and whether the view is split. No server change.
+- **Tests:** the button opens the dialog below 1920 px, and between 1920 and 2880 px in the split view, and shows the column elsewhere; Ctrl+Shift+G does the same; on a phone the button only in read mode; a tap selects and shows the card, Open opens in the focused pane and closes the dialog, Open beside opens in the right pane; a ghost's card has no button; Escape closes and gives the focus back to the button; the Options disclosure below `sm`; pinch changes the zoom around the midpoint; the hit circle on a coarse pointer.
