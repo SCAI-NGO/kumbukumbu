@@ -3,19 +3,36 @@ import { act, cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GNode } from "../graph/model";
+import type { Suggestion } from "../graph/suggestions";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 
-// The canvas has its own tests; here it is a button per node.
+// The canvas has its own tests; here it is a button per node, which selects it in the dialog and opens it in the
+// column, and one per suggestion.
 vi.mock("../graph/GraphCanvas", () => ({
-  default: (props: { nodes: GNode[] }) => (
+  default: (props: {
+    nodes: GNode[];
+    select?: boolean;
+    selectedKey?: string | null;
+    suggestions: Suggestion[];
+    showSuggestions: boolean;
+    onOpen(n: GNode, beside: boolean): void;
+    onSelect?(n: GNode | null): void;
+    onSuggestion(s: Suggestion): void;
+  }) => (
     <div>
       {props.nodes.map((n) => (
-        <button key={n.id} type="button">
+        <button key={n.id} type="button" aria-pressed={(props.select && n.key === props.selectedKey) || undefined} onClick={() => (props.select ? props.onSelect?.(n) : props.onOpen(n, false))}>
           node {n.title}
         </button>
       ))}
+      {props.showSuggestions &&
+        props.suggestions.map((s) => (
+          <button key={s.path} type="button" onClick={() => props.onSuggestion(s)}>
+            suggestion {s.title}
+          </button>
+        ))}
     </div>
   ),
 }));
@@ -33,7 +50,7 @@ const resize = (to: number) =>
     for (const l of listeners) l();
   });
 
-function signedIn() {
+function signedIn(more: Parameters<typeof fakeApi>[0] = {}) {
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2, embeddings: "internal" }]),
@@ -52,14 +69,19 @@ function signedIn() {
       return json(200, { nodes: [graphNode(path, 0)], edges: [], leftOut: {} });
     },
     "GET /api/graph/paths": () => json(200, { nodes: [], edges: [], paths: [], more: false, why: "not_connected" }),
+    "GET /api/graph/node": (r) => {
+      const path = new URL(r.url).searchParams.get("path")!;
+      return json(200, { node: graphNode(path, 1), changed: null, created: null, createdAtLeast: false, firstParagraph: "" });
+    },
+    ...more,
   });
 }
 
 const column = () => screen.getByRole("complementary", { name: "Graph" });
 const toggle = () => screen.getByRole("button", { name: "Graph" });
 
-async function open(url = "/notes/Work/a.md") {
-  const fetch = signedIn();
+async function open(url = "/notes/Work/a.md", more?: Parameters<typeof fakeApi>[0]) {
+  const fetch = signedIn(more);
   renderApp(url);
   await screen.findAllByRole("heading", { name: /^Note / });
   return fetch;
@@ -88,7 +110,7 @@ afterEach(() => {
   useEditor.getState().reset();
 });
 
-describe("the graph column in the shell", () => {
+describe("the graph in the shell, as a column or a dialog", () => {
   it("sits beside the note from 1920 px on, with its toggle after the side panel's", async () => {
     await open();
     expect(await within(column()).findByRole("button", { name: "node a" })).toBeInTheDocument();
@@ -101,13 +123,89 @@ describe("the graph column in the shell", () => {
     expect(toggle()).toHaveAttribute("title", "Hide the graph (Ctrl+Shift+G or ⌘⇧G)");
   });
 
-  it("isn't there below 1920 px, nor its toggle", async () => {
-    width = 80;
+  it("below 1920 px the button opens the dialog", async () => {
+    width = 90;
     await open();
     expect(screen.queryByRole("complementary", { name: "Graph" })).not.toBeInTheDocument();
+    expect(toggle()).toHaveAttribute("aria-haspopup", "dialog");
+    expect(toggle()).not.toHaveAttribute("aria-expanded");
+    expect(toggle()).not.toHaveAttribute("aria-controls");
+    expect(toggle()).toHaveAttribute("title", "Show the graph (Ctrl+Shift+G or ⌘⇧G)");
+    await userEvent.click(toggle());
+    const dialog = await screen.findByRole("dialog", { name: "a" });
+    expect(dialog).toHaveTextContent("Graph");
+    expect(await within(dialog).findByRole("button", { name: "node a" })).toBeInTheDocument();
+  });
+
+  it("in the split view between 1920 and 2880 px it is a dialog too", async () => {
+    await open("/notes/Work/a.md?beside=Work/b.md");
+    expect(screen.queryByRole("complementary", { name: "Graph" })).not.toBeInTheDocument();
+    expect(toggle()).toHaveAttribute("aria-haspopup", "dialog");
+    await userEvent.click(toggle());
+    expect(await screen.findByRole("dialog", { name: "a" })).toBeInTheDocument();
+  });
+
+  it("on a phone the button shows in read mode only", async () => {
+    width = 24;
+    await open();
+    expect(toggle()).toHaveAttribute("aria-haspopup", "dialog");
+    // Beside Outline, as it is only in read mode too.
+    const buttons = within(screen.getByRole("banner")).getAllByRole("button");
+    expect(buttons[buttons.indexOf(screen.getByRole("button", { name: "Outline" })) + 1]).toBe(toggle());
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
     expect(screen.queryByRole("button", { name: "Graph" })).not.toBeInTheDocument();
+  });
+
+  it("Escape closes the card first, then the dialog, and the focus returns to the button", async () => {
+    width = 90;
+    await open();
+    await userEvent.click(toggle());
+    const dialog = await screen.findByRole("dialog", { name: "a" });
+    await userEvent.click(await within(dialog).findByRole("button", { name: "node a" }));
+    expect(within(dialog).getByRole("button", { name: "Open" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(within(dialog).queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toggle()).toHaveFocus();
+  });
+
+  it("Escape closes a suggestion's card in the dialog, and the dialog stays", async () => {
+    localStorage.setItem("kumbu.graph.mockSimilarity", "1");
+    localStorage.setItem("kumbu.graphPrefs", JSON.stringify({ suggestions: true }));
+    width = 90;
+    await open();
+    await userEvent.click(toggle());
+    const dialog = await screen.findByRole("dialog", { name: "a" });
+    await userEvent.click(await within(dialog).findByRole("button", { name: "suggestion b" }));
+    expect(screen.getByRole("dialog", { name: "b" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "b" })).not.toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it("widening the window into the column closes the dialog", async () => {
+    width = 90;
+    await open();
+    await userEvent.click(toggle());
+    expect(await screen.findByRole("dialog", { name: "a" })).toBeInTheDocument();
     resize(120);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(column()).toBeInTheDocument();
+  });
+
+  it("Open in the dialog opens the note and closes the dialog", async () => {
+    width = 90;
+    await open("/notes/Work/a.md", {
+      "GET /api/graph/local": () => json(200, { nodes: [graphNode("/Work/a.md", 0), graphNode("/Work/b.md", 1)], edges: [[0, 1, 0]], leftOut: {} }),
+    });
+    await userEvent.click(toggle());
+    const dialog = await screen.findByRole("dialog", { name: "a" });
+    await userEvent.click(await within(dialog).findByRole("button", { name: "node b" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Open" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Note b" })).toBeInTheDocument();
   });
 
   it("isn't there without a note", async () => {
@@ -182,10 +280,14 @@ describe("Ctrl+Shift+G", () => {
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("does nothing below 1920 px", async () => {
-    width = 80;
+  it("Ctrl+Shift+G opens the dialog where no column fits", async () => {
+    width = 90;
     await open();
     press({ ctrlKey: true, key: "G", code: "KeyG" });
+    expect(await screen.findByRole("dialog", { name: "a" })).toBeInTheDocument();
     expect(localStorage.getItem(storageKey)).toBeNull();
+    // The open graph dialog is a dialog too: the key doesn't open a second one.
+    press({ ctrlKey: true, key: "G", code: "KeyG" });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 });

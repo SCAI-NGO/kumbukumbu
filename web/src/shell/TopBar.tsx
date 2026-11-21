@@ -2,6 +2,7 @@
 import { ListTree, PanelLeft, PanelRight, Star, Waypoints } from "lucide-react";
 import { crumbOf, titleOf } from "../api/paths";
 import { graphColumnId } from "../graph/GraphColumn";
+import { useDesktop } from "../hooks/useDesktop";
 import { sidePanelId } from "../note/SidePanel";
 import { isMac } from "../palette/usePaletteShortcut";
 import { useEditor } from "../state/editor";
@@ -19,7 +20,8 @@ export const graphToggleId = "graph-column-toggle";
  * Orientation: the tree button, where the note is and its title (a tap opens the tree), the palette's star, its outline, and Read / Write.
  * Write only where the caller may change the note (`writable`); `refusal` says why not. With `sidebar` (desktop widths), the tree button collapses and expands the docked sidebar instead of opening the drawer.
  * With `sidePanel` (wide windows, a note open), the panel's toggle comes last in the bar, and the outline is in the panel instead of the top bar.
- * With `graph` (the widest windows), the graph column's toggle comes after it.
+ * With `graph`, the graph's button comes after it: the column's toggle where the column fits, else (`dialog`) the button
+ * that opens the graph's dialog. On a phone the caller offers it in read mode only, and it sits beside the outline.
  */
 export default function TopBar({
   path,
@@ -34,12 +36,29 @@ export default function TopBar({
   refusal?: string | null;
   sidebar: { expanded: boolean; toggle(): void } | null;
   sidePanel?: { expanded: boolean; toggle(): void } | null;
-  graph?: { expanded: boolean; toggle(): void } | null;
+  graph?: { expanded: boolean; toggle(): void; dialog: boolean } | null;
 }) {
   const openTree = () => useEditor.getState().setOverlay("tree");
   const mode = useEditor((s) => s.mode);
+  const phone = !useDesktop();
   const palette = `Favourites and commands (${isMac() ? "⌘P" : "Ctrl+P"})`;
   const buttonClass = "flex size-11 flex-none items-center justify-center rounded-[10px] text-text-body focus-visible:outline-2 focus-visible:outline-accent";
+  const graphButton = graph && (
+    <button
+      id={graphToggleId}
+      type="button"
+      aria-label="Graph"
+      aria-haspopup={graph.dialog ? "dialog" : undefined}
+      aria-expanded={graph.dialog ? undefined : graph.expanded}
+      aria-controls={graph.dialog ? undefined : graphColumnId}
+      aria-keyshortcuts="Control+Shift+G Meta+Shift+G"
+      title={`${graph.dialog || !graph.expanded ? "Show" : "Hide"} the graph (Ctrl+Shift+G or ⌘⇧G)`}
+      onClick={graph.toggle}
+      className={buttonClass}
+    >
+      <Waypoints size={22} strokeWidth={1.8} aria-hidden />
+    </button>
+  );
   return (
     <header className="flex min-h-16 flex-none items-center gap-1 border-b border-line py-2.5 pr-3 pl-1.5">
       {sidebar ? (
@@ -94,6 +113,7 @@ export default function TopBar({
           <ListTree size={21} strokeWidth={1.8} aria-hidden />
         </button>
       )}
+      {phone && graphButton}
       {path && <ModeToggle writable={writable} refusal={refusal} />}
       {sidePanel && (
         <button
@@ -110,21 +130,7 @@ export default function TopBar({
           <PanelRight size={22} strokeWidth={1.8} aria-hidden />
         </button>
       )}
-      {graph && (
-        <button
-          id={graphToggleId}
-          type="button"
-          aria-label="Graph"
-          aria-expanded={graph.expanded}
-          aria-controls={graphColumnId}
-          aria-keyshortcuts="Control+Shift+G Meta+Shift+G"
-          title={`${graph.expanded ? "Hide" : "Show"} the graph (Ctrl+Shift+G or ⌘⇧G)`}
-          onClick={graph.toggle}
-          className={buttonClass}
-        >
-          <Waypoints size={22} strokeWidth={1.8} aria-hidden />
-        </button>
-      )}
+      {!phone && graphButton}
     </header>
   );
 }

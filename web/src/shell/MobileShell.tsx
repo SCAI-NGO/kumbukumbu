@@ -72,6 +72,7 @@ const ArchiveSheet = lazy(() => import("./ArchiveSheet"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 const Palette = lazy(() => import("../palette/Palette"));
+const GraphDialog = lazy(() => import("../graph/GraphDialog"));
 
 /** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
 function SearchLoadFailed({ onClose }: { onClose(): void }) {
@@ -336,29 +337,40 @@ export default function MobileShell() {
   }, [sidePanel, toggleSidePanel]);
 
   // From 1920 px on (2880 px in the split view, two panes beside each other), the graph column sits after the side
-  // panel: the focused pane's note in its graph, the other pane's named in its foot.
+  // panel: the focused pane's note in its graph, the other pane's named in its foot. Where no column fits, the graph is
+  // a dialog; on a phone in read mode only, since in Write mode it would fight the keyboard and the caret.
   const graphWide = useGraphWide();
   const graphWideSplit = useGraphWideSplit();
   const [graphCollapsed, setGraphCollapsed] = useGraphColumnCollapsed();
-  const graph = !!shownNote && (split ? graphWideSplit : graphWide);
+  const graphColumn = !!shownNote && (split ? graphWideSplit : graphWide);
+  // The other pane's note, for its ring and its distance line.
+  const graphOther = split ? (focusedSide === "right" ? path : beside) : null;
+  const graphDialogAllowed = !!shownNote && !graphColumn && (docked || mode === "read");
+  const [graphDialog, setGraphDialog] = useState(false);
+  // Gone once the column fits or the note goes, not back when the window narrows again.
+  useEffect(() => {
+    if (!graphDialogAllowed) setGraphDialog(false);
+  }, [graphDialogAllowed]);
   const toggleGraph = useCallback(() => {
     if (!graphCollapsed && document.getElementById(graphColumnId)?.contains(document.activeElement)) document.getElementById(graphToggleId)?.focus();
     setGraphCollapsed(!graphCollapsed);
   }, [graphCollapsed, setGraphCollapsed]);
 
-  // Ctrl+Shift+G (Cmd+Shift+G on a Mac); `code` too, for layouts where G is elsewhere. Not while a dialog is open.
+  // Ctrl+Shift+G (Cmd+Shift+G on a Mac); `code` too, for layouts where G is elsewhere. Not while a dialog is open, the
+  // graph's own included: Escape closes that.
   useEffect(() => {
-    if (!graph) return;
+    if (!graphColumn && !graphDialogAllowed) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || !e.shiftKey || e.defaultPrevented) return;
       if (e.key !== "G" && e.key !== "g" && e.code !== "KeyG") return;
       if (topDialog()) return;
       e.preventDefault();
-      toggleGraph();
+      if (graphColumn) toggleGraph();
+      else setGraphDialog(true);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [graph, toggleGraph]);
+  }, [graphColumn, graphDialogAllowed, toggleGraph]);
 
   usePaletteShortcut();
 
@@ -512,7 +524,13 @@ export default function MobileShell() {
         refusal={refusal}
         sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null}
         sidePanel={sidePanel ? { expanded: !panelCollapsed, toggle: toggleSidePanel } : null}
-        graph={graph ? { expanded: !graphCollapsed, toggle: toggleGraph } : null}
+        graph={
+          graphColumn
+            ? { expanded: !graphCollapsed, toggle: toggleGraph, dialog: false }
+            : graphDialogAllowed
+              ? { expanded: false, toggle: () => setGraphDialog(true), dialog: true }
+              : null
+        }
       />
       {framed && (
         <div className="flex-none px-3 pt-2">
@@ -559,10 +577,17 @@ export default function MobileShell() {
           {!split && footer}
         </div>
         {sidePanel && <NoteSidePanel path={shownNote!} hidden={panelCollapsed} />}
-        {graph && <GraphColumn path={shownNote!} otherPath={split ? (focusedSide === "right" ? path : beside) : null} hidden={graphCollapsed} />}
+        {graphColumn && <GraphColumn path={shownNote!} otherPath={graphOther} hidden={graphCollapsed} />}
       </div>
 
       {!docked && overlay === "tree" && <TreeDrawer {...treeProps} />}
+      {graphDialog && graphDialogAllowed && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setGraphDialog(false)} />}>
+          <Suspense>
+            <GraphDialog path={shownNote!} otherPath={graphOther} onClose={() => setGraphDialog(false)} />
+          </Suspense>
+        </LoadBoundary>
+      )}
       {overlay === "search" && (
         <LoadBoundary fallback={<SearchLoadFailed onClose={() => setOverlay("none")} />}>
           <Suspense>

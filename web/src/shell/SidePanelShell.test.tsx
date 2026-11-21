@@ -83,10 +83,11 @@ describe("the side panel in the shell", () => {
     expect(within(screen.getByRole("main")).queryByRole("complementary", { name: "Side panel" })).not.toBeInTheDocument();
   });
 
-  it("has its toggle at the top bar's right end, and the top bar no Outline button", async () => {
+  it("has its toggle at the top bar's right end, before only the graph's, and the top bar no Outline button", async () => {
     await open();
     const buttons = within(screen.getByRole("banner")).getAllByRole("button");
-    expect(buttons.at(-1)).toBe(toggle());
+    expect(buttons.at(-2)).toBe(toggle());
+    expect(buttons.at(-1)).toBe(screen.getByRole("button", { name: "Graph" }));
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
     expect(toggle()).toHaveAttribute("aria-controls", panel().id);
     expect(toggle()).toHaveAttribute("aria-keyshortcuts", "Control+Shift+\\ Meta+Shift+\\");

@@ -38,6 +38,16 @@ describe("SuggestionCard", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps its Escape from the dialog it is in, so that one closes only the card", async () => {
+    const dialog = vi.fn();
+    document.addEventListener("keydown", dialog);
+    const onClose = show();
+    await userEvent.keyboard("{Escape}");
+    document.removeEventListener("keydown", dialog);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(dialog).not.toHaveBeenCalled();
+  });
+
   it("closes on a click outside, not on one inside", async () => {
     const onClose = show();
     await userEvent.click(screen.getByText("Similar in meaning, not linked"));

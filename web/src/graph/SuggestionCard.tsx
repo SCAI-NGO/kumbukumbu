@@ -6,16 +6,22 @@ const coming = "Coming with link prediction";
 
 const action = "min-h-11 flex-1 rounded-[10px] border border-line bg-surface px-3 text-sm text-muted disabled:cursor-not-allowed disabled:opacity-60";
 
-/** The card of a suggested link: the other note and what it will offer once link prediction comes. Escape or a click outside closes it. */
+/** The card of a suggested link: the other note and what it will offer once link prediction comes. Escape or a click outside closes it, and that Escape closes nothing else. */
 export default function SuggestionCard({ suggestion, onClose }: { suggestion: Suggestion; onClose(): void }) {
   const card = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Caught on the way down and stopped there, or the dialog the graph is in would close with the same Escape.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      onClose();
+    };
     const onPointerDown = (e: PointerEvent) => !card.current?.contains(e.target as Node) && onClose();
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => {
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("pointerdown", onPointerDown, true);
     };
   }, [onClose]);
