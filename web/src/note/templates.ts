@@ -71,14 +71,16 @@ const formatParts = (parts: Parts, format: string) =>
  * The text with `{{title}}`, `{{date}}`, `{{time}}`, `{{date:FORMAT}}` and `{{time:FORMAT}}` filled in, as Obsidian's
  * core Templates fills them. Anything else in braces, and Templater's `<% %>`, stays as written.
  */
+// The moment's parts once per insertion, not per placeholder or per property: `Intl` is slow to set up.
+const partsFor = new WeakMap<Context, Parts>();
+
 export function fillPlaceholders(text: string, at: Context): string {
-  // The moment's parts once per text, not per placeholder.
-  let parts: Parts | undefined;
   // A format within a line and of at most 100 characters: an unclosed `{{date:` is never read to the end of the text,
   // so a template full of them fills in linear time; a longer format stays as written.
   return text.replace(/\{\{(title|date|time)(?::([^}\n]{0,100}))?\}\}/g, (match, name: string, format: string | undefined) => {
     if (name === "title") return format === undefined ? at.title : match;
-    parts ??= partsOf(at.now, at.zone);
+    let parts = partsFor.get(at);
+    if (!parts) partsFor.set(at, (parts = partsOf(at.now, at.zone)));
     return formatParts(parts, format || (name === "date" ? "YYYY-MM-DD" : "HH:mm"));
   });
 }
