@@ -33,7 +33,7 @@ public static class EmbeddingsKeyApi
         var account = app.MapGroup("/api/account").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         account.MapGet("/embeddings-key", GetAsync).Errors(401, 403);
         // A key decides whose TensorX account the text goes to: a stolen remembered session must not point it at its own.
-        account.MapPut("/embeddings-key", SetAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 503);
+        account.MapPut("/embeddings-key", SetAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 429, 503);
         account.MapDelete("/embeddings-key", RemoveAsync).Errors(401, 403, 503);
     }
 
@@ -42,10 +42,11 @@ public static class EmbeddingsKeyApi
 
     private static async Task<Results<Ok<ByokView>, JsonHttpResult<ApiError>>> SetAsync(
         SetEmbeddingsKeyRequest body, RequestCaller caller, EmbeddingsKeys keys, ByokDrivers drivers, VaultCatalog catalog, SearchIndex index,
-        MongoDB.Driver.IMongoDatabase db, IOptions<KumbuOptions> options, CancellationToken ct)
+        MongoDB.Driver.IMongoDatabase db, AccountLimits limits, IOptions<KumbuOptions> options, CancellationToken ct)
     {
         if (!options.Value.Embeddings.ByokOffered) throw ApiErrors.BadRequest(NotOfferedSentence);
         if (!Byok.IsKey(body.Key)) throw ApiErrors.BadRequest(MalformedSentence);
+        if (limits.EmbeddingsKeyCheck(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter, "Too many keys checked; try again in a minute.");
         switch (await drivers.CheckAsync(body.Key, ct))
         {
             case KeyCheck.Refused:
