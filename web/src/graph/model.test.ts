@@ -47,6 +47,11 @@ describe("toModel", () => {
     const { edges } = toModel(view([{ path: "/Work/B.md" }, { title: "Anna", kind: "ghost" }], [[0, 1, 3]]), tree);
     expect(edges).toEqual([{ source: "/Work/B.md", target: "ghost:1", flags: 3 }]);
   });
+
+  it("drops an edge whose index points past the nodes", () => {
+    const { edges } = toModel(view([{ path: "/Work/B.md" }, { title: "Anna", kind: "ghost" }], [[0, 1, 0], [0, 2, 0], [-1, 0, 0]]), tree);
+    expect(edges).toEqual([{ source: "/Work/B.md", target: "ghost:1", flags: 0 }]);
+  });
 });
 
 describe("treeEntry", () => {

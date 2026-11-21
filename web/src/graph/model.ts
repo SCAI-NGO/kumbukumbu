@@ -54,6 +54,10 @@ export function toModel(local: LocalGraphView, tree: TreeView | undefined): { no
       leftOut: Number(local.leftOut[String(i)] ?? 0),
     };
   });
-  const edges = local.edges.map(([from, to, flags]): GEdge => ({ source: nodes[Number(from)].id, target: nodes[Number(to)].id, flags: Number(flags) }));
+  // An index past the nodes would be an edge to nothing: left out rather than thrown on.
+  const edges = local.edges.flatMap(([from, to, flags]): GEdge[] => {
+    const [a, b] = [nodes[Number(from)], nodes[Number(to)]];
+    return a && b ? [{ source: a.id, target: b.id, flags: Number(flags) }] : [];
+  });
   return { nodes, edges };
 }

@@ -43,6 +43,10 @@ describe("ageColour", () => {
     expect(ageColour(null, now, true)).toBe(neutral.dark);
     expect(ageColour(null, now, false)).toBe(neutral.light);
   });
+  it("gives the neutral colour for a time it can't read", () => {
+    expect(ageColour("not a time", now, true)).toBe(neutral.dark);
+    expect(ageColour("", now, false)).toBe(neutral.light);
+  });
   it("gives the first stop up to an hour old and the last from half a year", () => {
     expect(ageColour(ago(3_600_000), now, true)).toBe(darkRamp[0]);
     expect(ageColour(ago(60_000), now, true)).toBe(darkRamp[0]);

@@ -6,8 +6,8 @@
 export const darkRamp: readonly string[] = ["#9cc4ff", "#f5f5f5", "#ffd84a", "#ff9a3c", "#ff6a5a"];
 export const lightRamp: readonly string[] = ["#1f5fc4", "#5c6670", "#826300", "#a64a00", "#b82c1c"];
 
-/** Notes with no known time of writing. */
-export const neutral = { dark: "#8b93a1", light: "#6b7380" };
+/** Notes with no known time of writing, ghosts and attachments; a mark like the stops, so held to 3:1 the same way. */
+export const neutral = { dark: "#959daa", light: "#626a77" };
 
 /** An hour old or younger is the hottest stop; half a year or older the coldest. */
 export const AGE_MIN_MS = 3_600_000;

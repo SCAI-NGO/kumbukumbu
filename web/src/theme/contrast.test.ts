@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { darkRamp, lightRamp } from "../graph/ramps";
+import { darkRamp, lightRamp, neutral } from "../graph/ramps";
 import { discreet, schemes, type Tokens } from "./schemes";
 
 function luminance(hex: string): number {
@@ -86,8 +86,9 @@ describe("colour schemes", () => {
   });
 
   // The graph's star colours are marks, not text: 3:1 (WCAG 1.4.11) on every ground of the schemes they are drawn on.
-  it.each(schemes)("every stop of the star ramp reads at 3:1 on $name's grounds", (scheme) => {
-    for (const stop of scheme.light ? lightRamp : darkRamp)
+  // The neutral colour (ghosts, attachments, notes without a time) is a mark too.
+  it.each(schemes)("every stop of the star ramp and the neutral colour read at 3:1 on $name's grounds", (scheme) => {
+    for (const stop of scheme.light ? [...lightRamp, neutral.light] : [...darkRamp, neutral.dark])
       for (const ground of grounds) expect(contrast(stop, scheme.tokens[ground])).toBeGreaterThanOrEqual(3);
   });
 

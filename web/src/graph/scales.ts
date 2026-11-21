@@ -27,11 +27,12 @@ export function radius(node: GNode, by: SizeBy): number {
 const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 const hex = (c: number[]) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
 
-/** The star colour of a note by its age, interpolated on the log of the age between the ramp's stops, clamped at both ends. */
+/** The star colour of a note by its age, interpolated on the log of the age between the ramp's stops, clamped at both ends; neutral without a readable time. */
 export function ageColour(writtenAt: string | null, now: number, dark: boolean): string {
-  if (writtenAt === null) return dark ? neutral.dark : neutral.light;
+  const written = writtenAt === null ? NaN : Date.parse(writtenAt);
+  if (Number.isNaN(written)) return dark ? neutral.dark : neutral.light;
   const ramp = dark ? darkRamp : lightRamp;
-  const age = Math.min(AGE_MAX_MS, Math.max(AGE_MIN_MS, now - Date.parse(writtenAt)));
+  const age = Math.min(AGE_MAX_MS, Math.max(AGE_MIN_MS, now - written));
   const t = (Math.log(age) - Math.log(AGE_MIN_MS)) / (Math.log(AGE_MAX_MS) - Math.log(AGE_MIN_MS));
   const at = t * (ramp.length - 1);
   const i = Math.min(ramp.length - 2, Math.floor(at));
