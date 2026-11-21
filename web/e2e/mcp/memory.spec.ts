@@ -141,8 +141,8 @@ test.describe("memory", () => {
       for (const [who, key, origin] of [
         // Alice owns the vault; Bob is another user.
         ["Alice", aliceKey, `${escape(folderPath)}, last changed by [^()]+, another user`],
-        // Bob sees whose vault it is; his own write is no other user's.
-        ["Bob", bobKey, `${escape(folderPath)}, shared by "alice", last changed by [^()]+(?: \\(this key\\))?`],
+        // Bob sees whose vault it is; his own write is no other user's, its label quoted for its brackets.
+        ["Bob", bobKey, `${escape(folderPath)}, shared by "alice", last changed by (?:[^()"]+|"[^"]+ \\(this key\\)")`],
       ] as const) {
         const { instructions = "" } = await key.initialize();
         const start = entries(instructions, startHead);
