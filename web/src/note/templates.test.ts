@@ -300,3 +300,30 @@ describe("templatePaths", () => {
     expect(templatePaths(root, "Work", "/Work/Templates/Meeting.md")).toEqual(["/Work/Templates/Review.md"]);
   });
 });
+
+describe("a large template", () => {
+  const timed = (work: () => unknown) => {
+    const start = performance.now();
+    work();
+    return performance.now() - start;
+  };
+
+  it("fills many unclosed placeholders in about the time of as many characters of text", () => {
+    const text = "{{date:".repeat(20_000);
+    expect(timed(() => fillPlaceholders(text, at))).toBeLessThan(500);
+    expect(fillPlaceholders(text, at)).toBe(text);
+  });
+
+  it("fills many closed placeholders without making the moment anew for each", () => {
+    expect(timed(() => fillPlaceholders("{{date}}".repeat(20_000), at))).toBeLessThan(500);
+  });
+
+  it("reads a format of many opening brackets quickly", () => {
+    expect(timed(() => fillPlaceholders(`{{date:${"[".repeat(20_000)}}}`, at))).toBeLessThan(500);
+  });
+
+  it("merges many properties without searching the frontmatter once for each", () => {
+    const template = `---\n${Array.from({ length: 4_000 }, (_, i) => `p${i}: {{date}}`).join("\n")}\n---\nBody\n`;
+    expect(timed(() => templateEdit("", 0, 0, template, at))).toBeLessThan(1_000);
+  });
+});
