@@ -175,6 +175,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.current.size === 1) {
       press.current = { id, clientX: e.clientX, clientY: e.clientY, view, moved: false };
+      pinch.current = null;
       return;
     }
     const p = press.current;
@@ -218,7 +219,8 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
   };
   const pointerUp = (e: PointerEvent<SVGSVGElement>) => {
     pointers.current.delete(e.pointerId);
-    if (pointers.current.size < 2) pinch.current = null;
+    // Back to two fingers from three, the pinch starts again from their distance.
+    pinch.current = pointers.current.size === 2 ? fingers().distance : null;
     const p = press.current;
     press.current = null;
     if (p?.moved) justMoved.current = true;

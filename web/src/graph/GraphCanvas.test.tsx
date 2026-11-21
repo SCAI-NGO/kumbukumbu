@@ -312,6 +312,31 @@ describe("touch", () => {
     expect(viewBox()[2]).toBeLessThan(width);
   });
 
+  it("a touch after a pinch whose releases went astray pans", () => {
+    render(<GraphCanvas {...props()} />);
+    const svg = screen.getByRole("group");
+    fireEvent.pointerDown(svg, { pointerId: 1, isPrimary: true, clientX: 200, clientY: 280 });
+    fireEvent.pointerDown(svg, { pointerId: 2, clientX: 360, clientY: 280 });
+    const [x, y, w, h] = viewBox();
+    fireEvent.pointerDown(svg, { pointerId: 3, isPrimary: true, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(svg, { pointerId: 3, clientX: 140, clientY: 100 });
+    expect(viewBox()).toEqual([x - (40 * w) / 560, y, w, h]);
+  });
+
+  it("lifting the third finger pinches with the other two again", () => {
+    // Spread out, so that the zoom has room either way.
+    for (const [id, p] of layout.positions) layout.positions.set(id, { x: p.x * 4, y: p.y * 4 });
+    render(<GraphCanvas {...props()} />);
+    const svg = screen.getByRole("group");
+    fireEvent.pointerDown(svg, { pointerId: 1, isPrimary: true, clientX: 200, clientY: 280 });
+    fireEvent.pointerDown(svg, { pointerId: 2, clientX: 360, clientY: 280 });
+    fireEvent.pointerDown(svg, { pointerId: 3, clientX: 280, clientY: 400 });
+    fireEvent.pointerUp(svg, { pointerId: 3, clientX: 280, clientY: 400 });
+    const before = viewBox();
+    fireEvent.pointerMove(svg, { pointerId: 2, clientX: 520, clientY: 280 });
+    expect(viewBox()[2]).toBeCloseTo(before[2] / 2);
+  });
+
   it("a double tap on the background fits the view again", () => {
     render(<GraphCanvas {...props()} />);
     const svg = screen.getByRole("group");
