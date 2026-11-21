@@ -209,6 +209,49 @@ public sealed class HandshakeInstructionsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_note_of_the_owners_a_member_moves_into_the_skill_folder_is_his()
+    {
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        var carol = await CarolAsync(alice);
+        await PutAsync(alice, "/Work/drafts/helper.md", Helper + "Read the plan first.\n");
+
+        using (var move = await carol.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Garten/drafts/helper.md", to = "/Garten/_skills/helper/SKILL.md" }))
+            Assert.True(move.IsSuccessStatusCode, await move.Content.ReadAsStringAsync(Ct));
+
+        AssertCarolsHelper(await InstructionsAsync(key));
+    }
+
+    [Fact]
+    public async Task A_skill_of_the_owners_a_member_renames_is_his()
+    {
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        var carol = await CarolAsync(alice);
+        await PutAsync(alice, "/Work/_skills/draft/SKILL.md", Helper.Replace("name: helper", "name: draft") + "Read the plan first.\n");
+        Assert.Contains("- draft (/Work/_skills/draft, ", StartPart(await InstructionsAsync(key)));
+
+        using (var move = await carol.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Garten/_skills/draft/", to = "/Garten/_skills/helper/" }))
+            Assert.True(move.IsSuccessStatusCode, await move.Content.ReadAsStringAsync(Ct));
+
+        // The manifest's name no longer matches its folder, but the skill is listed by the folder all the same.
+        var text = await InstructionsAsync(key);
+        Assert.Contains("another user", HelperLine(text));
+        Assert.DoesNotContain("- helper (", StartPart(text));
+    }
+
+    [Fact]
+    public async Task A_note_the_owner_moves_into_the_skill_folder_herself_starts()
+    {
+        var (alice, key) = await AliceAsync("Skills", "Work");
+        await CarolAsync(alice);
+        await PutAsync(alice, "/Work/drafts/helper.md", Helper + "Read the plan first.\n");
+
+        using (var move = await alice.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Work/drafts/helper.md", to = "/Work/_skills/helper/SKILL.md" }))
+            Assert.True(move.IsSuccessStatusCode, await move.Content.ReadAsStringAsync(Ct));
+
+        Assert.Contains("- helper (/Work/_skills/helper, ", StartPart(await InstructionsAsync(key)));
+    }
+
+    [Fact]
     public async Task A_skill_the_owner_rewrote_whole_is_hers()
     {
         var (alice, key) = await AliceAsync("Skills", "Work");
