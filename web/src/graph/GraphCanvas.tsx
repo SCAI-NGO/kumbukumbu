@@ -131,9 +131,11 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const v = viewRef.current;
-      const factor = Math.exp(-e.deltaY * 0.002);
       const zoom = (el.clientWidth || FALLBACK_SIZE.w) / v.w;
-      if ((factor < 1 && zoom * factor < ZOOM_MIN) || (factor > 1 && zoom * factor > ZOOM_MAX)) return;
+      // Clamped at the limits; a fit beyond one (a wide graph) may come back from it but goes no further.
+      const target = Math.min(Math.max(ZOOM_MAX, zoom), Math.max(Math.min(ZOOM_MIN, zoom), zoom * Math.exp(-e.deltaY * 0.002)));
+      const factor = target / zoom;
+      if (factor === 1) return;
       const p = toGraphRef.current(e.clientX, e.clientY);
       setManual({ x: p.x - (p.x - v.x) / factor, y: p.y - (p.y - v.y) / factor, w: v.w / factor, h: v.h / factor });
     };
@@ -224,7 +226,11 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
     elements.current.get(to)?.focus();
   };
 
-  const keyOf = useMemo(() => new Map(nodes.map((n) => [n.id, n.key])), [nodes]);
+  // Once per answer, not on every frame of the layout.
+  const scores = useMemo(() => {
+    const keyOf = new Map(nodes.map((n) => [n.id, n.key]));
+    return edges.map((e) => (keyOf.has(e.source) && keyOf.has(e.target) ? similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score : 0));
+  }, [nodes, edges]);
   const neutral = ageColour(null, 0, dark);
   const now = Date.now();
 
@@ -244,7 +250,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
         {edges.map((e, i) => {
           const [a, b] = [positions.get(e.source), positions.get(e.target)];
           if (!a || !b) return null;
-          const s = similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score;
+          const s = scores[i];
           return <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} strokeWidth={edgeWidth(s)} strokeOpacity={edgeOpacity(s)} style={{ stroke: lineColour }} />;
         })}
         {shownSuggestions.map((s, i) => {
@@ -254,31 +260,6 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
           );
         })}
       </g>
-      {shownSuggestions.map((s, i) => {
-        const at = suggestionAt(i);
-        return (
-          <g
-            key={s.path}
-            role="button"
-            tabIndex={0}
-            aria-label={`Suggested link: ${s.title}`}
-            transform={`translate(${at.x} ${at.y})`}
-            className="cursor-pointer focus-visible:outline-2 focus-visible:outline-accent"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => onSuggestion(s)}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              e.preventDefault();
-              onSuggestion(s);
-            }}
-          >
-            <circle r={SUGGESTION_R} fill="none" strokeWidth={1.5} strokeDasharray="2 2" style={{ stroke: "var(--color-accent)" }} />
-            <text aria-hidden="true" y={SUGGESTION_R + 12} textAnchor="middle" fontSize={10} style={{ fill: "var(--color-dim)" }}>
-              {truncate(s.title)}
-            </text>
-          </g>
-        );
-      })}
       {nodes.map((n) => {
         const p = positions.get(n.id);
         if (!p) return null;
@@ -296,6 +277,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
             role="button"
             tabIndex={n.id === rovingId ? 0 : -1}
             aria-label={label(n)}
+            aria-disabled={n.kind === "ghost" ? true : undefined}
             transform={`translate(${p.x} ${p.y})`}
             className={`focus-visible:outline-2 focus-visible:outline-accent ${n.kind === "ghost" ? "" : "cursor-pointer"}`}
             onPointerDown={(e) => {
@@ -327,6 +309,31 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
             )}
             <text aria-hidden="true" y={r + TITLE_BELOW - 2} textAnchor="middle" fontSize={10} style={{ fill: "var(--color-dim)" }}>
               {truncate(n.title)}
+            </text>
+          </g>
+        );
+      })}
+      {shownSuggestions.map((s, i) => {
+        const at = suggestionAt(i);
+        return (
+          <g
+            key={s.path}
+            role="button"
+            tabIndex={0}
+            aria-label={`Suggested link: ${s.title}`}
+            transform={`translate(${at.x} ${at.y})`}
+            className="cursor-pointer focus-visible:outline-2 focus-visible:outline-accent"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => onSuggestion(s)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              onSuggestion(s);
+            }}
+          >
+            <circle r={SUGGESTION_R} fill="none" strokeWidth={1.5} strokeDasharray="2 2" style={{ stroke: "var(--color-accent)" }} />
+            <text aria-hidden="true" y={SUGGESTION_R + 12} textAnchor="middle" fontSize={10} style={{ fill: "var(--color-dim)" }}>
+              {truncate(s.title)}
             </text>
           </g>
         );

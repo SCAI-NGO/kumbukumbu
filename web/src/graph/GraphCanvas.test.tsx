@@ -136,6 +136,13 @@ describe("GraphCanvas", () => {
     expect(p.onSuggestion).toHaveBeenLastCalledWith(suggestions[0]);
   });
 
+  it("enters at the centre even with suggestions shown, and marks a ghost disabled", () => {
+    const { container } = render(<GraphCanvas {...props({ suggestions, showSuggestions: true })} />);
+    expect(container.querySelector('[tabindex="0"]')).toBe(nodeButton("Budget, 3 links in, 5 out"));
+    expect(nodeButton("Anna, no note yet")).toHaveAttribute("aria-disabled", "true");
+    expect(nodeButton("Plan, 1 link in, 1 out")).not.toHaveAttribute("aria-disabled");
+  });
+
   it("draws no dashed edge without suggestions, even when they are shown", () => {
     const { container } = render(<GraphCanvas {...props({ showSuggestions: true })} />);
     expect(container.querySelector('[stroke-dasharray="4 4"]')).toBeNull();
