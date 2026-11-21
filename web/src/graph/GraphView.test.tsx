@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { useEditor } from "../state/editor";
@@ -9,12 +9,13 @@ import { fakeApi, json } from "../test/app";
 import type { LocalGraphView } from "./api";
 import type { GNode } from "./model";
 
-// The canvas has its own tests; here it is a button per node that selects it when `select` is set, else opens it.
+// The canvas has its own tests; here it is a button per node that selects it when `select` is set, else opens it, and
+// is pressed while selected.
 vi.mock("./GraphCanvas", () => ({
-  default: (props: { nodes: GNode[]; select?: boolean; onOpen(n: GNode, beside: boolean): void; onSelect?(n: GNode | null): void }) => (
+  default: (props: { nodes: GNode[]; select?: boolean; selectedKey?: string | null; onOpen(n: GNode, beside: boolean): void; onSelect?(n: GNode | null): void }) => (
     <div data-testid="canvas">
       {props.nodes.map((n) => (
-        <button key={n.id} type="button" onClick={() => (props.select ? props.onSelect?.(n) : props.onOpen(n, false))}>
+        <button key={n.id} type="button" aria-pressed={(props.select && n.key === props.selectedKey) || undefined} onClick={() => (props.select ? props.onSelect?.(n) : props.onOpen(n, false))}>
           node {n.title}
         </button>
       ))}
@@ -67,7 +68,9 @@ function Where() {
 
 function show() {
   fakeApi({
-    "GET /api/graph/local": () => json(200, graph),
+    // Ghosts left out when asked to, as the server does.
+    "GET /api/graph/local": (r) =>
+      json(200, new URL(r.url).searchParams.get("ghosts") === "false" ? { ...graph, nodes: graph.nodes.slice(0, 2), edges: graph.edges.slice(0, 1) } : graph),
     "GET /api/graph/node": () => json(200, detail),
     "GET /api/vaults/Work/tree": () => json(200, tree),
   });
@@ -165,5 +168,34 @@ describe("GraphView in the dialog", () => {
     } finally {
       document.removeEventListener("keydown", reached);
     }
+  });
+
+  it("drops the selection when its node leaves the graph", async () => {
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: "node Anna" }));
+    expect(screen.getByRole("group", { name: "Anna" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Options" }));
+    await userEvent.click(screen.getByRole("button", { name: "Ghosts" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "node Anna" })).toBeNull());
+    expect(screen.queryByRole("group", { name: "Anna" })).toBeNull();
+    const reached = vi.fn();
+    document.addEventListener("keydown", reached);
+    try {
+      screen.getByRole("button", { name: "node Plan" }).focus();
+      await userEvent.keyboard("{Escape}");
+      expect(reached).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("keydown", reached);
+    }
+  });
+
+  it("gives the focus back to the selected node when Escape closes the card from inside", async () => {
+    show();
+    const plan = await screen.findByRole("button", { name: "node Plan" });
+    await userEvent.click(plan);
+    screen.getByRole("button", { name: "Open" }).focus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "Plan" })).toBeNull();
+    expect(plan).toHaveFocus();
   });
 });

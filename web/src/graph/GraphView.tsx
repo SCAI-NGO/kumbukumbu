@@ -126,7 +126,9 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   // With the preview off a hover only clears, so a card left over can't come back when it is switched on again.
   const hovered = (n: GNode | null) => setHover(n && prefs.preview ? anchored(n) : null);
   const [selection, setSelection] = useState<Anchored | null>(null);
-  const selected = dialog && selection?.on === path ? selection : null;
+  // Gone with a new centre, or once its node leaves the graph (a filter switched, a smaller depth).
+  const selected = dialog && selection?.on === path && model?.nodes.some((n) => n.key === selection.node.key) ? selection : null;
+  const card = useRef<HTMLDivElement>(null);
   const [suggestion, setSuggestion] = useState<{ s: Suggestion; on: string } | null>(null);
   const closeSuggestion = useCallback(() => setSuggestion(null), []);
 
@@ -135,6 +137,8 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
     if (e.key !== "Escape" || !selected) return;
     e.stopPropagation();
     e.preventDefault();
+    // The card's buttons go with it, so the focus goes back to the selected node rather than to the page.
+    if (card.current?.contains(e.target as Node)) body.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus();
     setSelection(null);
   };
 
@@ -233,7 +237,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
         )}
         {/* The selected node's card says all the hover card would. */}
         {model && prefs.preview && hover?.on === path && hover.node.key !== selected?.node.key && <NodePreview node={hover.node} anchor={hover.anchor} width={hover.width} />}
-        {model && selected && <NodeCard node={selected.node} anchor={selected.anchor} width={selected.width} beside={smUp} onOpen={open} />}
+        {model && selected && <NodeCard ref={card} node={selected.node} anchor={selected.anchor} width={selected.width} beside={smUp} onOpen={open} />}
         {model && suggestion?.on === path && <SuggestionCard suggestion={suggestion.s} onClose={closeSuggestion} />}
       </div>
       {prefs.list && model && (
