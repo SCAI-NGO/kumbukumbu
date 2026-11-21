@@ -225,8 +225,9 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
 
         using var put = await PutAsync(url, Bytes(Png));
 
-        // The key still opens Bob's own vault; the shared one is no longer there for it.
+        // The key still opens Bob's own vault; the shared one is no longer there for it, and the answer names no vault.
         await AssertAskAgainAsync(HttpStatusCode.NotFound, put);
+        Assert.DoesNotContain("garten", await RestClient.ErrorAsync(put), StringComparison.OrdinalIgnoreCase);
         await AssertNoFileAsync(alice, "a.png");
     }
 
@@ -345,7 +346,7 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Answers_a_conflict_with_the_file_as_it_is_now()
+    public async Task Answers_a_conflict_without_the_file_as_it_is_now()
     {
         var user = await RestClient.NewAsync(Api);
         var version = await user.CreateFileAsync("kept.png", Png);
@@ -354,8 +355,10 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
 
         using var put = await PutAsync(url, Bytes(FileApiTests.Png(8, 8)));
 
+        // The URL's holder learns that the path is taken, nothing of the file there.
         var conflict = await CreatedAsync(put, HttpStatusCode.Conflict);
-        Assert.Equal(6, conflict["current"]!["width"]!.GetValue<int>());
+        Assert.Null(conflict["current"]);
+        Assert.Contains("changed", conflict["error"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -24,6 +24,9 @@ public static class AgentUploadApi
     /// <summary>Ends every refusal of a ticket or its credential: the ticket is used, whatever went wrong.</summary>
     public const string AskAgain = "Ask for a new upload URL with the upload tool.";
 
+    /// <summary>Every 404 of this route: it names no vault, as the URL's holder may have no account.</summary>
+    private const string NoVault = "The vault this upload URL was made for can't be reached.";
+
     public static void MapAgentUploadApi(this IEndpointRouteBuilder app)
     {
         // AskAgainFilter outside ApiErrors.Filter, so that it sees the refusals as answered.
@@ -34,7 +37,7 @@ public static class AgentUploadApi
             .Errors(400, 401, 403, 404, 409, 413, 429, 503, 507);
     }
 
-    private static async Task<Results<Created<AgentUploadView>, Ok<AgentUploadView>, Conflict<FileConflictView>>> UploadAsync(
+    private static async Task<Results<Created<AgentUploadView>, Ok<AgentUploadView>, Conflict<ApiError>>> UploadAsync(
         HttpContext context, RequestCaller caller, INoteStore store, NoteWriter notes, WriterLabels labels, DeepLinks links, CancellationToken ct)
     {
         var ticket = context.Features.Get<UploadTicket>() ?? throw new InvalidOperationException("An agent upload reached its endpoint without CallerMiddleware's ticket");
@@ -43,7 +46,7 @@ public static class AgentUploadApi
         var filePath = ApiPaths.Parse(asked.Segments[0], string.Join('/', asked.Segments.Skip(1)), PathKind.Attachment);
         // The name may lead to another vault since (a rename); the file goes only where the URL was made for.
         if (ticket.VaultId is not null && (store is not EncryptedNoteStore encrypted || await VaultIdAsync(encrypted, filePath, ct) != ticket.VaultId))
-            throw ApiErrors.NotFound("The vault this upload URL was made for no longer has that name.");
+            throw ApiErrors.NotFound(NoVault);
 
         var stored = await FileApi.StoreAsync(filePath, ticket.Version, context.Request, caller, store, notes, labels, ct);
         var skillsVault = await store.SkillsVaultAsync(ct);
@@ -51,7 +54,8 @@ public static class AgentUploadApi
         {
             Created<FileStateView> created => TypedResults.Created(created.Location, View(created.Value!, filePath, skillsVault, links)),
             Ok<FileStateView> ok => TypedResults.Ok(View(ok.Value!, filePath, skillsVault, links)),
-            Conflict<FileConflictView> conflict => conflict,
+            // Whoever holds the URL learns that the path is taken, nothing of the file there (not even its version).
+            Conflict<FileConflictView> => TypedResults.Conflict(new ApiError($"{asked.Name} exists already or has changed since this upload URL was made; read it again, then ask for a new upload URL with the upload tool.")),
             _ => throw new InvalidOperationException("StoreAsync answered something else"),
         };
     }
@@ -70,12 +74,12 @@ public static class AgentUploadApi
     }
 
     /// <summary>A refusal of who may write there (401, 403, 404 for a vault the credential no longer opens, or 503 while a vault is re-encrypted) says to ask
-    /// again; format, size, conflict and quota answers keep the files API's own.</summary>
+    /// again, a 404 without the vault's name; format, size and quota answers keep the files API's own.</summary>
     private static async ValueTask<object?> AskAgainFilter(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var result = await next(context);
         return result is JsonHttpResult<ApiError> { StatusCode: StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden or StatusCodes.Status404NotFound or StatusCodes.Status503ServiceUnavailable, Value: { } error } refused
-            ? TypedResults.Json(error with { Error = $"{error.Error} {AskAgain}" }, statusCode: refused.StatusCode)
+            ? TypedResults.Json(error with { Error = $"{(refused.StatusCode == StatusCodes.Status404NotFound ? NoVault : error.Error)} {AskAgain}" }, statusCode: refused.StatusCode)
             : result;
     }
 }
