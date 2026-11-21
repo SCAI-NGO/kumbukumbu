@@ -41,6 +41,9 @@ public static class AgentUploadApi
         // As the tool parsed it when it issued the ticket.
         if (!VaultPath.TryParse(ticket.Path, out var asked) || asked.Segments.Count < 2) throw new InvalidOperationException("A ticket holds no file path");
         var filePath = ApiPaths.Parse(asked.Segments[0], string.Join('/', asked.Segments.Skip(1)), PathKind.Attachment);
+        // The name may lead to another vault since (a rename); the file goes only where the URL was made for.
+        if (ticket.VaultId is not null && (store is not EncryptedNoteStore encrypted || await VaultIdAsync(encrypted, filePath, ct) != ticket.VaultId))
+            throw ApiErrors.NotFound("The vault this upload URL was made for no longer has that name.");
 
         var stored = await FileApi.StoreAsync(filePath, ticket.Version, context.Request, caller, store, notes, labels, ct);
         var skillsVault = await store.SkillsVaultAsync(ct);
@@ -52,6 +55,10 @@ public static class AgentUploadApi
             _ => throw new InvalidOperationException("StoreAsync answered something else"),
         };
     }
+
+    /// <summary>The id of the vault the path's first segment names for this caller, or null.</summary>
+    internal static async Task<string?> VaultIdAsync(EncryptedNoteStore store, VaultPath path, CancellationToken ct) =>
+        (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == path.Segments[0])?.Id;
 
     /// <summary>The link as the manual teaches it (the path inside the vault, encoded where Markdown would misread it),
     /// an image's embedded with <c>!</c> (an SVG in a skill's folder is a text file, by <paramref name="skillsVault"/>).</summary>

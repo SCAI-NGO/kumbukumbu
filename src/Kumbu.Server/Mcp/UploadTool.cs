@@ -92,7 +92,8 @@ public static class UploadTool
         };
 
         // The PUT's own resolution refuses a credential that has expired meanwhile.
-        var (token, expiresAt) = tickets.Issue(Encoding.UTF8.GetBytes(bearer), connectionId, filePath.Value, version, holder);
+        var vaultId = store is EncryptedNoteStore encrypted ? await AgentUploadApi.VaultIdAsync(encrypted, filePath, ct) : null;
+        var (token, expiresAt) = tickets.Issue(Encoding.UTF8.GetBytes(bearer), connectionId, filePath.Value, version, holder, vaultId);
         var url = $"{OAuthUrls.Origin(context, options.Value.PublicUrl)}/api/agent-upload/{token}";
         return ShellResult.Ok($"""
             {url}

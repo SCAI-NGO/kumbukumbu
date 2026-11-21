@@ -182,6 +182,28 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_url_stays_with_its_vault_when_another_vault_takes_the_name()
+    {
+        var user = await RestClient.NewAsync(Api);
+        using (var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Zweit" })) Assert.True(created.IsSuccessStatusCode, await created.Content.ReadAsStringAsync(Ct));
+        var vaults = await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct);
+        var (key, _) = await KeyAsync(user, "Claude", vaults.ToDictionary(v => v.Id, _ => KeyRight.Write));
+        var url = await UrlAsync(user, key, "/Arbeit/a.png");
+        foreach (var (from, to) in new[] { ("Arbeit", "Alt"), ("Zweit", "Arbeit") })
+        {
+            using var renamed = await user.SendAsync(HttpMethod.Put, $"/api/vaults/{from}/name", new { name = to });
+            Assert.True(renamed.IsSuccessStatusCode, await renamed.Content.ReadAsStringAsync(Ct));
+        }
+
+        using var put = await PutAsync(url, Bytes(Png));
+
+        await AssertAskAgainAsync(HttpStatusCode.NotFound, put);
+        await AssertNoFileAsync(user, "a.png");
+        using var old = await user.GetAsync("/api/files/Alt/a.png");
+        Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+    }
+
+    [Fact]
     public async Task Lowered_right_is_refused()
     {
         var (alice, _, membership, key) = await SharedAsync();
