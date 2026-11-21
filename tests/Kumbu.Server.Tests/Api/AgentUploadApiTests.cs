@@ -518,4 +518,23 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
         await AssertAskAgainAsync(HttpStatusCode.Unauthorized, again);
         await AssertNoFileAsync(user, "a.png");
     }
+
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("GET")]
+    [InlineData("HEAD")]
+    [InlineData("DELETE")]
+    public async Task Plain_http_spends_the_url_whatever_the_method(string method)
+    {
+        await using var production = Api.WithWebHostBuilder(b => b.UseEnvironment("Production"));
+        var user = (await RestClient.NewAsync(Api)).On(production);
+        var url = await UrlAsync(user, await user.KeyAsync("Claude", KeyRight.Write), "/Arbeit/a.png");
+
+        using var plain = await PutAsync(url, Bytes(Png), production, r => r.Method = new HttpMethod(method), scheme: "http");
+        using var again = await PutAsync(url, Bytes(Png), production);
+
+        Assert.Equal(HttpStatusCode.Forbidden, plain.StatusCode);
+        await AssertAskAgainAsync(HttpStatusCode.Unauthorized, again);
+        await AssertNoFileAsync(user, "a.png");
+    }
 }
