@@ -1,6 +1,6 @@
 # The graph column: a local graph beside the note
 
-Date: 2026-11-21. Status: decisions agreed with the maintainer on 2026-11-21 after a UX review; builder check pending (findings and decisions with their reasons in the maintainer's working notes, "Graph view 2026-11-21"). Target: 0.7.0, prepared on a feature branch while 0.6.0 is in post-production.
+Date: 2026-11-21. Status: approved by the maintainer on 2026-11-21, after a UX review and a builder check (its answers marked) (findings and decisions with their reasons in the maintainer's working notes, "Graph view 2026-11-21"). Target: 0.7.0, prepared on a feature branch while 0.6.0 is in post-production.
 
 ## Why
 
