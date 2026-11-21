@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
 import { useLinks, useNote } from "../api/notes";
 import { useErrorTextFor } from "../discreet/errorText";
-import { useGoneWithVaults } from "../discreet/state";
+import { useDiscreet, useGoneWithVaults } from "../discreet/state";
 import { useDesktop } from "../hooks/useDesktop";
 import { blockSource, findBlock } from "../note/blocks";
 import { maskedBody } from "../note/comments";
@@ -34,6 +34,8 @@ export default function ConsolePage() {
   const [value, setValue] = useState("");
   // Walking the history: where, and the line being typed before, to come back to.
   const [walk, setWalk] = useState<{ index: number; draft: string } | null>(null);
+  const line = useRef({ value, walk });
+  line.current = { value, walk };
   const input = useRef<HTMLInputElement>(null);
   const log = useRef<HTMLDivElement>(null);
   const controller = useRef<AbortController | null>(null);
@@ -63,6 +65,19 @@ export default function ConsolePage() {
       ? suggested.matches
       : [];
 
+  // A line not yet run, or the one put aside by the history walk, that names a vault just hidden goes with it: a
+  // discreet vault's names must not outlive its hiding. Any other line stays, as nothing typed in a window is lost.
+  useEffect(
+    () =>
+      useDiscreet.subscribe((s, previous) => {
+        const hidden = [...previous.names].filter((name) => !s.names.has(name)).concat([...s.gone].filter((name) => !previous.gone.has(name)));
+        const names = (text: string) => hidden.some((name) => text.toLowerCase().includes(`/${name.toLowerCase()}`));
+        if (hidden.length === 0 || !(names(line.current.value) || names(line.current.walk?.draft ?? ""))) return;
+        setValue("");
+        setWalk(null);
+      }),
+    [],
+  );
   // Leaving the page stops the running command; the store keeps the rest for coming back.
   useEffect(
     () => () => {

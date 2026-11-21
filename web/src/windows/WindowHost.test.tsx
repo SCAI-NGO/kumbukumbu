@@ -243,6 +243,25 @@ describe("a window over the notes", () => {
     await waitFor(() => expect(document.body.textContent).not.toContain("Tagebuch"));
   });
 
+  it("clears a command line that names the discreet vault as it hides, and only that one", async () => {
+    let shown = true;
+    signedInApi(() => shown);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Tagebuch/a.md", queryClient);
+    await screen.findByText("Text of /Tagebuch/a.md.");
+    await waitFor(() => expect([...useDiscreet.getState().names]).toEqual(["Tagebuch"]));
+    await act(() => router.navigate("/console"));
+    await screen.findByRole("dialog", { name: "Console" }, { timeout: 5_000 });
+    const line = screen.getByRole("textbox", { name: "Command" });
+    await userEvent.type(line, "cat /Tagebuch/a.md");
+
+    shown = false;
+    await act(() => queryClient.refetchQueries({ queryKey: ["session"] }));
+    await waitFor(() => expect(useDiscreet.getState()).toMatchObject({ revealed: false, hiding: false }));
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Command" })).toHaveValue(""));
+  });
+
   it("closes to the vault list after the discreet vault behind it hides, also with an ordinary note read before", async () => {
     let shown = true;
     signedInApi(() => shown);
