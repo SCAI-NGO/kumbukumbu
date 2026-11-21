@@ -3,7 +3,7 @@ import type { TreeFolder } from "../api/notes";
 import { fileKindOf, folderOf, titleOf } from "../api/paths";
 import { wordMatch } from "../palette/filter";
 import { blockList } from "./blocks";
-import { codeSpan, fenceMarker, headingLink, outline } from "./outline";
+import { codeSpans, fenceMarker, headingLink, maskCodeSpans, outline } from "./outline";
 import { splitFrontmatter } from "./properties";
 
 /**
@@ -28,12 +28,8 @@ export function linkQuery(value: string, caret: number): LinkQuery | null {
   const lineEnd = value.indexOf("\n", caret);
   const whole = value.slice(lineStart, lineEnd < 0 ? value.length : lineEnd);
   const column = caret - lineStart;
-  let masked = whole;
-  for (const span of whole.matchAll(codeSpan)) {
-    const end = span.index + span[0].length;
-    if (span.index < column && column < end) return null;
-    masked = masked.slice(0, span.index) + " ".repeat(span[0].length) + masked.slice(end);
-  }
+  if (codeSpans(whole).some(([start, end]) => start < column && column < end)) return null;
+  const masked = maskCodeSpans(whole);
   const at = lineQuery(whole.slice(0, column), masked.slice(0, column), lineStart);
   if (!at) return null;
   // Only now, with a link on the line, the text above is scanned for an open fence: this runs on every keystroke.

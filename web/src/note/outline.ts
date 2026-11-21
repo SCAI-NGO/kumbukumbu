@@ -4,15 +4,117 @@ import { linkLabel } from "./wikiLinks";
 /** A heading of the note: its level (1–6), its text as shown, and its 1-based source line. */
 export type Heading = { level: number; text: string; line: number };
 
-// A code span (`` `…` ``, its backticks paired by count), in which `%%` is text.
-export const codeSpan = /(`+)[\s\S]*?(?<!`)\1(?!`)/g;
+/**
+ * The code spans of the text, start and end, in which `%%` is text: as the pattern `` (`+)[\s\S]*?(?<!`)\1(?!`) `` finds
+ * them, in one pass (the pattern is cubic on backticks). An opening run of backticks closes at the next run of exactly
+ * its length, else at the next of the longest shorter length that has one; the Core's `SectionAddress.MaskCodeSpans`
+ * pairs them alike.
+ */
+export function codeSpans(text: string): [number, number][] {
+  const runs: { start: number; length: number }[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "`") continue;
+    const start = i;
+    while (text[i + 1] === "`") i++;
+    runs.push({ start, length: i - start + 1 });
+  }
+  const spans: [number, number][] = [];
+  if (runs.length < 2) return spans;
+  const byLength = new Map<number, number[]>();
+  runs.forEach((run, r) => {
+    const list = byLength.get(run.length);
+    if (list) list.push(r);
+    else byLength.set(run.length, [r]);
+  });
+  for (let r = 0; r < runs.length; r++) {
+    for (let length = runs[r].length; length >= 1; length--) {
+      const list = byLength.get(length);
+      if (!list) continue;
+      // The first run of that length after r.
+      let lo = 0;
+      let hi = list.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (list[mid] <= r) lo = mid + 1;
+        else hi = mid;
+      }
+      if (lo === list.length) continue;
+      const closer = list[lo];
+      spans.push([runs[r].start, runs[closer].start + length]);
+      r = closer;
+      break;
+    }
+  }
+  return spans;
+}
 
 /** The text with its code spans blanked, so `%%` is found where it starts or ends a comment, at the same places. */
-const masked = (text: string) => text.replace(codeSpan, (span) => " ".repeat(span.length));
+export function maskCodeSpans(text: string): string {
+  let masked = "";
+  let from = 0;
+  for (const [start, end] of codeSpans(text)) {
+    masked += text.slice(from, start) + " ".repeat(end - start);
+    from = end;
+  }
+  return masked + text.slice(from);
+}
+
+/** For each position, the first position at or after it that holds `c`, else the text's length. */
+function nextOf(text: string, c: string): Int32Array {
+  const next = new Int32Array(text.length + 1);
+  next[text.length] = text.length;
+  for (let k = text.length - 1; k >= 0; k--) next[k] = text[k] === c ? k : next[k + 1];
+  return next;
+}
+
+/** Each Markdown link or image as its text, as `!?\[([^\]]*)\]\([^)]*\)` replaced by `$1` gives it, in one pass. */
+export function withoutMarkdownLinks(text: string): string {
+  const nextBracket = nextOf(text, "]");
+  const nextParen = nextOf(text, ")");
+  let result = "";
+  for (let i = 0; i < text.length; ) {
+    const open = text[i] === "!" && text[i + 1] === "[" ? i + 1 : i;
+    if (text[open] === "[") {
+      const close = nextBracket[open + 1];
+      if (close + 1 < text.length && text[close + 1] === "(" && nextParen[close + 2] < text.length) {
+        result += text.slice(open + 1, close);
+        i = nextParen[close + 2] + 1;
+        continue;
+      }
+    }
+    result += text[i++];
+  }
+  return result;
+}
+
+/** Each highlight's `==` marks gone, as `==(?=[^\s=])(.+?)(?<=[^\s=])==` replaced by `$1` gives it, in one pass. */
+export function withoutHighlights(text: string): string {
+  const plain = (c: string) => c !== "=" && !/\s/.test(c);
+  // nextCloser[k]: the first position at or after k where a closing "==" starts.
+  const nextCloser = new Int32Array(text.length + 1);
+  nextCloser[text.length] = text.length;
+  for (let k = text.length - 1; k >= 0; k--) {
+    nextCloser[k] = k >= 1 && k + 1 < text.length && text[k] === "=" && text[k + 1] === "=" && plain(text[k - 1]) ? k : nextCloser[k + 1];
+  }
+  const nextNewline = nextOf(text, "\n");
+  let result = "";
+  for (let i = 0; i < text.length; ) {
+    if (i + 3 < text.length && text[i] === "=" && text[i + 1] === "=" && plain(text[i + 2])) {
+      const close = nextCloser[i + 3];
+      if (close < text.length && nextNewline[i + 2] > close) {
+        result += text.slice(i + 2, close);
+        i = close + 2;
+        continue;
+      }
+    }
+    result += text[i++];
+  }
+  return result;
+}
 
 /** What of `text` lies outside comments, one opened before it when `open`; and whether one is open at its end. */
 function outsideComments(text: string, open: boolean): { text: string; open: boolean } {
-  const hidden = masked(text);
+  const hidden = maskCodeSpans(text);
   let shown = "";
   let from = 0;
   for (let p = hidden.indexOf("%%"); p >= 0; p = hidden.indexOf("%%", p + 2)) {
@@ -28,10 +130,7 @@ function outsideComments(text: string, open: boolean): { text: string; open: boo
  * comments gone.
  */
 export const headingText = (md: string) =>
-  outsideComments(md, false)
-    .text.replace(/!?\[\[[^[\]\n]+?\]\]/g, (raw) => linkLabel(raw))
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/==(?=[^\s=])(.+?)(?<=[^\s=])==/g, "$1")
+  withoutHighlights(withoutMarkdownLinks(outsideComments(md, false).text.replace(/!?\[\[[^[\]\n]+?\]\]/g, (raw) => linkLabel(raw))))
     .replace(/(\*\*|__|\*|_|~~|`)(.+?)\1/g, "$2")
     .trim();
 
