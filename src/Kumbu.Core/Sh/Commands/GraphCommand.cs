@@ -100,6 +100,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
     {
         if (options.Has("out") && options.Has("in")) return "graph: --out and --in are exclusive: give one";
         if (options.Has("top") && mode != "hubs") return "graph: -n applies to --hubs only";
+        if (options.Values("tag").Count > GraphFilter.MaxFilters) return $"graph: --tag can be given at most {GraphFilter.MaxFilters} times";
         if (mode is "orphans" or "hubs" or "unresolved")
         {
             foreach (var local in new[] { "depth", "cap", "out", "in" }) if (options.Has(local)) return $"graph: --{local} applies to a local graph only";

@@ -12,6 +12,10 @@ namespace Kumbu.Core.Graph;
 public sealed record GraphFilter(IReadOnlyList<VaultPath> Paths, IReadOnlyList<string> Tags,
     bool Days = true, bool Attachments = true, bool Ghosts = true, bool Archive = false)
 {
+    /// <summary>How many paths and how many tags a filter takes at most, by every way in: a person picks a handful, and each
+    /// costs a pass over the notes, so a query that repeats them by the thousand is refused before the walk.</summary>
+    public const int MaxFilters = 50;
+
     public static GraphFilter All { get; } = new([], []);
 }
 

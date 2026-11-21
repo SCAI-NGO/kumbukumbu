@@ -43,9 +43,8 @@ public sealed record GraphPathsView(
 /// versions (several vaults: in the order asked), which changes with a link or a rename and not with prose.</summary>
 public static class GraphApi
 {
-    /// <summary>How many <c>path</c> and how many <c>tag</c> a filter takes at most: a person picks a handful, and each costs a
-    /// pass over the notes, so a query that repeats them by the thousand is refused before the walk.</summary>
-    public const int MaxFilters = 50;
+    /// <summary>How many <c>path</c> and how many <c>tag</c> a filter takes at most (<see cref="GraphFilter.MaxFilters"/>).</summary>
+    public const int MaxFilters = GraphFilter.MaxFilters;
 
     public static void MapGraphApi(this IEndpointRouteBuilder app)
     {
