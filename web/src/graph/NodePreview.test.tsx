@@ -27,7 +27,7 @@ function show(node: GNode) {
   const fetch = fakeApi({ "GET /api/graph/node": () => json(200, detail) });
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <NodePreview node={node} anchor={{ x: 40, y: 60 }} />
+      <NodePreview node={node} anchor={{ x: 40, y: 60 }} width={560} />
     </QueryClientProvider>,
   );
   return fetch;
