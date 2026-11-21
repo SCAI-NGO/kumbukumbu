@@ -268,7 +268,12 @@ describe("Recent changes", () => {
   });
 
   it("hiding the discreet vaults clears the filters, which may name one", async () => {
-    for (const change of [() => useDiscreet.setState({ revealed: false }), () => useDiscreet.setState({ names: new Set() })]) {
+    for (const change of [
+      () => useDiscreet.setState({ revealed: false }),
+      () => useDiscreet.setState({ names: new Set() }),
+      // Marked discreet in another session: the vault leaves the list and joins those gone.
+      () => useDiscreet.setState({ gone: new Set(["Work"]) }),
+    ]) {
       const { last } = api(() => view([certificate, sketch, garden]), ["Home", "Skills", "Work"], () => ["Home"]);
       renderApp("/recent");
       await page();
@@ -285,6 +290,7 @@ describe("Recent changes", () => {
       await waitFor(() => expect([last().getAll("skip"), last().get("words"), last().get("flag")]).toEqual([[], null, null]));
       cleanup();
       useDiscreet.getState().reset();
+      useDiscreet.setState({ gone: new Set() });
     }
   });
 
