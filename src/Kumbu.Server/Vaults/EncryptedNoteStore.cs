@@ -891,6 +891,14 @@ public sealed class EncryptedNoteStore(
             }
         }
 
+        // The owner's own key is hers to spend: while her account is deactivated, or gone, her vault is searched by words.
+        var ownerAway = vaults.Where(a => a.Vault.EmbeddingProvider == Search.Byok.Provider && catalog.OwnerInactive(a.Id)).ToList();
+        if (ownerAway.Count > 0)
+        {
+            vaults = vaults.Except(ownerAway).ToList();
+            unavailable.Add((Kumbu.Core.Search.SemanticState.Off, "its owner's account is deactivated, and its owner's own key isn't used meanwhile", ownerAway));
+        }
+
         // By route: per provider, and per key for vaults on people's own keys (EmbeddingProviders.RouteOf).
         var groups = vaults.GroupBy(v => index.Providers.RouteOf(v.Vault), StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
         if (groups.Count == 0 && unavailable.Count == 0)

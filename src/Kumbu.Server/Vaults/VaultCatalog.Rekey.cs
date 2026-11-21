@@ -155,6 +155,9 @@ public sealed partial class VaultCatalog
     /// throw; and nothing is indexed of a shared vault whose owner's account is deactivated (collab design §7.4).</summary>
     internal bool MayIndex(UnlockedVault vault) => IsCurrentObject(vault) && !_ownerInactive.ContainsKey(vault.Id);
 
+    /// <summary>Whether this process found the owner of <paramref name="vaultId"/> deactivated, or her account deleted.</summary>
+    internal bool OwnerInactive(string vaultId) => _ownerInactive.ContainsKey(vaultId);
+
     private bool IsCurrentObject(UnlockedVault vault) =>
         !vault.Pending && !vault.Deleted && !IsDeleted(vault.Id) && !IsBusy(vault.Id) && HasCurrentKey(vault);
 

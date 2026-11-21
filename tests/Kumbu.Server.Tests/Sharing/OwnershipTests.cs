@@ -5,6 +5,7 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Tests.Vaults;
 using Kumbu.Server.Vaults;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -48,7 +49,8 @@ public sealed class OwnershipTests(MongoFixture fixture)
     private Deletion Deletion()
     {
         var list = new DeletionList(Options.Create(new KumbuOptions()), NullLogger<DeletionList>.Instance);
-        return new(Db, Catalog(), Users(), list, new RestoredDeletions(Db, list), Hub(), _time, NullLogger<Deletion>.Instance);
+        return new(Db, Catalog(), Users(), list, new RestoredDeletions(Db, list), Hub(), _time,
+            new Kumbu.Server.Search.ByokDrivers(new ServiceCollection().AddHttpClient().BuildServiceProvider().GetRequiredService<IHttpClientFactory>(), NullLoggerFactory.Instance, _time), NullLogger<Deletion>.Instance);
     }
 
     private async Task<(User User, byte[] Key)> SignedInAsync(string username, string role = Roles.User)

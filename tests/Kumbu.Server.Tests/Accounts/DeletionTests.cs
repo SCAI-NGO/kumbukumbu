@@ -4,6 +4,7 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -49,7 +50,9 @@ public sealed class DeletionTests(MongoFixture fixture)
     private DeletionList List() =>
         new(Options.Create(new KumbuOptions { Deletions = new DeletionsOptions { Path = _listPath } }), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<DeletionList>());
 
-    private Deletion Deletion() => new(_db, Catalog(), Users(), List(), Restored(), Hub(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+    private Deletion Deletion() => new(_db, Catalog(), Users(), List(), Restored(), Hub(), _time, Drivers(), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+
+    private Kumbu.Server.Search.ByokDrivers Drivers() => new(new ServiceCollection().AddHttpClient().BuildServiceProvider().GetRequiredService<IHttpClientFactory>(), NullLoggerFactory.Instance, _time);
 
     private RestoredDeletions Restored() => new(_db, List());
 

@@ -1370,6 +1370,23 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         return before == Search.Byok.Provider && vault.EmbeddingProvider != Search.Byok.Provider;
     }
 
+    /// <summary>
+    /// The owner's key leaves each of <paramref name="vaultIds"/> this process holds, her account being deleted: the copy
+    /// and the choice go from the stored meta (a vault not held loses its copy at its next unlock, the key's owner being
+    /// gone), and the keys they held are answered, for <see cref="Search.ByokDrivers.Drop"/>.
+    /// </summary>
+    internal async Task<IReadOnlyList<string>> LeaveOwnersKeyAsync(IEnumerable<string> vaultIds, CancellationToken ct)
+    {
+        var keys = new List<string>();
+        foreach (var vault in vaultIds.Select(Current).OfType<UnlockedVault>())
+        {
+            if (vault.EmbeddingKey is { } key) keys.Add(key);
+            await FollowEmbeddingKeyAsync(vault, null, null, ct);
+        }
+
+        return keys;
+    }
+
     /// <summary>The stored meta sealed again as <paramref name="change"/> has it (null: left as it is), under the vault's
     /// gate and conditional on the bytes read; then the working set follows.</summary>
     private async Task ChangeEmbeddingsAsync(UnlockedVault vault, Func<VaultMeta, VaultMeta?> change, CancellationToken ct)

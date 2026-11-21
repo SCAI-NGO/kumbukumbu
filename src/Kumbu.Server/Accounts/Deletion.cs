@@ -62,7 +62,7 @@ public sealed record DeletedUser(
 /// </summary>
 public sealed class Deletion(
     IMongoDatabase db, VaultCatalog catalog, UserCatalog users, DeletionList list, RestoredDeletions restored, Sync.SyncHub hub, TimeProvider time,
-    ILogger<Deletion> log)
+    Search.ByokDrivers drivers, ILogger<Deletion> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -330,6 +330,8 @@ public sealed class Deletion(
         if (FaultAt is { } fault) await fault("after-commit");
         // Nothing more of a closing vault is indexed in this process; others learn it from the members' next request.
         foreach (var vaultId in closing.Keys) catalog.OwnerActive(vaultId, false);
+        // Her own key isn't used for her closing vaults any more, nor kept in them or in this process.
+        foreach (var key in await catalog.LeaveOwnersKeyAsync(closing.Keys, ct)) drivers.Drop(key);
         // Her sockets close, and the members' drop a vault gone or hold a closing one read-only, before the answer.
         await TellHubAsync(userId, owned);
         if (revokedCount > 0) log.LogInformation("{Count} open invitations of deleted user {UserId} revoked", revokedCount, userId);
