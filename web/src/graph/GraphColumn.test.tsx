@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
+import { NO_SUCH_NOTE } from "../discreet/errorText";
 import { useEditor } from "../state/editor";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json } from "../test/app";
@@ -82,10 +83,10 @@ function show({ local = (): Response | Promise<Response> => json(200, graph), pa
     ...(paths ? { "GET /api/graph/paths": paths } : {}),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const ui = (path = BUDGET) => (
+  const ui = (path = BUDGET, collapsed = hidden) => (
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/notes/Work/Budget.md"]}>
-        <GraphColumn path={path} otherPath={otherPath} hidden={hidden} />
+        <GraphColumn path={path} otherPath={otherPath} hidden={collapsed} />
         <Where />
       </MemoryRouter>
     </QueryClientProvider>
@@ -111,15 +112,47 @@ describe("GraphColumn", () => {
   });
 
   it("stops the simulation while hidden", async () => {
-    show({ hidden: true });
+    const { view, ui } = show();
+    await screen.findByTestId("canvas");
+    view.rerender(ui(BUDGET, true));
     await waitFor(() => expect(canvas.running).toBe(false));
   });
 
   it("says what went wrong, and asks again on Try again", async () => {
-    const { fetch } = show({ local: () => json(404, { error: "There is no note at that path." }) });
-    expect(await screen.findByText("There is no note at that path.")).toBeInTheDocument();
+    const { fetch } = show({ local: () => json(503, { error: "This vault is being re-encrypted. Try again in a moment." }) });
+    expect(await screen.findByText("This vault is being re-encrypted. Try again in a moment.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(asked(fetch, "/api/graph/local")).toHaveLength(2));
+  });
+
+  // The app's rule for a vault it doesn't name, or a discreet one: a 404 is said without its path.
+  it("says a missing note without its path", async () => {
+    show({ local: () => json(404, { error: "There is no note at /Work/Budget.md." }) });
+    expect(await screen.findByText(NO_SUCH_NOTE)).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Graph" })).not.toHaveTextContent("/Work/Budget.md");
+  });
+
+  it("asks nothing of the graph while collapsed, and shows the last graph at once when expanded", async () => {
+    const { fetch, view, ui, client } = show({ otherPath: "/Work/Alpha.md", paths: () => json(200, { paths: [], why: "not_connected" }) });
+    await screen.findByText("Other pane: not connected");
+    view.rerender(ui(BUDGET, true));
+    await act(() => client.invalidateQueries({ queryKey: ["graph"] }));
+    expect(asked(fetch, "/api/graph/local")).toHaveLength(1);
+    expect(asked(fetch, "/api/graph/paths")).toHaveLength(1);
+    view.rerender(ui(BUDGET, false));
+    expect(screen.getByTestId("canvas")).toBeInTheDocument();
+  });
+
+  it("asks nothing when it starts collapsed", async () => {
+    const { fetch } = show({ hidden: true, otherPath: "/Work/Alpha.md", paths: () => json(200, { paths: [], why: "not_connected" }) });
+    await waitFor(() => expect(asked(fetch, "/api/vaults/Work/tree")).toHaveLength(1));
+    expect(asked(fetch, "/api/graph/local")).toHaveLength(0);
+    expect(asked(fetch, "/api/graph/paths")).toHaveLength(0);
+  });
+
+  it("names its toolbar apart from the column", () => {
+    show({ local: () => new Promise<Response>(() => {}) });
+    expect(screen.getByRole("toolbar", { name: "Graph options" })).toBeInTheDocument();
   });
 
   it("says it couldn't draw the graph when the server gives no reason", async () => {
@@ -220,6 +253,19 @@ describe("GraphColumn", () => {
     await user.keyboard("{Control>}");
     await user.click(plan);
     await user.keyboard("{/Control}");
+    expect(screen.getByTestId("where")).toHaveTextContent("/notes/Work/Budget.md?beside=Work/Plan.md");
+  });
+
+  it("opens a note from the list beside on Cmd+click", async () => {
+    useEditor.getState().openNote(BUDGET);
+    show();
+    const user = userEvent.setup();
+    await screen.findByText("Similarity not measured yet");
+    await user.click(screen.getByRole("button", { name: "List" }));
+    const plan = within(screen.getByRole("list", { name: "Neighbours" })).getByRole("button", { name: "Plan" });
+    await user.keyboard("{Meta>}");
+    await user.click(plan);
+    await user.keyboard("{/Meta}");
     expect(screen.getByTestId("where")).toHaveTextContent("/notes/Work/Budget.md?beside=Work/Plan.md");
   });
 

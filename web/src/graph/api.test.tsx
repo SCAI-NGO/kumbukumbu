@@ -57,6 +57,29 @@ describe("useLocalGraph", () => {
     expect(result.current.data).toEqual(graph);
     expect(result.current.isError).toBe(false);
   });
+  // "Hide again" removes a discreet vault's queries: no answer may outlive them, and the next one is asked in full.
+  it("sends no ETag once the query has been removed", async () => {
+    const fetch = fakeApi({
+      "GET /api/graph/local": () => new Response(JSON.stringify(graph), { status: 200, headers: { "Content-Type": "application/json", ETag: '"v1"' } }),
+    });
+    const { result, queryClient, unmount } = setup(() => useLocalGraph("/Work/C.md", filters));
+    await waitFor(() => expect(result.current.data).toEqual(graph));
+    unmount();
+    queryClient.removeQueries();
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    const again = renderHook(() => useLocalGraph("/Work/C.md", filters), { wrapper });
+    await waitFor(() => expect(again.result.current.data).toEqual(graph));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1][0].headers.get("If-None-Match")).toBeNull();
+  });
+
+  it("asks nothing while not enabled", async () => {
+    const fetch = fakeApi({});
+    const { result } = setup(() => useLocalGraph("/Work/A.md", filters, false));
+    await act(() => new Promise((r) => setTimeout(r, 10)));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });
 
 describe("useGraphPaths", () => {

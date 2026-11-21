@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { HttpError } from "../api/client";
 import { useTree } from "../api/notes";
 import { vaultOf, viewUrl } from "../api/paths";
+import { useErrorTextFor } from "../discreet/errorText";
 import { useOpenNote } from "../shell/openInPane";
 import { useGraphPaths, useLocalGraph, type GraphFilters, type GraphPathsView } from "./api";
 import GraphCanvas from "./GraphCanvas";
@@ -57,9 +58,10 @@ export default function GraphColumn({ path, otherPath, hidden }: { path: string;
   // The filters alone, so the size or a layer switched never asks the server again.
   const { depth, days, attachments, ghosts } = prefs;
   const filters = useMemo<GraphFilters>(() => ({ depth, days, attachments, ghosts }), [depth, days, attachments, ghosts]);
-  const local = useLocalGraph(path, filters);
+  const local = useLocalGraph(path, filters, !hidden);
   const tree = useTree(vaultOf(path));
-  const other = useGraphPaths(path, otherPath, filters);
+  const errorFor = useErrorTextFor(path);
+  const other = useGraphPaths(path, otherPath, filters, !hidden);
   const [fitSignal, setFitSignal] = useState(0);
   const openNote = useOpenNote();
   const navigate = useNavigate();
@@ -114,7 +116,7 @@ export default function GraphColumn({ path, otherPath, hidden }: { path: string;
 
   return (
     <aside id={graphColumnId} aria-label="Graph" hidden={hidden} className="flex w-[560px] flex-none flex-col border-l border-line bg-surface">
-      <div role="toolbar" aria-label="Graph" className="flex flex-none items-center gap-1 border-b border-line px-3 py-2">
+      <div role="toolbar" aria-label="Graph options" className="flex flex-none items-center gap-1 border-b border-line px-3 py-2">
         <div role="group" aria-label="Depth" className="flex flex-none overflow-hidden rounded-md border border-line">
           {([1, 2, 3] as const).map((d) => (
             <button
@@ -159,7 +161,7 @@ export default function GraphColumn({ path, otherPath, hidden }: { path: string;
       <div ref={body} onPointerMove={pointed} onFocus={focused} className="relative flex min-h-0 flex-1 flex-col">
         {local.isError && !model ? (
           <div className="m-auto flex flex-col items-center gap-3 px-6 text-center text-sm text-muted">
-            <p>{local.error instanceof HttpError && local.error.message ? local.error.message : "Couldn't draw the graph."}</p>
+            <p>{local.error instanceof HttpError && local.error.message ? errorFor(local.error) : "Couldn't draw the graph."}</p>
             <button
               type="button"
               onClick={() => local.refetch()}
