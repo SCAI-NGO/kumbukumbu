@@ -136,6 +136,8 @@ A window can be open over a note of a discreet vault when the vault hides again 
 
 The same holds when the note behind a window moves or goes because another session renames or hides its vault: the window stays open and ✕ shows the new place (the renamed note, or the vault list), and the old address stays in the history before it, as it does without a window. Why: the sync socket's moves are not the person's, so they mustn't cost what she typed.
 
+A vault deleted from a window (Settings → Vaults), or left from one, goes the same way: the location behind becomes the vault list, or the other pane's note, and ✕ shows it, the list with a line that says why ("Diary was deleted.", "You no longer have access to Diary."; `useLeaveGoneVault`). Decided 2026-11-21 with the maintainer: as I49 does for a discreet vault, and the line so that the note's going doesn't read as a fault.
+
 ## The how (approach A, chosen)
 
 Three ways were considered:
@@ -166,6 +168,7 @@ Test-first (Vitest), at least:
 - The backdrop closes light windows only.
 - Moving inside a window (entries, tabs) adds no history entry: Back after Appearance → Security → Access closes the window, and Back after closing doesn't reopen it.
 - A discreet vault hiding while a window is open over its note: the window stays, ✕ then shows the vault list.
+- A vault deleted in Settings while its note is behind the window: ✕ shows the vault list with "<vault> was deleted."
 - The redirects of every old address, anchors included.
 - The navigation: current entry marked (`aria-current="page"`), the phone's tab opens and folds it, choosing folds it.
 - A secret on show locks the navigation and the tab; ✕, Esc and Back ask before leaving.

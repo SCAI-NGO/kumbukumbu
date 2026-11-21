@@ -82,6 +82,8 @@ function SearchLoadFailed({ onClose }: { onClose(): void }) {
 /** `/` without a last note, or asked for ("All vaults" in the switcher): the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
   const vaults = useVaults();
+  // Why the shell came here, when a vault went from under a window (`useLeaveGoneVault`).
+  const notice = (useLocation().state as { notice?: string } | null)?.notice;
   const activeVault = useEditor((s) => s.activeVault);
   const open = (vault: string) => {
     useEditor.getState().setActiveVault(vault);
@@ -122,6 +124,11 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7">
       <h1 className="text-[28px] leading-tight font-bold text-text">Your vaults</h1>
+      {notice && (
+        <p role="status" className="mt-2 text-text-body">
+          {notice}
+        </p>
+      )}
       <ul aria-label="Your vaults" className="mt-4 flex flex-col gap-2">
         {own.map(item)}
       </ul>

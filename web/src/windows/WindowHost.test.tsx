@@ -243,6 +243,37 @@ describe("a window over the notes", () => {
     await waitFor(() => expect(document.body.textContent).not.toContain("Tagebuch"));
   });
 
+  it("closes to the vault list, saying why, once the vault behind it was deleted in it", async () => {
+    let vaults = [vault("Work"), vault("Diary")];
+    signedInApi(undefined, {
+      "GET /api/vaults": () => json(200, vaults),
+      "GET /api/vaults/Diary/tree": () => tree("Diary", ["today.md"]),
+      "GET /api/keys": () => json(200, []),
+      "POST /api/vaults/Diary/delete": () => {
+        vaults = vaults.filter((v) => v.name !== "Diary");
+        return noContent();
+      },
+    });
+    const router = renderApp("/notes/Diary/today.md");
+    await screen.findByText("Text of /Diary/today.md.");
+    await act(() => router.navigate("/settings/vaults"));
+    const section = await screen.findByRole("region", { name: "Vaults" }, { timeout: 5_000 });
+
+    await userEvent.click(await within(section).findByRole("button", { name: "Delete Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Diary?" });
+    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "Diary");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete vault" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(router.state.location.pathname).toBe("/settings/vaults");
+
+    await userEvent.click(within(screen.getByRole("dialog", { name: /Settings/ })).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(await screen.findByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Diary was deleted.");
+    expect(screen.queryByText("Text of /Diary/today.md.")).not.toBeInTheDocument();
+  });
+
   it("clears a command line that names the discreet vault as it hides, and only that one", async () => {
     let shown = true;
     signedInApi(() => shown);

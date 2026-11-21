@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { levelOf, ownerLabel, useEmbeddingProviders, useVaults, type Level, type VaultView } from "../api/notes";
 import { useLeave, useRenameAlias } from "../api/sharing";
@@ -8,7 +8,7 @@ import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonC
 import { useDialog } from "../hooks/useDialog";
 import { maintainSentence } from "../routes/rights";
 import { useEditor } from "../state/editor";
-import { afterVaultGone, movedPanesUrl, panesNow } from "./openInPane";
+import { movedPanesUrl, panesNow, useLeaveGoneVault } from "./openInPane";
 
 const levelLabels: Record<Level, string> = { read: "Read", write: "Read and write", maintain: "Maintain", owner: "Owner" };
 
@@ -27,8 +27,7 @@ function LevelText({ vault }: { vault: VaultView }) {
 export function LeaveVaultDialog({ vault, membership, onClose, onLeft }: { vault: string; membership: string; onClose(): void; onLeft?(): void }) {
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
-  const navigate = useNavigate();
-  const location = useLocation();
+  const leaveGone = useLeaveGoneVault();
   const leave = useLeave();
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
@@ -58,8 +57,7 @@ export function LeaveVaultDialog({ vault, membership, onClose, onLeft }: { vault
                 { membership, vault },
                 {
                   onSuccess: () => {
-                    const to = afterVaultGone(location, vault);
-                    if (to) navigate(to, { replace: true });
+                    leaveGone(vault, `You no longer have access to ${vault}.`);
                     onLeft?.();
                     onClose();
                   },

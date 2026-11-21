@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createContext, useCallback, useContext } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { besideOf, noteUrl, paneUrl } from "../api/paths";
 import { movedPath, useEditor, type Mode, type Side } from "../state/editor";
+import { useShellNavigate } from "../windows/context";
+import { useWindows } from "../windows/store";
 
 /** The pane a part of the page is in, for the links in it; null outside the panes (Recent changes, What's on, a window). */
 export const PaneSide = createContext<Side | null>(null);
@@ -41,6 +43,24 @@ export function afterVaultGone(location: { pathname: string; search: string }, v
   if (!left && !right) return null;
   const { panes } = useEditor.getState();
   return panes.left.path ? paneUrl(panes.left.path, panes.right?.path ?? null) : "/";
+}
+
+/**
+ * Away from `vault` once it went in this tab (deleted, left), as `afterVaultGone` says. Done from a window (Settings),
+ * it moves the location behind instead, and ✕ then shows the vault list with `notice`, so the note's going doesn't read
+ * as a fault (decided 2026-11-21, as I49 does for a discreet vault hidden under a window).
+ */
+export function useLeaveGoneVault(): (vault: string, notice: string) => void {
+  const location = useLocation();
+  const navigate = useShellNavigate();
+  return useCallback(
+    (vault: string, notice: string) => {
+      const { open, behind } = useWindows.getState();
+      const to = afterVaultGone(open && behind ? behind : location, vault);
+      if (to) navigate(to, { replace: true, state: open && to === "/" ? { overview: true, notice } : undefined });
+    },
+    [location, navigate],
+  );
 }
 
 /** Where a link to a note leads from here: into the pane it is shown in, else the focused one (workspace spec §3). */
