@@ -312,7 +312,7 @@ public static class NoteApi
             var driver = key is null ? null : byok.For(key);
             list.Add(new EmbeddingProviderView(
                 Byok.Provider, Byok.Preset.Label!, Byok.Preset.Description, true, driver?.State == SemanticState.Ready,
-                key is null ? "save your TensorX key in Settings, Vaults first" : driver!.Reason, false, key is null));
+                key is null ? "save your TensorX key in Settings, External first" : driver!.Reason, false, key is null));
         }
 
         return TypedResults.Ok(list.ToArray());
@@ -440,7 +440,7 @@ public static class NoteApi
     {
         if (provider == Byok.Provider && index.Providers.Byok is not null)
         {
-            return await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) ?? throw ApiErrors.BadRequest("Save your TensorX key in Settings, Vaults first.");
+            return await keys.GetAsync(caller.User!.Id, caller.UserKey!, ct) ?? throw ApiErrors.BadRequest("Save your TensorX key in Settings, External first.");
         }
 
         if (index.Providers.Get(provider) is null)

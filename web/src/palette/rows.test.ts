@@ -8,15 +8,20 @@ import { commandRows, noteActionRows, noteRows, staleNotes, vaultRows } from "./
 const note = (path: string, kind = "note") => ({ name: path.split("/").pop()!, path, size: 1, kind, mediaType: "text/markdown" });
 const folder = (path: string, notes: ReturnType<typeof note>[], folders: TreeFolder[] = []): TreeFolder => ({ name: path.split("/").pop()!, path, notes, folders });
 
-const off = { shared: false, marketplaces: false };
+const off = { shared: false, marketplaces: false, external: false };
 
 describe("commandRows", () => {
   it("offers the Skills tabs Shared and Marketplaces only where they are enabled", () => {
     const keys = (o: typeof off) => commandRows({ admin: false, ...o }).map((r) => r.key);
     expect(keys(off)).not.toContain("command:settings.skills.shared");
     expect(keys(off)).not.toContain("command:settings.skills.marketplaces");
-    expect(keys({ shared: true, marketplaces: false })).toContain("command:settings.skills.shared");
-    expect(keys({ shared: false, marketplaces: true })).toContain("command:settings.skills.marketplaces");
+    expect(keys({ ...off, shared: true })).toContain("command:settings.skills.shared");
+    expect(keys({ ...off, marketplaces: true })).toContain("command:settings.skills.marketplaces");
+  });
+
+  it("offers External only where the server offers a service of one's own", () => {
+    expect(commandRows({ ...off, admin: false }).map((r) => r.key)).not.toContain("command:settings.external");
+    expect(commandRows({ ...off, admin: false, external: true }).find((r) => r.key === "command:settings.external")).toMatchObject({ place: "Settings", name: "External", run: { to: "/settings/external" } });
   });
 
   it("gives admin rows only to admins", () => {

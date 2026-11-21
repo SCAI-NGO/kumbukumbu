@@ -256,7 +256,7 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
         using (var early = await ChooseAsync(user, "Garten", Byok.Provider))
         {
             Assert.Equal(HttpStatusCode.BadRequest, early.StatusCode);
-            Assert.Equal("Save your TensorX key in Settings, Vaults first.", await RestClient.ErrorAsync(early));
+            Assert.Equal("Save your TensorX key in Settings, External first.", await RestClient.ErrorAsync(early));
         }
 
         using (await SaveKeyAsync(user, Key))

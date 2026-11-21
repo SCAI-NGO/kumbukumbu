@@ -53,7 +53,7 @@ export default function ByokSection() {
   };
 
   return (
-    <Section title="Search by meaning">
+    <Section title="Embeddings">
       <p className="text-text-body">
         This server finds notes by meaning with its own model. With a TensorX key of your own, the vaults you choose are found with TensorX's model, which
         ranks better. Their text, and the searches that include them, then go to TensorX under your own contract with them.
