@@ -19,10 +19,16 @@ public sealed class AttachmentPixels(
     EncryptedNoteStore store, VaultCatalog catalog, IPdfSidecar sidecar, PdfAnalyses analyses, PdfAnalysisRunner runner, ExtractionGate extractions, RequestCaller caller)
     : IAttachmentPixels
 {
+    /// <summary>The largest SVG that is drawn, as the sidecar's <c>MAX_SVG_BYTES</c>.</summary>
+    public const long MaxSvgBytes = 4 * 1024 * 1024;
+
     /// <summary>The header is checked before the bytes leave this process: a file claiming a huge canvas is never sent to be decoded.
     /// An SVG is drawn at the size asked for, whatever canvas it claims, so its stored size goes with it and no header is checked.</summary>
     public async Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct)
     {
+        // Skia builds a large SVG's whole drawing outside the sidecar's heap, at about 80 times its size.
+        if (state.MediaType == AttachmentFormat.Svg.MediaType && state.Size > MaxSvgBytes)
+            throw new PixelsUnavailableException($"{path} is too large to draw (an SVG of more than 4 MB; cat reads its text)", PixelsProblem.TooLarge);
         var bytes = await BytesAsync(path, state, ct);
         if (state.MediaType == AttachmentFormat.Svg.MediaType)
         {

@@ -110,6 +110,10 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
   };
 }
 
+// Skia builds an SVG's whole drawing natively, outside the heap limit, at up to about 80 times its size: one of 15 MiB
+// of empty groups took its child past 1.1 GiB. The server refuses a larger one before sending it.
+export const MAX_SVG_BYTES = 4 * 1024 * 1024;
+
 // An SVG is drawn, not scaled: at the size step whatever canvas it claims, enlarged too. Its size
 // is the one the server stored from its root (width and height, else its viewBox); without one it
 // is drawn as if square, 300 × 300 (300 the width a browser gives an SVG that names none). Skia's
@@ -119,6 +123,7 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
 // entities is refused before Skia's parser, which would expand them: the server's check never lets one in
 // (an entity it ignores the declaration of is undeclared), and the two parsers should agree.
 export async function renderSvg(svg: Uint8Array, t: Target, size?: { width: number; height: number }, crop?: Crop, rotate = 0): Promise<RenderedImage> {
+  if (svg.byteLength > MAX_SVG_BYTES) throw new PdfError("The SVG is larger than 4 MiB, the most that is drawn.", "too_large");
   if (imageHeader(svg) || declaresEntities(svg)) throw notImage();
   let image: Image;
   try {

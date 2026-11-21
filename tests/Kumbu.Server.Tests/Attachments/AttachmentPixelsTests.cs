@@ -76,6 +76,25 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_svg_over_4_MiB_is_not_drawn_and_never_reaches_the_sidecar()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        var body = new string(' ', 4 * 1024 * 1024);
+        await user.CreateFileAsync("large.svg", System.Text.Encoding.UTF8.GetBytes($"<svg xmlns=\"http://www.w3.org/2000/svg\">{body}<g/></svg>"));
+        await user.CreateFileAsync("limit.svg", System.Text.Encoding.UTF8.GetBytes($"<svg xmlns=\"http://www.w3.org/2000/svg\">{body[..^60]}</svg>"));
+        var pixels = Pixels(host, user);
+
+        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(async () => await pixels.ImageAsync(At(user, "large.svg"), await StateAsync(host, user, "large.svg"), SizeStep.Small, null, 0, null, Ct));
+        await pixels.ImageAsync(At(user, "limit.svg"), await StateAsync(host, user, "limit.svg"), SizeStep.Small, null, 0, null, Ct);
+
+        Assert.Equal($"/{user.Vault}/large.svg is too large to draw (an SVG of more than 4 MB; cat reads its text)", e.Message);
+        Assert.Equal(PixelsProblem.TooLarge, e.Problem);
+        Assert.Equal([null], sidecar.SvgSizes);
+    }
+
+    [Fact]
     public async Task An_svg_claiming_a_huge_canvas_goes_to_the_sidecar_with_its_stored_size()
     {
         var sidecar = new FakePdfSidecar();
