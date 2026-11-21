@@ -23,9 +23,14 @@ type Props = {
   onSuggestion(s: Suggestion): void;
   fitSignal: number;
   running: boolean;
+  /** A click, a tap or Enter on a node selects it instead of opening it, and one on the background clears the selection. */
+  select?: boolean;
+  selectedKey?: string | null;
+  onSelect?(node: GNode | null): void;
 };
 
 const useReducedMotion = mediaQueryHook("(prefers-reduced-motion: reduce)");
+const useCoarsePointer = mediaQueryHook("(pointer: coarse)");
 
 const PADDING = 24;
 const ZOOM_MIN = 0.3;
@@ -41,6 +46,8 @@ const TITLE_BELOW = 14;
 const DRAG_SLOP = 3;
 /** The column's size until it has been measured (and in tests, where nothing is). */
 const FALLBACK_SIZE = { w: 560, h: 560 };
+/** A finger's least target, in screen pixels: 44 px across, where a node may be 4 px in radius. */
+const HIT_R = 22;
 
 const arrows: Record<string, Direction> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
 const lineColour = "color-mix(in srgb, var(--color-line) 65%, var(--color-text))";
@@ -63,13 +70,25 @@ function fit(boxes: { x: number; y: number; r: number; below: number }[], size: 
   return { x: (x0 + x1 - w) / 2, y: (y0 + y1 - h) / 2, w, h };
 }
 
+/** The view zoomed by `factor` around the graph point `p`, held within the zoom's limits; null when it goes no further. */
+function zoomAround(v: View, width: number, factor: number, p: { x: number; y: number }): View | null {
+  const zoom = width / v.w;
+  // Clamped at the limits; a fit beyond one (a wide graph) may come back from it but goes no further.
+  const target = Math.min(Math.max(ZOOM_MAX, zoom), Math.max(Math.min(ZOOM_MIN, zoom), zoom * factor));
+  const f = target / zoom;
+  if (f === 1) return null;
+  return { x: p.x - (p.x - v.x) / f, y: p.y - (p.y - v.y) / f, w: v.w / f, h: v.h / f };
+}
+
 /**
  * The local graph as SVG: edges, nodes shaped by kind and coloured by age, the centre ringed, suggested links dashed.
- * The view fits the layout as it settles until the user zooms, pans or drags; `fitSignal` or a new centre fits again.
+ * The view fits the layout as it settles until the user zooms, pinches, pans or drags; `fitSignal`, a new centre or a
+ * double tap on the background fits again. A click opens a node, or with `select` selects it.
  * The nodes are a roving focus group, entered at the centre; the arrow keys move between them.
  */
-export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy, suggestions, showSuggestions, onOpen, onHover, onSuggestion, fitSignal, running }: Props) {
+export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy, suggestions, showSuggestions, onOpen, onHover, onSuggestion, fitSignal, running, select = false, selectedKey, onSelect }: Props) {
   const reducedMotion = useReducedMotion();
+  const coarse = useCoarsePointer();
   const dark = useDarkScheme();
   const { positions, drag } = useForceLayout(nodes, edges, { centreKey, sizeBy, reducedMotion, running });
   const svg = useRef<SVGSVGElement>(null);
@@ -130,28 +149,56 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const v = viewRef.current;
-      const zoom = (el.clientWidth || FALLBACK_SIZE.w) / v.w;
-      // Clamped at the limits; a fit beyond one (a wide graph) may come back from it but goes no further.
-      const target = Math.min(Math.max(ZOOM_MAX, zoom), Math.max(Math.min(ZOOM_MIN, zoom), zoom * Math.exp(-e.deltaY * 0.002)));
-      const factor = target / zoom;
-      if (factor === 1) return;
-      const p = toGraphRef.current(e.clientX, e.clientY);
-      setManual({ x: p.x - (p.x - v.x) / factor, y: p.y - (p.y - v.y) / factor, w: v.w / factor, h: v.h / factor });
+      const next = zoomAround(viewRef.current, el.clientWidth || FALLBACK_SIZE.w, Math.exp(-e.deltaY * 0.002), toGraphRef.current(e.clientX, e.clientY));
+      if (next) setManual(next);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
   // A press on the background pans; a press on a node drags it once it has moved past the slop, and is no click then.
+  // A second finger turns either into a pinch.
   const press = useRef<{ id: string | null; clientX: number; clientY: number; view: View; moved: boolean } | null>(null);
-  const justDragged = useRef(false);
+  const justMoved = useRef(false);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  // The fingers' distance at the last step of a pinch, null without one.
+  const pinch = useRef<number | null>(null);
+  const fingers = () => {
+    const [a, b] = [...pointers.current.values()];
+    return { distance: Math.hypot(b.x - a.x, b.y - a.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  };
   const pointerDown = (e: PointerEvent<Element>, id: string | null) => {
     if (e.button !== 0) return;
-    justDragged.current = false;
-    press.current = { id, clientX: e.clientX, clientY: e.clientY, view, moved: false };
+    justMoved.current = false;
+    // The first finger of a touch starts afresh, so that a pointer whose release went astray can't make it a pinch.
+    if (e.isPrimary) pointers.current.clear();
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 1) {
+      press.current = { id, clientX: e.clientX, clientY: e.clientY, view, moved: false };
+      return;
+    }
+    const p = press.current;
+    if (p?.id && p.moved) drag(p.id, null, null);
+    press.current = null;
+    justMoved.current = true;
+    pinch.current = pointers.current.size === 2 ? fingers().distance : null;
   };
   const pointerMove = (e: PointerEvent<SVGSVGElement>) => {
+    if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch.current !== null) {
+      const { distance, x, y } = fingers();
+      if (pinch.current > 0 && distance > 0) {
+        const width = svg.current!.getBoundingClientRect().width || size.w;
+        const next = zoomAround(viewRef.current, width, distance / pinch.current, toGraph(x, y));
+        // Both fingers may move before the next render; the second step builds on the first.
+        if (next) {
+          viewRef.current = next;
+          setManual(next);
+        }
+      }
+      pinch.current = distance;
+      return;
+    }
     const p = press.current;
     if (!p) return;
     const [dx, dy] = [e.clientX - p.clientX, e.clientY - p.clientY];
@@ -169,13 +216,13 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
       drag(p.id, at.x, at.y);
     }
   };
-  const pointerUp = () => {
+  const pointerUp = (e: PointerEvent<SVGSVGElement>) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
     const p = press.current;
     press.current = null;
-    if (p?.id && p.moved) {
-      drag(p.id, null, null);
-      justDragged.current = true;
-    }
+    if (p?.moved) justMoved.current = true;
+    if (p?.id && p.moved) drag(p.id, null, null);
   };
 
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -198,18 +245,29 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
     if (n.kind !== "ghost") onOpen(n, beside);
   };
   const click = (e: MouseEvent, n: GNode) => {
-    if (justDragged.current) {
-      justDragged.current = false;
+    e.stopPropagation();
+    if (justMoved.current) {
+      justMoved.current = false;
       return;
     }
-    open(n, e.ctrlKey || e.metaKey);
+    if (select) onSelect?.(n);
+    else open(n, e.ctrlKey || e.metaKey);
+  };
+  const backgroundClick = (e: MouseEvent) => {
+    if (justMoved.current) {
+      justMoved.current = false;
+      return;
+    }
+    if (e.detail >= 2) setManual(null);
+    if (select) onSelect?.(null);
   };
 
   const rovingId = (focusId && nodes.some((n) => n.id === focusId) ? focusId : centre?.id) ?? nodes[0]?.id;
   const keyDown = (e: KeyboardEvent, n: GNode) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      open(n, e.ctrlKey || e.metaKey);
+      if (select) onSelect?.(n);
+      else open(n, e.ctrlKey || e.metaKey);
       return;
     }
     const dir = arrows[e.key];
@@ -245,6 +303,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
       onPointerMove={pointerMove}
       onPointerUp={pointerUp}
       onPointerCancel={pointerUp}
+      onClick={backgroundClick}
     >
       <g aria-hidden="true">
         {edges.map((e, i) => {
@@ -265,6 +324,9 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
         if (!p) return null;
         const r = radius(n, sizeBy);
         const ringed = n.key === centreKey || n.key === otherKey;
+        const selected = select && n.key === selectedKey;
+        // A ghost has no note to open, but can be selected.
+        const inert = n.kind === "ghost" && !select;
         const fill = n.kind === "note" || n.kind === "day" ? ageColour(n.writtenAt, now, dark) : neutral;
         const outline = dark ? undefined : { stroke: "var(--color-dim)", strokeWidth: 0.75 };
         return (
@@ -277,9 +339,10 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
             role="button"
             tabIndex={n.id === rovingId ? 0 : -1}
             aria-label={label(n)}
-            aria-disabled={n.kind === "ghost" ? true : undefined}
+            aria-disabled={inert || undefined}
+            aria-pressed={selected || undefined}
             transform={`translate(${p.x} ${p.y})`}
-            className={`focus-visible:outline-2 focus-visible:outline-accent ${n.kind === "ghost" ? "" : "cursor-pointer"}`}
+            className={`focus-visible:outline-2 focus-visible:outline-accent ${inert ? "" : "cursor-pointer"}`}
             onPointerDown={(e) => {
               e.stopPropagation();
               pointerDown(e, n.id);
@@ -294,6 +357,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
             onMouseEnter={() => hoverStart(n)}
             onMouseLeave={hoverEnd}
           >
+            {coarse && <circle data-hit r={Math.max(r, (HIT_R * view.w) / size.w)} fill="transparent" />}
             {n.kind === "ghost" ? (
               <circle r={r} fill="none" stroke={neutral} strokeWidth={1.5} />
             ) : n.kind === "attachment" ? (
@@ -302,6 +366,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
               <circle r={r} fill={fill} {...outline} />
             )}
             {ringed && <circle data-ring r={r + 4} fill="none" strokeWidth={2} opacity={n.key === centreKey ? undefined : 0.45} style={{ stroke: "var(--color-text)" }} />}
+            {selected && <circle data-selected-ring r={r + 7} fill="none" strokeWidth={2} strokeDasharray="3 2" style={{ stroke: "var(--color-accent)" }} />}
             {n.leftOut > 0 && (
               <text aria-hidden="true" x={r + 4} y={-r} fontSize={9} style={{ fill: "var(--color-dim)" }}>
                 +{n.leftOut}
@@ -324,7 +389,10 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
             transform={`translate(${at.x} ${at.y})`}
             className="cursor-pointer focus-visible:outline-2 focus-visible:outline-accent"
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => onSuggestion(s)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSuggestion(s);
+            }}
             onKeyDown={(e) => {
               if (e.key !== "Enter") return;
               e.preventDefault();
