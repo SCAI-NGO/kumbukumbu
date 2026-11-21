@@ -21,7 +21,7 @@ const answers = new Map<string, { etag: string; data: LocalGraphView }>();
 
 /** The local graph of the note or attachment at `path` (from the root), `null` while none is open. */
 export function useLocalGraph(path: string | null, filters: GraphFilters) {
-  return useQuery({
+  return useQuery<LocalGraphView>({
     queryKey: ["graph", "local", path, filters],
     enabled: path !== null,
     placeholderData: (previous) => previous,
