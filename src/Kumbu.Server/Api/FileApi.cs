@@ -219,6 +219,9 @@ public static class FileApi
         if (AttachmentFormat.LargeProblem(filePath, head.Span, skillsVault) is { } problem) throw ApiErrors.BadRequest(problem + ".");
         var dimensions = AttachmentFormat.ForPath(filePath) is { Kind: AttachmentKind.Image } ? ImageHeader.Size(head.Span) : null;
         if (await ConflictBeforeAsync(filePath, version, files, store, labels, ct) is { } conflict) return conflict;
+        // Before a byte more is stored: a path that can never be kept would leave its chunks to the sweep.
+        if (await writer.CheckLargeAsync(filePath.Value, head, version, ct) is { } refused)
+            return await RecordAsync(filePath, version, files, store, labels, _ => Task.FromResult(refused), ct);
         var services = request.HttpContext.RequestServices;
         var body = new QuietBody(request.Body, services.GetRequiredService<VaultCatalog>().LargeBodySilence, services.GetRequiredService<TimeProvider>());
 

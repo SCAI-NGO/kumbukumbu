@@ -627,6 +627,8 @@ internal sealed partial class DavWrites(
             matches = true;
             // Its size where the header reads, without the pixel limit: nothing decodes a large image (files spec, decision 12).
             var dimensions = format.Kind == AttachmentKind.Image ? ImageHeader.Size(bytes.Span) : null;
+            // Before a byte more is stored: a path that can never be kept would leave its chunks to the sweep.
+            if (await files.CheckLargeAsync(path.Value, bytes, existing?.Version, ct) is { Result: { IsError: true } early }) throw Refusal(early);
             var blob = await PutLargeAsync(files, path, bytes, copied, bound, ct);
             write = async v => (await files.WriteLargeAsync(path.Value, blob, bytes, dimensions, v, ct)).Result;
         }

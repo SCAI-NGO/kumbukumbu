@@ -108,6 +108,20 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         return await CommitAsync(path, blob.Version, version, () => Task.FromResult(state), ct);
     }
 
+    /// <summary>
+    /// What <see cref="WriteLargeAsync"/> would refuse by the path and the <paramref name="head"/> alone, asked before the
+    /// rest of the body is stored: the name, the caller's right, the format, and for a new file the vault and the room
+    /// (a folder there, a file above). Null if the bytes may follow; a conflict with the version is the record's to find.
+    /// </summary>
+    public async Task<WriteResult?> CheckLargeAsync(string pathText, ReadOnlyMemory<byte> head, string? version, CancellationToken ct)
+    {
+        var (path, format, skillsVault, refusal) = await PlaceAsync(pathText, ct);
+        if (refusal is not null) return refusal;
+        if (format is null) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {AttachmentFormat.Problem(path, head.Span, skillsVault)}");
+        if (AttachmentFormat.LargeProblem(path, head.Span, skillsVault) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
+        return version is null && await store.GetAttachmentAsync(path, ct) is null ? await CheckNewAsync(path, ct) : null;
+    }
+
     /// <summary>Where a write goes and what it may be: the path, its format (null for a note's name) and the caller's name
     /// for the skills vault; or the refusal of a path that isn't one, the caller's right, a marker in a vault's root.</summary>
     private async Task<(VaultPath Path, AttachmentFormat? Format, string? SkillsVault, WriteResult? Refusal)> PlaceAsync(string pathText, CancellationToken ct)
