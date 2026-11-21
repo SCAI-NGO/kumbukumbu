@@ -5,7 +5,7 @@ namespace Kumbu.Server.Attachments;
 
 /// <summary>
 /// An account's places at the sidecar (singleton). One <c>pdfimages</c> call per account at a time: the sidecar extracts
-/// in one worker behind a short queue. And two of the account's calls to the sidecar at a time, whatever they draw; a
+/// in one worker behind a short queue. And one of the account's calls to the sidecar at a time, whatever it draws; a
 /// further one waits for a place, up to <c>renderWait</c>, and is then busy: the sidecar's pool is shared, and one
 /// account's agents calling in parallel would otherwise keep everyone else's waiting. All of an account's credentials
 /// share its places; the dev token has its own.
@@ -13,7 +13,7 @@ namespace Kumbu.Server.Attachments;
 public sealed class ExtractionGate(TimeSpan? renderWait = null)
 {
     /// <summary>How many of an account's calls the sidecar works on at once.</summary>
-    public const int RenderPlaces = 2;
+    public const int RenderPlaces = 1;
 
     private readonly TimeSpan _renderWait = renderWait ?? TimeSpan.FromSeconds(15);
     private readonly ConcurrentDictionary<string, byte> _running = new(StringComparer.Ordinal);

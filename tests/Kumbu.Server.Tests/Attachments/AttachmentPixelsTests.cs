@@ -76,7 +76,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task One_account_renders_two_at_a_time_and_another_is_not_kept_waiting_behind_it()
+    public async Task One_account_renders_one_at_a_time_and_another_is_not_kept_waiting_behind_it()
     {
         var sidecar = new FakePdfSidecar { Delay = TimeSpan.FromMilliseconds(600) };
         await using var host = Host(app, sidecar);
@@ -95,7 +95,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var bobs = watch.Elapsed;
         await Task.WhenAll(calls);
 
-        Assert.Equal(3, sidecar.MaxInFlight);
+        Assert.Equal(2, sidecar.MaxInFlight);
         Assert.True(bobs < TimeSpan.FromMilliseconds(1_000), $"Bob waited {bobs}");
     }
 
@@ -113,7 +113,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
 
         var e = await Assert.ThrowsAsync<PixelsUnavailableException>(async () => await Task.WhenAll(calls));
         Assert.Equal("image rendering is unavailable right now; try again later", e.Message);
-        Assert.Equal(2, calls.Count(c => c.IsCompletedSuccessfully));
+        Assert.Equal(1, calls.Count(c => c.IsCompletedSuccessfully));
     }
 
     [Fact]
