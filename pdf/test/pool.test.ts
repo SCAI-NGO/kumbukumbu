@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, describe, expect, it } from "vitest";
 import { Gate, type Job, Pool } from "../src/pool.js";
+import { MEDIUM, translucentPage } from "./fixtures.js";
 
 const stub = new URL("./workers/stub.mjs", import.meta.url);
 // The stub worker understands job kinds of its own.
@@ -177,3 +178,24 @@ describe("an SVG", () => {
     expect(pool.threads).toBe(0);
   });
 });
+
+// Skia rasterises a PDF page in one native call too, inside the first encode: terminate() waits for it.
+describe("a PDF page slow to draw", () => {
+  const worker = new URL("../dist/worker.js", import.meta.url);
+  const jobs: [string, (bytes: Uint8Array) => Job][] = [
+    ["a page", (bytes) => ({ kind: "page", bytes, page: 1, target: MEDIUM, rotate: 0 })],
+    ["a region", (bytes) => ({ kind: "region", bytes, page: 1, crop: { x: 0, y: 0, w: 595, h: 842 }, rotate: 0, format: "png" })],
+  ];
+
+  it.each(jobs)("as %s is stopped at its deadline, and its slot is free at once", async (_, make) => {
+    pool = new Pool({ workers: 1, queue: 1, entry: worker });
+    const slow = await translucentPage(100_000);
+    const started = Date.now();
+    await expect(pool.run(make(slow), 2_000)).rejects.toMatchObject({ code: "timeout" });
+    while (pool.threads > 0 && Date.now() - started < 25_000) await new Promise((r) => setTimeout(r, 25));
+    expect(Date.now() - started).toBeLessThan(3_000);
+    const quick = await pool.run<{ width: number }>(make(await translucentPage(10)), 10_000);
+    expect(quick.width).toBeGreaterThan(0);
+  }, 30_000);
+});
+

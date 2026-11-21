@@ -4,8 +4,9 @@
 // can neither stall the others nor leave state behind for the next. Memory outside the heaps
 // (decoded images, canvases) is bounded only by the container's limit, which kills the whole
 // process, jobs under way included. A bounded queue holds the rest; past it a job is refused at once.
-// An SVG runs in a child process instead: Skia draws it in one native call, which terminate() can't
-// interrupt (a few filters or a fan of <use> take minutes), and a process can be killed at its deadline.
+// A job that draws runs in a child process instead: Skia draws an SVG, and rasterises a PDF page or region
+// inside its first encode, in one native call, which terminate() can't interrupt (a few filters, a fan of
+// <use> or a page of translucent fills take minutes), and a process can be killed at its deadline.
 
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -33,7 +34,7 @@ const FAILED = "The job failed.";
 
 type Pending = { job: Job; timeoutMs: number; extend?: (pages: number) => number; resolve: (v: unknown) => void; reject: (e: unknown) => void; leave?: () => void };
 
-/** A worker thread or, for an SVG, a child process: the pool's one view of both. */
+/** A worker thread or, for a job that draws, a child process: the pool's one view of both. */
 type Runner = {
   on(event: "message", f: (m: WorkerMessage) => void): void;
   on(event: "error" | "exit", f: () => void): void;
@@ -42,6 +43,9 @@ type Runner = {
 };
 
 const HEAP_MB = 384;
+
+/** The jobs that draw with Skia, run in a child process; reading a PDF's text, boxes or images stays in a thread. */
+const DRAWS: ReadonlySet<Job["kind"]> = new Set(["svg", "page", "region", "extract", "image"]);
 
 function thread(entry: URL): Runner {
   const worker = new Worker(entry, { resourceLimits: { maxOldGenerationSizeMb: HEAP_MB } });
@@ -206,7 +210,7 @@ export class Pool {
 
   private start(p: Pending) {
     p.leave?.();
-    const worker = p.job.kind === "svg" ? child(this.entry) : thread(this.entry);
+    const worker = DRAWS.has(p.job.kind) ? child(this.entry) : thread(this.entry);
     this.running.add(worker);
     const started = Date.now();
     let settled = false;

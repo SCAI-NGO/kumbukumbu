@@ -531,3 +531,13 @@ export const manyPlacementsPage = (count: number) =>
     const name = page.node.newXObject("Grey", rawImage(doc, side, side, new Uint8Array(side * side).fill(0x80), { ColorSpace: "DeviceGray", BitsPerComponent: 8 }));
     rawContent(doc, page, Array.from({ length: count }, (_, i) => `q 1 0 0 1 ${i % 500} ${800 - Math.floor(i / 500)} cm ${name} Do Q`).join("\n"));
   });
+
+/** One A4 page of half-transparent triangles: quick for pdf.js, slow for Skia's raster, which runs in one native call. */
+export async function translucentPage(count: number): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([A4.width, A4.height]);
+  page.node.setExtGState(PDFName.of("G"), doc.context.register(doc.context.obj({ Type: "ExtGState", ca: 0.5 })));
+  const text = "/G gs\n" + Array.from({ length: count }, (_, i) => `${(i % 10) / 10} 0.5 0.5 rg 0 0 m 595 0 l ${i % 595} 842 l f`).join("\n");
+  page.node.set(PDFName.of("Contents"), doc.context.register(doc.context.flateStream(text)));
+  return doc.save();
+}
