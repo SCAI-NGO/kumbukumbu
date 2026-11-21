@@ -359,7 +359,7 @@ test("blame refuses what history refuses: an attachment, a missing note, a hidde
   expect((await aliceApi.send("GET", "/api/blame/Home/Zahnarzt.md")).status()).toBe(404);
 
   // Its help and the sh tool's description.
-  expect((await mcp.sh("help blame")).text.startsWith("blame [--lines] <path>\n  Who wrote what:"), "help blame starts as §6 prints it").toBe(true);
+  expect((await mcp.sh("help blame")).text.startsWith("blame [--lines] <path>[#section]\n  Who wrote what:"), "help blame starts as §6 prints it").toBe(true);
   expect((await mcp.sh("help")).text).toMatch(/^ {2}blame \[--lines\] <path>\[#section\] +who wrote what: the writer of each run of lines of a note; of a folder: lines per writer$/m);
   const { message } = await mcp.raw("tools/list", {});
   const sh = (message?.result as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "sh");

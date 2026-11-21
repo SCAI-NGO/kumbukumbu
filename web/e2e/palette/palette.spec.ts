@@ -31,6 +31,7 @@
 // Duplicate's "not for _archive/ notes, not without write" and a card keeping `column` and losing `rank` and `moved`
 // (Vitest, duplicate.test.ts and useNoteActions; an archived note and a read-only vault need a set-up of their own).
 import type { Locator, Page } from "@playwright/test";
+import { dismissInstallHint } from "../calendar/helpers";
 import { encodePath, type Api } from "../support/api";
 import { secrets } from "../support/env";
 import { reservePassword } from "../support/session";
@@ -39,10 +40,9 @@ import { expect, onPhone, shot, test } from "../support/test";
 const noteUrl = (path: string) => `/notes/${encodePath(path)}`;
 
 async function openNote(page: Page, path: string) {
-  const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
-  await page.addLocatorHandler(hint, async () => {
-    await hint.getByRole("button", { name: "Not now" }).click();
-  });
+  // Dismissed before the page starts: a hint still up when the phone's sheet opens can't be clicked away (the shell
+  // behind a window is inert), so the locator handler alone left palette #1 failing now and then.
+  await dismissInstallHint(page);
   await page.goto(noteUrl(path));
   await expect(page.getByRole("button", { name: "Show this note in the file tree" })).toBeVisible();
 }

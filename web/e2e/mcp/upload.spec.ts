@@ -204,12 +204,12 @@ test("upload: the tool's description says what it is for, the two steps and what
   const { status, message } = await mcp.raw("tools/list", {});
   expect(status).toBe(200);
   const tools = (message?.result as { tools: { name: string; description: string }[] }).tools;
-  // Manual.UploadDescription (src/Kumbu.Core/Sh/Manual.cs:136-153), whole: enough for an agent that never reads the skill.
+  // Manual.UploadDescription (src/Kumbu.Core/Sh/Manual.cs:138-155), whole: enough for an agent that never reads the skill.
   expect(tools.find((t) => t.name === "upload")?.description).toBe(
     [
       "Put a file into a vault of Kumbu² (a Markdown second brain; read it with the sh tool): any file, an image, a",
-      "PDF, a spreadsheet, a CSV. The write tool writes notes, SVGs and a skill's text files; everything else is",
-      "uploaded here. Two steps:",
+      "PDF, a spreadsheet, a CSV. Notes and a skill's text files are written with the write tool, an SVG with",
+      "either tool; everything else is uploaded here. Two steps:",
       "",
       "1. Call upload with the path the file is to have, e.g. /Work/images/diagram.png (the vault must exist and you",
       "   need write access). It answers a one-time URL and a curl line.",

@@ -296,13 +296,15 @@ public sealed class LargeBlobTests(MongoFixture fixture)
         var at = (await Raw(world, "blob_chunks").Find(orphans).SortByDescending(d => d["at"]).FirstAsync(Ct))["at"].ToUniversalTime();
         // Its first chunk long ago, as a slow upload's: the newest decides.
         await Raw(world, "blob_chunks").UpdateOneAsync(orphans & F.Eq("n", 0), Builders<BsonDocument>.Update.Set("at", at - TimeSpan.FromHours(2)), cancellationToken: Ct);
+        // The stored file is referenced by nothing either: its head is put an hour later, so it stays within its own
+        // grace in both sweeps, however long writing the two files took on this machine.
+        Raw(world, "blobs").UpdateMany(F.Empty, Builders<BsonDocument>.Update.Set("at", at + TimeSpan.FromHours(1)), cancellationToken: Ct);
         var vault = await VaultAsync(catalog);
 
         Assert.Equal(0, await Sweep(catalog).RunAsync(vault, at + BlobSweep.Grace - TimeSpan.FromSeconds(1), Ct));
         Assert.Equal(10, Count(world, "blob_chunks"));
 
-        // Past the grace, they go; the stored file is referenced by nothing either, but still within its own grace.
-        Raw(world, "blobs").UpdateMany(F.Empty, Builders<BsonDocument>.Update.Set("at", at + TimeSpan.FromHours(1)), cancellationToken: Ct);
+        // Past the grace, they go.
         Assert.Equal(1, await Sweep(catalog).RunAsync(vault, at + BlobSweep.Grace + TimeSpan.FromSeconds(1), Ct));
         Assert.Equal(5, Count(world, "blob_chunks"));
         Assert.Equal(Random(20_000_000, 25), await ReadAsync(store, kept));
