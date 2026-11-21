@@ -17,13 +17,14 @@ const REHEAT = 0.3;
 /**
  * The graph's layout, by node id. The simulation lives in a ref and ticks on animation frames, never in React state;
  * positions are published at most once a frame. A new answer keeps the places of the nodes it shares with the last
- * one and warms the simulation gently instead of restarting it. `nodes` and `edges` must be memoised per answer: a new
- * array is a new answer, and warms the simulation again.
+ * one and warms the simulation gently instead of restarting it. An answer is new only when its nodes, radii or edges
+ * differ from the last one's; new arrays of the same graph leave the layout alone.
  */
 export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { positions: Positions; drag(id: string, x: number | null, y: number | null): void } {
   const { centreKey, sizeBy, reducedMotion, running } = opts;
   const sim = useRef<Simulation<SimNode, SimLink> | null>(null);
   const frame = useRef(0);
+  const signature = useRef("");
   const live = useRef(opts);
   live.current = opts;
   const [positions, setPositions] = useState<Positions>(() => new Map());
@@ -61,6 +62,13 @@ export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { po
 
   // Before the paint, so that with reduced motion the first thing shown is the layout at rest.
   useLayoutEffect(() => {
+    // A hint that changes only a time or a size brings new arrays of the same graph: the layout stays, with no reheat.
+    const keyOf = new Map(nodes.map((n) => [n.id, n.key]));
+    // Only edges with both ends in the answer: forceLink throws on an id it cannot find.
+    const kept = edges.filter((e) => keyOf.has(e.source) && keyOf.has(e.target));
+    const shape = JSON.stringify([centreKey, nodes.map((n) => [n.id, n.key, radius(n, sizeBy)]), kept.map((e) => [e.source, e.target])]);
+    if (sim.current && shape === signature.current) return;
+    signature.current = shape;
     halt();
     // The last layout, shifted so the new centre's old place is the origin: everything keeps its place around it.
     const old = sim.current?.nodes() ?? [];
@@ -73,9 +81,7 @@ export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { po
       const p = seeds.get(n.id)!;
       return { id: n.id, key: n.key, r: collideRadius(radius(n, sizeBy)), centre: p.fixed, x: p.x, y: p.y, ...(p.fixed ? { fx: 0, fy: 0 } : {}) };
     });
-    const keyOf = new Map(nodes.map((n) => [n.id, n.key]));
-    // Only edges with both ends in the answer: forceLink throws on an id it cannot find.
-    const links = edges.filter((e) => keyOf.has(e.source) && keyOf.has(e.target)).map((e): SimLink => ({ source: e.source, target: e.target, s: similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score }));
+    const links = kept.map((e): SimLink => ({ source: e.source, target: e.target, s: similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score }));
     const forces = (s: Simulation<SimNode, SimLink>) =>
       s
         .force("link", forceLink<SimNode, SimLink>(links).id((n) => n.id).distance((l) => linkDistance(l.s)).strength((l) => linkStrength(l.s)))

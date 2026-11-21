@@ -80,6 +80,28 @@ describe("useForceLayout", () => {
     expect(frames.size).toBe(0);
   });
 
+  // A hint that changes only a time or a size gives new arrays of the same graph: the layout stays as it is.
+  it("neither re-seeds nor warms the layout for new arrays holding the same graph", () => {
+    const { result, rerender } = renderHook(({ g }: { g: ReturnType<typeof star> }) => useForceLayout(g.nodes, g.edges, opts()), { initialProps: { g: star("c") } });
+    runFrames(1000);
+    const rest = new Map(result.current.positions);
+    vi.mocked(requestAnimationFrame).mockClear();
+    const same = star("c");
+    same.nodes = same.nodes.map((n) => ({ ...n, writtenAt: "2026-11-21T10:00:00Z", size: 12 }));
+    rerender({ g: same });
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+    expect(result.current.positions).toEqual(rest);
+  });
+
+  it("warms the layout again when a radius changes", () => {
+    const { rerender } = renderHook(({ g }: { g: ReturnType<typeof star> }) => useForceLayout(g.nodes, g.edges, opts()), { initialProps: { g: star("c") } });
+    runFrames(1000);
+    const more = star("c");
+    more.nodes = more.nodes.map((n) => (n.id === "n4" ? { ...n, in: 40 } : n));
+    rerender({ g: more });
+    expect(frames.size).toBe(1);
+  });
+
   it("cancels its pending frame on unmount", () => {
     const { nodes, edges } = star("c");
     const { unmount } = renderHook(() => useForceLayout(nodes, edges, opts()));
