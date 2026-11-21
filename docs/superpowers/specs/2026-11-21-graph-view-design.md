@@ -78,8 +78,8 @@ Every edge has a similarity `s` in [0, 1] (§7).
 - **Physical:** link distance = `minimum + (1 − s) × span`, link strength grows with `s`; similar notes pull together and clusters form by meaning.
 - **A minimum distance holds even at `s` = 1.0** (maintainer): a collision force with each node's radius plus a gap, so large nodes keep more room.
 - The focused note is pinned in the middle.
-- **Positions are kept** across answers: nodes are matched by path (a ghost by its title), a node already placed keeps its place, new ones start beside a neighbour that is placed and float in. The simulation is warmed again gently, not restarted.
-- **Zoom and pan:** the wheel (or a pinch) zooms, dragging the background pans, a **Fit** button in the toolbar brings every node into view; a new centre fits again. Dragging a node moves it and pins it while held, then lets it go, as in Obsidian *(Claude's call, builder check)*.
+- **Positions are kept** across answers: nodes are matched by path (a ghost by its title), a node already placed keeps its place, new ones start beside a neighbour that is placed and float in. The simulation is warmed again gently, not restarted. On a new centre the old layout is first shifted so that the new centre's old place becomes the origin, where the centre is pinned: everything around it stays where it was relative to it, so one's place isn't lost (anti-goals). An answer whose nodes, radii and edges are the same as the last one's (a `changed` nudge that only moved a time or a size) leaves the layout alone, with no reheat: otherwise every autosave would set the simulation running beside the editor (anti-goals, §6 Live).
+- **Zoom and pan:** the wheel (or a pinch) zooms, dragging the background pans, a **Fit** button in the toolbar brings every node into view; a new centre fits again. Until the user zooms, pans or drags, the view keeps following the settling layout and fits it as it spreads: a single fit on the seed positions would leave the settled layout partly off-screen. Dragging a node moves it and pins it while held, then lets it go, as in Obsidian *(Claude's call, builder check)*.
 - **Reduced motion:** with `prefers-reduced-motion`, the simulation runs to rest before the first paint and the result is shown without animation; later changes are shown at rest too.
 - The simulation stops when it has cooled, and runs at all only while the column is shown; it never holds up typing (it lives outside the editor's render, ticking with `requestAnimationFrame`).
 
@@ -115,6 +115,7 @@ export function similarity(a: string, b: string): Similarity;
 - A layer of its own, switched in the toolbar, off by default: **dashed edges** in their own colour from the focused note to a few notes it doesn't link to.
 - A click on a suggested edge (or Enter on it) opens a small card: the other note's title, "Similar in meaning, not linked", and two buttons, **Add link** and **Not related**, both disabled in this change with "Coming with link prediction".
 - **Data:** one function beside the similarity (`suggestedLinks(path): Suggestion[]`) that returns nothing in the product, and, in development with the mock on, two or three notes of the same vault from the tree that aren't in the neighbourhood, picked by the same hash.
+- **Placement:** the suggested notes sit on a ring of radius 140 around the centre and are not part of the layout: mock data must never move the real nodes, and a suggestion has no edges of its own to place it by.
 - Where an accepted link is written, how rejections are kept, and mutual kNN are the link prediction spec's questions (working notes "Link Prediction 2026-11-17").
 
 ## 9. Code
@@ -122,7 +123,7 @@ export function similarity(a: string, b: string): Similarity;
 - `web/src/graph/`: the column (`GraphColumn.tsx`), its toolbar, the SVG drawing, the simulation hook, the scales (size, colour, edge), the similarity and suggestion modules, the API hooks (`useLocalGraph`, `useGraphNode`, `useGraphPaths`, with query keys under `["graph", …]`).
 - `MobileShell.tsx`: renders the column after the side panel, with its toggle and shortcut, as it does the side panel.
 - `web/src/api/schema.d.ts`: the graph endpoints, generated with `pnpm gen:api` against a server built from `master`.
-- Colour ramps as theme tokens beside the existing ones (`web/src/theme/`), for every scheme.
+- The colour ramps live in `web/src/graph/ramps.ts`, two of them (dark and light) with the neutral colour, not as tokens of every scheme: §4 decided on two ramps picked by the scheme's brightness, and `contrast.test.ts` checks them on every scheme's grounds.
 - `README.md`: the graph column in the web app's description.
 
 ## 10. Tests
