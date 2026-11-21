@@ -32,14 +32,16 @@ function stored(): GraphPrefs {
 
 export function useGraphPrefs(): [GraphPrefs, (change: Partial<GraphPrefs>) => void] {
   const [prefs, setPrefs] = useState(stored);
-  const change = (c: Partial<GraphPrefs>) => {
-    const next = { ...prefs, ...c };
-    setPrefs(next);
-    try {
-      localStorage.setItem(prefsKey, JSON.stringify(next));
-    } catch {
-      // Not remembered; the choice still holds for this visit.
-    }
-  };
+  // Functional, so two changes in one tick both land; the write is the same however often React calls it.
+  const change = (c: Partial<GraphPrefs>) =>
+    setPrefs((prefs) => {
+      const next = { ...prefs, ...c };
+      try {
+        localStorage.setItem(prefsKey, JSON.stringify(next));
+      } catch {
+        // Not remembered; the choice still holds for this visit.
+      }
+      return next;
+    });
   return [prefs, change];
 }

@@ -31,4 +31,14 @@ describe("useGraphPrefs", () => {
     expect(result.current[0]).toEqual({ ...defaults, days: false, sizeBy: "length" });
     expect(JSON.parse(localStorage.getItem("kumbu.graphPrefs")!)).toEqual({ ...defaults, days: false, sizeBy: "length" });
   });
+
+  it("keeps both of two changes in one go", () => {
+    const { result } = renderHook(() => useGraphPrefs());
+    act(() => {
+      result.current[1]({ days: false });
+      result.current[1]({ ghosts: false });
+    });
+    expect(result.current[0]).toEqual({ ...defaults, days: false, ghosts: false });
+    expect(JSON.parse(localStorage.getItem("kumbu.graphPrefs")!)).toEqual({ ...defaults, days: false, ghosts: false });
+  });
 });
