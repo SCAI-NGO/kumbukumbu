@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { CalendarDays, Eye, Ghost, List, Maximize, Paperclip, Sparkles, type LucideIcon } from "lucide-react";
-import { useId, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useId, useMemo, useRef, useState, type FocusEvent, type MouseEvent, type PointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { HttpError } from "../api/client";
 import { useTree } from "../api/notes";
@@ -9,7 +9,10 @@ import { useOpenNote } from "../shell/openInPane";
 import { useGraphPaths, useLocalGraph, type GraphFilters, type GraphPathsView } from "./api";
 import GraphCanvas from "./GraphCanvas";
 import { toModel, type GNode, type SizeBy } from "./model";
+import NodePreview from "./NodePreview";
 import { similarity } from "./similarity";
+import SuggestionCard from "./SuggestionCard";
+import { suggestedLinks, type Suggestion } from "./suggestions";
 import { useGraphPrefs, type GraphPrefs } from "./useGraphPrefs";
 
 /** The column's id, for its toggle in the top bar. */
@@ -31,8 +34,6 @@ const toggles: { pref: "days" | "attachments" | "ghosts" | "preview" | "suggesti
 
 const tool =
   "flex size-8 flex-none items-center justify-center rounded-md text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-accent aria-pressed:bg-surface-2 aria-pressed:text-text aria-expanded:bg-surface-2 aria-expanded:text-text";
-
-const noop = () => {};
 
 /** The foot's line on the other pane's note: how many links away, or why it can't say. */
 function otherLine(other: GraphPathsView | "other-vault" | null | undefined): string | null {
@@ -63,8 +64,10 @@ export default function GraphColumn({ path, otherPath, hidden }: { path: string;
   const openNote = useOpenNote();
   const navigate = useNavigate();
 
+  // The last graph stands in while the next is asked for only if the note is in it; else it would show another note's.
+  const stale = local.isPlaceholderData && !local.data?.nodes.some((n) => n.path === path);
   // Memoised per answer, or the layout would warm again on every render.
-  const model = useMemo(() => (local.data ? toModel(local.data, tree.data) : null), [local.data, tree.data]);
+  const model = useMemo(() => (local.data && !stale ? toModel(local.data, tree.data) : null), [local.data, stale, tree.data]);
   const unmeasured = useMemo(() => {
     if (!model) return false;
     const keys = new Map(model.nodes.map((n) => [n.id, n.key]));
@@ -84,6 +87,30 @@ export default function GraphColumn({ path, otherPath, hidden }: { path: string;
   const clicked = (n: GNode) => (e: MouseEvent) => open(n, e.ctrlKey || e.metaKey);
 
   const otherText = otherLine(other.data);
+
+  const suggestions = useMemo(
+    () => (prefs.suggestions && model ? suggestedLinks(path, new Set(model.nodes.flatMap((n) => (n.path ? [n.path] : []))), tree.data) : []),
+    [prefs.suggestions, model, path, tree.data],
+  );
+
+  // Where the card goes: beside the pointer, or the node that has the keyboard's focus, in the body's coordinates.
+  const body = useRef<HTMLDivElement>(null);
+  const spot = useRef({ x: 0, y: 0 });
+  const at = (clientX: number, clientY: number) => {
+    const box = body.current!.getBoundingClientRect();
+    spot.current = { x: clientX - box.left, y: Math.min(clientY - box.top, box.height - 160) };
+  };
+  const pointed = (e: PointerEvent) => at(e.clientX, e.clientY);
+  const focused = (e: FocusEvent) => {
+    const r = e.target.getBoundingClientRect();
+    at(r.right, r.top + r.height / 2);
+  };
+  // Each kept with the note it was opened on, so neither outlives a new centre.
+  const [hover, setHover] = useState<{ node: GNode; anchor: { x: number; y: number }; on: string } | null>(null);
+  // With the preview off a hover only clears, so a card left over can't come back when it is switched on again.
+  const hovered = (n: GNode | null) => setHover(n && prefs.preview ? { node: n, anchor: spot.current, on: path } : null);
+  const [suggestion, setSuggestion] = useState<{ s: Suggestion; on: string } | null>(null);
+  const closeSuggestion = useCallback(() => setSuggestion(null), []);
 
   return (
     <aside id={graphColumnId} aria-label="Graph" hidden={hidden} className="flex w-[560px] flex-none flex-col border-l border-line bg-surface">
@@ -129,8 +156,8 @@ export default function GraphColumn({ path, otherPath, hidden }: { path: string;
           <Maximize size={16} strokeWidth={1.8} aria-hidden />
         </button>
       </div>
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        {local.isError ? (
+      <div ref={body} onPointerMove={pointed} onFocus={focused} className="relative flex min-h-0 flex-1 flex-col">
+        {local.isError && !model ? (
           <div className="m-auto flex flex-col items-center gap-3 px-6 text-center text-sm text-muted">
             <p>{local.error instanceof HttpError && local.error.message ? local.error.message : "Couldn't draw the graph."}</p>
             <button
@@ -148,17 +175,19 @@ export default function GraphColumn({ path, otherPath, hidden }: { path: string;
             centreKey={path}
             otherKey={otherPath}
             sizeBy={prefs.sizeBy}
-            suggestions={[]}
+            suggestions={suggestions}
             showSuggestions={prefs.suggestions}
             onOpen={open}
-            onHover={noop}
-            onSuggestion={noop}
+            onHover={hovered}
+            onSuggestion={(s) => setSuggestion({ s, on: path })}
             fitSignal={fitSignal}
             running={!hidden}
           />
         ) : (
           <p className="m-auto text-sm text-muted">Drawing the graph…</p>
         )}
+        {model && prefs.preview && hover?.on === path && <NodePreview node={hover.node} anchor={hover.anchor} />}
+        {model && suggestion?.on === path && <SuggestionCard suggestion={suggestion.s} onClose={closeSuggestion} />}
       </div>
       {prefs.list && model && (
         <div id={`${id}-list`} className="max-h-[40%] flex-none overflow-y-auto border-t border-line px-[18px] py-2">

@@ -1,25 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
+import { useEditor } from "../state/editor";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json } from "../test/app";
 import type { LocalGraphView } from "./api";
 import type { GNode } from "./model";
+import type { Suggestion } from "./suggestions";
 
-// The canvas has its own tests; here it is a button per node that opens it, and shows whether it runs.
+// The canvas has its own tests; here it is a button per node that opens it and is hovered at once, a button per
+// suggestion, and shows whether it runs.
 const canvas = vi.hoisted(() => ({ running: null as boolean | null }));
 vi.mock("./GraphCanvas", () => ({
-  default: (props: { nodes: GNode[]; running: boolean; onOpen(n: GNode, beside: boolean): void }) => {
+  default: (props: {
+    nodes: GNode[];
+    suggestions: Suggestion[];
+    showSuggestions: boolean;
+    running: boolean;
+    onOpen(n: GNode, beside: boolean): void;
+    onHover(n: GNode | null): void;
+    onSuggestion(s: Suggestion): void;
+  }) => {
     canvas.running = props.running;
     return (
       <div data-testid="canvas">
         {props.nodes.map((n) => (
-          <button key={n.id} type="button" onClick={(e) => props.onOpen(n, e.ctrlKey)}>
+          <button key={n.id} type="button" onClick={(e) => props.onOpen(n, e.ctrlKey)} onMouseEnter={() => props.onHover(n)} onMouseLeave={() => props.onHover(null)}>
             node {n.title}
           </button>
         ))}
+        {props.showSuggestions &&
+          props.suggestions.map((s) => (
+            <button key={s.path} type="button" onClick={() => props.onSuggestion(s)}>
+              suggestion {s.title}
+            </button>
+          ))}
       </div>
     );
   },
@@ -31,6 +48,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  useEditor.getState().reset();
 });
 
 const BUDGET = "/Work/Budget.md";
@@ -47,29 +65,33 @@ const graph: LocalGraphView = {
   leftOut: {},
 };
 const orphan: LocalGraphView = { nodes: [node(BUDGET, "Budget", 0)], edges: [], leftOut: {} };
-const tree = { root: { path: "/Work", name: "Work", notes: [], folders: [] } };
+const treeNote = (path: string) => ({ name: path.split("/").pop(), path, kind: "note", size: 1, writtenAt: null });
+const tree = { root: { path: "/Work", name: "Work", notes: [BUDGET, PLAN, "/Work/Alpha.md", "/Work/Elsewhere.md"].map(treeNote), folders: [] } };
+const detail = { node: node(PLAN, "Plan", 1), changed: null, created: null, createdAtLeast: false, firstParagraph: "The plan for the year." };
 
 function Where() {
   const location = useLocation();
-  return <output data-testid="where">{location.pathname}</output>;
+  return <output data-testid="where">{location.pathname + location.search}</output>;
 }
 
 function show({ local = (): Response | Promise<Response> => json(200, graph), paths, otherPath = null, hidden = false }: { local?: () => Response | Promise<Response>; paths?: () => Response; otherPath?: string | null; hidden?: boolean } = {}) {
   const fetch = fakeApi({
     "GET /api/graph/local": local,
+    "GET /api/graph/node": () => json(200, detail),
     "GET /api/vaults/Work/tree": () => json(200, tree),
     ...(paths ? { "GET /api/graph/paths": paths } : {}),
   });
-  const ui = () => (
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const ui = (path = BUDGET) => (
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/notes/Work/Budget.md"]}>
-        <GraphColumn path={BUDGET} otherPath={otherPath} hidden={hidden} />
+        <GraphColumn path={path} otherPath={otherPath} hidden={hidden} />
         <Where />
       </MemoryRouter>
     </QueryClientProvider>
   );
   const view = render(ui());
-  return { fetch, view, ui };
+  return { fetch, view, ui, client };
 }
 
 const asked = (fetch: ReturnType<typeof fakeApi>, pathname: string) =>
@@ -188,5 +210,94 @@ describe("GraphColumn", () => {
     await userEvent.click(await screen.findByRole("button", { name: "List" }));
     expect(await screen.findByText("No links yet")).toBeInTheDocument();
     expect(screen.queryByText("Similarity not measured yet")).toBeNull();
+  });
+
+  it("opens a note beside on Ctrl+click", async () => {
+    useEditor.getState().openNote(BUDGET);
+    show();
+    const user = userEvent.setup();
+    const plan = await screen.findByRole("button", { name: "node Plan" });
+    await user.keyboard("{Control>}");
+    await user.click(plan);
+    await user.keyboard("{/Control}");
+    expect(screen.getByTestId("where")).toHaveTextContent("/notes/Work/Budget.md?beside=Work/Plan.md");
+  });
+
+  it("opens an attachment from the list in its window", async () => {
+    show();
+    await screen.findByText("Similarity not measured yet");
+    await userEvent.click(screen.getByRole("button", { name: "List" }));
+    await userEvent.click(within(screen.getByRole("list", { name: "Neighbours" })).getByRole("button", { name: "scan.png" }));
+    expect(screen.getByTestId("where")).toHaveTextContent("/view/Work/scan.png");
+  });
+
+  it("says it is drawing while a note outside the last graph is asked for, not the old graph", async () => {
+    let calls = 0;
+    const { view, ui } = show({ local: () => (++calls === 1 ? json(200, graph) : new Promise<Response>(() => {})) });
+    await screen.findByText("Similarity not measured yet");
+    view.rerender(ui("/Work/Other.md"));
+    const column = screen.getByRole("complementary", { name: "Graph" });
+    await waitFor(() => expect(column).toHaveTextContent("Drawing the graph…"));
+    expect(screen.queryByTestId("canvas")).toBeNull();
+    expect(screen.queryByText("Similarity not measured yet")).toBeNull();
+  });
+
+  it("keeps the old graph while a note in it is asked for", async () => {
+    let calls = 0;
+    const { view, ui } = show({ local: () => (++calls === 1 ? json(200, graph) : new Promise<Response>(() => {})) });
+    await screen.findByText("Similarity not measured yet");
+    view.rerender(ui(PLAN));
+    await waitFor(() => expect(calls).toBe(2));
+    expect(screen.getByTestId("canvas")).toBeInTheDocument();
+  });
+
+  it("keeps a drawn graph when asking again fails", async () => {
+    let calls = 0;
+    const { client } = show({ local: () => (++calls === 1 ? json(200, graph) : new Response(null, { status: 500 })) });
+    await screen.findByText("Similarity not measured yet");
+    await act(() => client.invalidateQueries({ queryKey: ["graph", "local"] }));
+    await waitFor(() => expect(client.getQueryCache().findAll({ queryKey: ["graph", "local"] })[0].state.status).toBe("error"));
+    expect(screen.getByRole("button", { name: "node Plan" })).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't draw the graph.")).toBeNull();
+  });
+
+  it("previews a hovered node, asking once for the same node", async () => {
+    const { fetch } = show();
+    const plan = await screen.findByRole("button", { name: "node Plan" });
+    await userEvent.hover(plan);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("The plan for the year.");
+    await userEvent.unhover(plan);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await userEvent.hover(plan);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("The plan for the year.");
+    expect(asked(fetch, "/api/graph/node")).toHaveLength(1);
+  });
+
+  it("neither previews nor asks with the preview off", async () => {
+    localStorage.setItem("kumbu.graphPrefs", JSON.stringify({ preview: false }));
+    const { fetch } = show();
+    await userEvent.hover(await screen.findByRole("button", { name: "node Plan" }));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(asked(fetch, "/api/graph/node")).toHaveLength(0);
+  });
+
+  it("offers suggested links with the layer on, and opens a suggestion's card", async () => {
+    localStorage.setItem("kumbu.graph.mockSimilarity", "1");
+    localStorage.setItem("kumbu.graphPrefs", JSON.stringify({ suggestions: true }));
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: "suggestion Elsewhere" }));
+    expect(screen.getByRole("dialog", { name: "Elsewhere" })).toHaveTextContent("Similar in meaning, not linked");
+    // Only notes not in the graph are suggested.
+    expect(screen.queryByRole("button", { name: /^suggestion (Budget|Plan|Alpha)$/ })).toBeNull();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("suggests nothing with the layer off", async () => {
+    localStorage.setItem("kumbu.graph.mockSimilarity", "1");
+    show();
+    await screen.findByRole("button", { name: "node Plan" });
+    expect(screen.queryByRole("button", { name: /^suggestion / })).toBeNull();
   });
 });

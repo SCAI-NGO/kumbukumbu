@@ -17,12 +17,14 @@ const units: [Intl.RelativeTimeFormatUnit, number][] = [
   ["hour", 3_600],
   ["minute", 60],
 ];
+// Weeks and longer only where asked for: the trash's "in 28 days" counts down to a day.
+const coarseUnits: [Intl.RelativeTimeFormatUnit, number][] = [["year", 365 * 86_400], ["month", 30 * 86_400], ["week", 7 * 86_400], ...units];
 const relative = new Intl.RelativeTimeFormat("en-GB", { numeric: "auto" });
 
-/** "3 minutes ago", "yesterday", "just now". */
-export function ago(iso: string, now = Date.now()) {
+/** "3 minutes ago", "yesterday", "just now"; `coarse`, "3 weeks ago" and "last year" too. */
+export function ago(iso: string, now = Date.now(), coarse = false) {
   const seconds = (Date.parse(iso) - now) / 1000;
-  const [unit, size] = units.find(([, s]) => Math.abs(seconds) >= s) ?? [];
+  const [unit, size] = (coarse ? coarseUnits : units).find(([, s]) => Math.abs(seconds) >= s) ?? [];
   return unit ? relative.format(Math.round(seconds / size!), unit) : "just now";
 }
 
