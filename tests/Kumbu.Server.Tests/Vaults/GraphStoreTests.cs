@@ -200,6 +200,26 @@ public sealed class GraphStoreTests(MongoFixture fixture)
         Assert.InRange(vault.ApproxBytes - loaded, 2 * linkText, 20 * linkText);
     }
 
+    // Short links weigh far more than their text: measured, about 156 bytes a link of `[[a]]` in the extract and 84 in
+    // the graph (security review of 0.6.0). The figure counts them at that weight.
+    [Fact]
+    public async Task Memory_figure_counts_a_short_link_at_its_measured_weight()
+    {
+        var (world, _, store) = await WorldAsync();
+        const int links = 10_000;
+        var content = string.Concat(Enumerable.Repeat("[[a]]\n", links));
+        await WriteAsync(store, "/Work/A.md", content);
+
+        var later = world.Catalog();
+        await Store(later).GetAsync(P("/Work/A.md"), Ct);
+        var vault = later.OpenVaults.Single();
+        var loaded = vault.ApproxBytes;
+        Assert.InRange(loaded - 2L * content.Length, 150L * links, 170L * links);
+
+        await Store(later).GraphAsync(Work, Ct);
+        Assert.InRange(vault.ApproxBytes - loaded, 80L * links, 95L * links);
+    }
+
     [Fact]
     public async Task Uploading_an_attachment_redirects_a_ghost()
     {

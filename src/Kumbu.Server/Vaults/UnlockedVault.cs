@@ -779,16 +779,19 @@ public sealed class UnlockedVault
 
     private const long StateBytes = 256;
 
-    /// <summary>A link's text about twice (its raw text and the parts cut from it), and a rough allowance for the rest.</summary>
+    /// <summary>A link's text about twice (its raw text and the parts cut from it), and the rest of its record as measured.</summary>
     private static long Size(LinkExtract e) =>
-        e.Links.Sum(l => 4L * l.Raw.Length + LinkBytes) + 2L * (e.Aliases.Sum(a => a.Length) + e.Tags.Sum(t => t.Length));
+        e.Links.Sum(l => 4L * l.Raw.Length + ExtractLinkBytes) + 2L * (e.Aliases.Sum(a => a.Length) + e.Tags.Sum(t => t.Length));
 
     /// <summary>The nodes' keys and titles, the edges, and each link resolved; the extracts it shares are counted above.</summary>
     private static long Size(LinkGraph g) =>
         g.Nodes.Sum(n => 2L * (n.Key.Length + n.Title.Length) + NodeBytes) + g.Edges.Sum(e => EdgeBytes + 4L * e.Lines.Count)
-        + g.Extracts.Values.Sum(e => (long)e.Links.Count) * LinkBytes;
+        + g.Extracts.Values.Sum(e => (long)e.Links.Count) * GraphLinkBytes;
 
-    private const long LinkBytes = 64;
+    // Measured on notes of short links (`[[a]]`, one a line): about 156 bytes a link in the extract, 84 in the graph.
+    private const long ExtractLinkBytes = 136;
+
+    private const long GraphLinkBytes = 84;
 
     private const long NodeBytes = 96;
 
