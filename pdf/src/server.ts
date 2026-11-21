@@ -59,7 +59,7 @@ export function createSidecar(pool: Pool, limits: Partial<Limits> = {}, extract:
     if (!route) return error(res, 404, "not_found", "There is no such route.");
     if (route === "/healthz") return json(res, 200, { status: "ok" });
 
-    handle(route, req, EXTRACTION.has(route) ? extract : pool, ms).then(
+    handle(route, req, res, EXTRACTION.has(route) ? extract : pool, ms).then(
       (send) => send(res),
       (e: unknown) => {
         // Answered before the body is in (busy, too large, bad parameters): the rest is not wanted.
@@ -166,11 +166,15 @@ const ROUTES: Record<string, Route> = {
 const EXTRACTION = new Set(["/images/list", "/images/image", "/images/region"]);
 
 // The place in the pool is taken before the body is read, so a full pool answers busy at once and
-// bodies in memory never outnumber the jobs the pool holds.
-async function handle(route: string, req: IncomingMessage, pool: Pool, ms: Limits): Promise<Send> {
+// bodies in memory never outnumber the jobs the pool holds. A job still waiting when its client has
+// gone is dropped: the server gave up on it (its own deadline, a cancelled request), and a client
+// that sends and leaves would otherwise keep the queue full of work nobody reads.
+async function handle(route: string, req: IncomingMessage, res: ServerResponse, pool: Pool, ms: Limits): Promise<Send> {
   const q = new URL(req.url ?? "/", "http://sidecar").searchParams;
   const run = ROUTES[route]!(q, ms);
-  const slot = pool.reserve();
+  const left = new AbortController();
+  res.on("close", () => left.abort());
+  const slot = pool.reserve(left.signal);
   let body: Uint8Array;
   try {
     body = await read(req);

@@ -437,3 +437,34 @@ describe("extraction pool", () => {
     expect(await r.json()).toMatchObject({ code: "timeout" });
   });
 });
+
+describe("server, a client that leaves", () => {
+  const stub = new URL("./workers/stub.mjs", import.meta.url);
+  const pool = new Pool({ workers: 1, queue: 1, entry: stub });
+  const sidecar = createSidecar(pool, { analysisMs: 2_000 });
+  let url = "";
+
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => sidecar.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => sidecar.close(resolve));
+    await pool.close();
+  });
+
+  it("drops its queued job and frees the place", async () => {
+    const hung = fetch(url + "/analyse", { method: "POST", body: new Uint8Array(10) });
+    await new Promise((r) => setTimeout(r, 100));
+    const leaving = new AbortController();
+    const waiting = fetch(`${url}/render/page?page=1&${medium}`, { method: "POST", body: new Uint8Array(10), signal: leaving.signal });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(pool.load).toBe(2);
+    leaving.abort();
+    await expect(waiting).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(pool.load).toBe(1);
+    expect((await hung).status).toBe(504);
+  });
+});

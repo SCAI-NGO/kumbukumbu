@@ -42,6 +42,24 @@ describe("Pool", () => {
     expect(await pool.reserve().run(job({ kind: "echo", value: 2 }), 5_000)).toBe(2);
   });
 
+  it("drops a waiting job whose signal aborts, and frees its place at once", async () => {
+    pool = new Pool({ workers: 1, queue: 1, entry: stub });
+    const hung = pool.run(job({ kind: "hang" }), 1_000);
+    const leaving = new AbortController();
+    const waiting = pool.reserve(leaving.signal).run(job({ kind: "echo", value: 1 }), 5_000);
+    expect(pool.load).toBe(2);
+    leaving.abort();
+    await expect(waiting).rejects.toMatchObject({ code: "gone" });
+    expect(pool.load).toBe(1);
+    await expect(hung).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  it("drops a job whose signal aborted before it was queued", async () => {
+    pool = new Pool({ workers: 1, queue: 0, entry: stub });
+    await expect(pool.run(job({ kind: "echo", value: 1 }), 5_000, undefined, AbortSignal.abort())).rejects.toMatchObject({ code: "gone" });
+    expect(pool.load).toBe(0);
+  });
+
   it("keeps a timed-out worker's slot until its thread has gone", async () => {
     pool = new Pool({ workers: 1, queue: 1, entry: stub });
     await expect(pool.run(job({ kind: "hang" }), 100)).rejects.toMatchObject({ code: "timeout" });

@@ -19,13 +19,13 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>The pixels a session of <paramref name="user"/> gets, made by hand; <paramref name="sidecar"/> in place of the host's.</summary>
-    internal static AttachmentPixels Pixels(WebApplicationFactory<Program> host, RestClient user, IPdfSidecar? sidecar = null) => new(
+    internal static AttachmentPixels Pixels(WebApplicationFactory<Program> host, RestClient user, IPdfSidecar? sidecar = null, ExtractionGate? gate = null) => new(
         new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
         host.Services.GetRequiredService<VaultCatalog>(),
         sidecar ?? host.Services.GetRequiredService<IPdfSidecar>(),
         host.Services.GetRequiredService<PdfAnalyses>(),
         host.Services.GetRequiredService<PdfAnalysisRunner>(),
-        new ExtractionGate(),
+        gate ?? new ExtractionGate(),
         RequestCaller.ForSession(user.User, user.UserKey, DateTime.UtcNow, windowOpen: false, host.Services.GetRequiredService<VaultCatalog>()));
 
     private static VaultPath At(RestClient user, string path) => P($"/{user.Vault}/{path}");
@@ -73,6 +73,47 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
 
         Assert.Equal($"/{user.Vault}/huge.png is too large to look at (100 megapixels; the limit is 50)", e.Message);
         Assert.Equal(0, sidecar.Renders);
+    }
+
+    [Fact]
+    public async Task One_account_renders_two_at_a_time_and_another_is_not_kept_waiting_behind_it()
+    {
+        var sidecar = new FakePdfSidecar { Delay = TimeSpan.FromMilliseconds(600) };
+        await using var host = Host(app, sidecar);
+        var gate = new ExtractionGate();
+        var alice = await RestClient.NewAsync(host);
+        var bob = await RestClient.NewAsync(host);
+        await alice.CreateFileAsync("a.png", FileApiTests.Png(40, 30));
+        await bob.CreateFileAsync("b.png", FileApiTests.Png(40, 30));
+        var hers = Pixels(host, alice, gate: gate);
+        var state = await StateAsync(host, alice, "a.png");
+
+        var calls = Enumerable.Range(0, 4).Select(_ => hers.ImageAsync(At(alice, "a.png"), state, SizeStep.Small, null, 0, null, Ct)).ToList();
+        await Task.Delay(100, Ct);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await Pixels(host, bob, gate: gate).ImageAsync(At(bob, "b.png"), await StateAsync(host, bob, "b.png"), SizeStep.Small, null, 0, null, Ct);
+        var bobs = watch.Elapsed;
+        await Task.WhenAll(calls);
+
+        Assert.Equal(3, sidecar.MaxInFlight);
+        Assert.True(bobs < TimeSpan.FromMilliseconds(1_000), $"Bob waited {bobs}");
+    }
+
+    [Fact]
+    public async Task An_accounts_render_that_waits_too_long_for_its_place_is_busy()
+    {
+        var sidecar = new FakePdfSidecar { Delay = TimeSpan.FromMilliseconds(800) };
+        await using var host = Host(app, sidecar);
+        var alice = await RestClient.NewAsync(host);
+        await alice.CreateFileAsync("a.png", FileApiTests.Png(40, 30));
+        var hers = Pixels(host, alice, gate: new ExtractionGate(renderWait: TimeSpan.FromMilliseconds(200)));
+        var state = await StateAsync(host, alice, "a.png");
+
+        var calls = Enumerable.Range(0, 3).Select(_ => hers.ImageAsync(At(alice, "a.png"), state, SizeStep.Small, null, 0, null, Ct)).ToList();
+
+        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(async () => await Task.WhenAll(calls));
+        Assert.Equal("image rendering is unavailable right now; try again later", e.Message);
+        Assert.Equal(2, calls.Count(c => c.IsCompletedSuccessfully));
     }
 
     [Fact]

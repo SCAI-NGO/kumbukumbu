@@ -33,17 +33,17 @@ public sealed class AttachmentPixels(
         if (state.MediaType == AttachmentFormat.Svg.MediaType)
         {
             var size = state is { Width: int w, Height: int h } ? (w, h) : ((int, int)?)null;
-            return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => sidecar.RenderSvgAsync(bytes, size, SizeSteps.Of(step), crop, rotate, ct), e => Refused(e, "image rendering", path, null, crop, null));
+            return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => InPlaceAsync(() => sidecar.RenderSvgAsync(bytes, size, SizeSteps.Of(step), crop, rotate, ct), ct), e => Refused(e, "image rendering", path, null, crop, null));
         }
 
         if (ImageHeader.Read(bytes, out var problem) is null) throw new PixelsUnavailableException(TooLarge(path, state, problem), PixelsProblem.TooLarge);
-        return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => sidecar.RenderImageAsync(bytes, SizeSteps.Of(step), crop, rotate, frame, ct), e => Refused(e, "image rendering", path, null, crop, frame));
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => InPlaceAsync(() => sidecar.RenderImageAsync(bytes, SizeSteps.Of(step), crop, rotate, frame, ct), ct), e => Refused(e, "image rendering", path, null, crop, frame));
     }
 
     public async Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
-        return await MeasuredAsync(KumbuMetrics.RenderKind.Page, () => sidecar.RenderPageAsync(bytes, page, SizeSteps.Of(step), crop, rotate, ct), e => Refused(e, "PDF rendering", path, page, crop, null));
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Page, () => InPlaceAsync(() => sidecar.RenderPageAsync(bytes, page, SizeSteps.Of(step), crop, rotate, ct), ct), e => Refused(e, "PDF rendering", path, page, crop, null));
     }
 
     /// <summary>
@@ -104,7 +104,7 @@ public sealed class AttachmentPixels(
         var bytes = await BytesAsync(path, state, ct);
         try
         {
-            return await sidecar.TextBoxesAsync(bytes, pages, ct);
+            return await InPlaceAsync(() => sidecar.TextBoxesAsync(bytes, pages, ct), ct);
         }
         catch (SidecarException e)
         {
@@ -115,25 +115,28 @@ public sealed class AttachmentPixels(
     public async Task<PdfPageImages> PdfImagesAsync(VaultPath path, AttachmentState state, int page, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
-        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.ListImagesAsync(bytes, page, ct), e => RefusedStoring(e, Extraction.List, path, page, 0, null, false));
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => InPlaceAsync(() => sidecar.ListImagesAsync(bytes, page, ct), ct), e => RefusedStoring(e, Extraction.List, path, page, 0, null, false));
     }
 
     public async Task<Picture> PdfImageAsync(VaultPath path, AttachmentState state, int page, int n, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
-        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.ExtractImageAsync(bytes, page, n, ct), e => RefusedStoring(e, Extraction.Image, path, page, n, null, false));
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => InPlaceAsync(() => sidecar.ExtractImageAsync(bytes, page, n, ct), ct), e => RefusedStoring(e, Extraction.Image, path, page, n, null, false));
     }
 
     public async Task<Picture> PdfRegionAsync(VaultPath path, AttachmentState state, int page, Crop crop, int rotate, bool jpeg, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
-        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => sidecar.RenderRegionAsync(bytes, page, crop, rotate, jpeg, ct), e => RefusedStoring(e, Extraction.Region, path, page, 0, crop, jpeg));
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Extract, () => InPlaceAsync(() => sidecar.RenderRegionAsync(bytes, page, crop, rotate, jpeg, ct), ct), e => RefusedStoring(e, Extraction.Region, path, page, 0, crop, jpeg));
     }
 
     public void Count(AttachmentUse use) => KumbuMetrics.AttachmentUsed(use);
 
     /// <summary>Keyed by the account, whichever of its credentials calls; the dev token has none, and one place.</summary>
     public IDisposable? TryStartExtraction() => extractions.TryStart(caller.User?.Id ?? "");
+
+    /// <summary>A call to the sidecar in one of the account's render places, keyed as <see cref="TryStartExtraction"/>.</summary>
+    private Task<T> InPlaceAsync<T>(Func<Task<T>> call, CancellationToken ct) => extractions.InRenderPlaceAsync(caller.User?.Id ?? "", call, ct);
 
     private async Task<(UnlockedVault Vault, byte[] BlobId)?> VaultAsync(VaultPath path, AttachmentState state, CancellationToken ct) =>
         await store.VaultOfAsync(path, ct) is { } vault && EncryptedNoteStore.TryParseBlobId(state.BlobId, out var blobId) ? (vault, blobId) : null;

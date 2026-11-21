@@ -168,9 +168,25 @@ public sealed class FakePdfSidecar : IPdfSidecar
         return Region(pdf, page, crop, rotate, jpeg);
     }
 
+    private int _inFlight;
+    private int _maxInFlight;
+
+    /// <summary>The most calls that were in flight at once.</summary>
+    public int MaxInFlight => Volatile.Read(ref _maxInFlight);
+
     private async Task AnswerAsync(CancellationToken ct)
     {
-        if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
+        var now = Interlocked.Increment(ref _inFlight);
+        for (var seen = _maxInFlight; now > seen && Interlocked.CompareExchange(ref _maxInFlight, now, seen) != seen; seen = _maxInFlight) { }
+        try
+        {
+            if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+        }
+
         if (Down) throw new SidecarException(SidecarException.Unavailable, PdfSidecar.UnavailableMessage);
     }
 
