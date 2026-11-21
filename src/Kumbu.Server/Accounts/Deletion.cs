@@ -42,8 +42,10 @@ public static class SharedVaultChoices
 }
 
 /// <summary>A user an admin deleted, for the receipt: ids, the usernames, the time and the counts; no content and no
-/// vault or note name. <c>Listed</c>: the id was added to the <see cref="DeletionList"/>.</summary>
-public sealed record DeletedUser(string Id, string Username, string Display, string DeletedBy, DateTime DeletedAt, DeletionSummary Summary, bool Listed);
+/// vault or note name. <c>Listed</c>: the id was added to the <see cref="DeletionList"/>. <c>HadOwnEmbeddingsKey</c>: the
+/// user had saved a TensorX key of their own, so their vaults' text may have gone there, whether BYOK is offered now or not.</summary>
+public sealed record DeletedUser(
+    string Id, string Username, string Display, string DeletedBy, DateTime DeletedAt, DeletionSummary Summary, bool Listed, bool HadOwnEmbeddingsKey = false);
 
 /// <summary>
 /// Deleting for good: one vault (its owner), one's own account, or any other user's account (an admin, for a privacy
@@ -150,7 +152,7 @@ public sealed class Deletion(
         log.LogInformation(
             "{Admin} deleted user {UserId}: {Vaults} vaults, {Notes} notes, {Attachments} attachments, {Keys} API keys, {Connections} connections, {Invitations} invitations erased, {Documents} documents",
             acting.Username, target.Id, summary.Vaults, summary.Notes, summary.Attachments, summary.ApiKeys, summary.Connections, summary.Invitations, summary.Documents);
-        return new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, listed);
+        return new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, listed, target.EmbeddingsKeyId is not null);
     }
 
     /// <summary>
@@ -171,8 +173,11 @@ public sealed class Deletion(
         {
             if (target.Id == acting.Id) continue;
             DeletionSummary? summary;
+            bool hadKey;
             try
             {
+                // Read before the deletion takes the user document.
+                hadKey = await Users.Find(u => u.Id == target.Id).Project(u => u.EmbeddingsKeyId).FirstOrDefaultAsync(ct) is not null;
                 // The choice made at the deletion, as recorded: a vault whose closing period has passed meanwhile goes now,
                 // one whose hasn't closes again until its original time; any other goes now.
                 summary = await DeleteAccountAsync(
@@ -190,7 +195,7 @@ public sealed class Deletion(
             log.LogInformation(
                 "{Admin} deleted user {UserId} again after a restore: {Vaults} vaults, {Notes} notes, {Attachments} attachments, {Keys} API keys, {Connections} connections, {Invitations} invitations erased, {Documents} documents",
                 acting.Username, target.Id, summary.Vaults, summary.Notes, summary.Attachments, summary.ApiKeys, summary.Connections, summary.Invitations, summary.Documents);
-            done.Add(new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, Listed: true));
+            done.Add(new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, Listed: true, hadKey));
         }
 
         return done;
