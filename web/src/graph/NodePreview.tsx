@@ -26,7 +26,7 @@ export default function NodePreview({ node, anchor }: { node: GNode; anchor: { x
         <>
           {node.tags.length > 0 && <p className="truncate font-mono text-[11px] text-dim">{node.tags.map((t) => `#${t}`).join(" ")}</p>}
           {detail?.firstParagraph && <p className="line-clamp-4 text-muted">{detail.firstParagraph}</p>}
-          {detail?.changed && <p className="text-[12px] text-dim">changed {ago(detail.changed, Date.now(), true)}</p>}
+          {detail?.changed && <p className="text-[12px] text-dim">changed {ago(detail.changed)}</p>}
         </>
       )}
     </div>
