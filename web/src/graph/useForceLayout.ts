@@ -17,7 +17,8 @@ const REHEAT = 0.3;
 /**
  * The graph's layout, by node id. The simulation lives in a ref and ticks on animation frames, never in React state;
  * positions are published at most once a frame. A new answer keeps the places of the nodes it shares with the last
- * one and warms the simulation gently instead of restarting it.
+ * one and warms the simulation gently instead of restarting it. `nodes` and `edges` must be memoised per answer: a new
+ * array is a new answer, and warms the simulation again.
  */
 export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { positions: Positions; drag(id: string, x: number | null, y: number | null): void } {
   const { centreKey, sizeBy, reducedMotion, running } = opts;
@@ -46,6 +47,8 @@ export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { po
     const s = sim.current;
     if (!s || !live.current.running || frame.current) return;
     if (live.current.reducedMotion) {
+      // A node held from before the switch stays where it is pinned; only a target of 0 lets the loop end.
+      s.alphaTarget(0);
       while (s.alpha() >= s.alphaMin()) s.tick();
       publish();
     } else if (s.alpha() >= s.alphaMin()) frame.current = requestAnimationFrame(step);
@@ -71,14 +74,16 @@ export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { po
       return { id: n.id, key: n.key, r: collideRadius(radius(n, sizeBy)), centre: p.fixed, x: p.x, y: p.y, ...(p.fixed ? { fx: 0, fy: 0 } : {}) };
     });
     const keyOf = new Map(nodes.map((n) => [n.id, n.key]));
-    const links = edges.map((e): SimLink => ({ source: e.source, target: e.target, s: similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score }));
+    // Only edges with both ends in the answer: forceLink throws on an id it cannot find.
+    const links = edges.filter((e) => keyOf.has(e.source) && keyOf.has(e.target)).map((e): SimLink => ({ source: e.source, target: e.target, s: similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score }));
     const forces = (s: Simulation<SimNode, SimLink>) =>
       s
         .force("link", forceLink<SimNode, SimLink>(links).id((n) => n.id).distance((l) => linkDistance(l.s)).strength((l) => linkStrength(l.s)))
         .force("charge", forceManyBody<SimNode>().strength(CHARGE))
         .force("collide", forceCollide<SimNode>((n) => n.r));
 
-    if (sim.current) forces(sim.current.nodes(simNodes)).alpha(REHEAT);
+    // A new answer lets go of any drag: its nodes are new and unpinned.
+    if (sim.current) forces(sim.current.nodes(simNodes)).alphaTarget(0).alpha(REHEAT);
     else sim.current = forces(forceSimulation(simNodes).stop());
     publish();
     go();
@@ -101,8 +106,11 @@ export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { po
   const drag = useCallback(
     (id: string, x: number | null, y: number | null) => {
       const s = sim.current;
-      const n = s?.nodes().find((m) => m.id === id);
-      if (!s || !n || n.centre) return;
+      if (!s) return;
+      // A release always ends the drag's warmth, even for a node a new answer has dropped.
+      if (x === null) s.alphaTarget(0);
+      const n = s.nodes().find((m) => m.id === id);
+      if (!n || n.centre) return;
       n.fx = x;
       n.fy = y;
       if (live.current.reducedMotion) {
@@ -110,8 +118,7 @@ export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { po
         s.alpha(REHEAT);
         go();
       } else {
-        s.alphaTarget(x === null ? 0 : REHEAT);
-        if (x !== null) s.alpha(Math.max(s.alpha(), REHEAT));
+        if (x !== null) s.alphaTarget(REHEAT).alpha(Math.max(s.alpha(), REHEAT));
         go();
       }
     },

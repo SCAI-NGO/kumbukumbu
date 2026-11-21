@@ -84,8 +84,10 @@ describe("useForceLayout", () => {
     const { nodes, edges } = star("c");
     const { unmount } = renderHook(() => useForceLayout(nodes, edges, opts()));
     expect(frames.size).toBe(1);
+    const [pending] = frames.keys();
+    vi.mocked(cancelAnimationFrame).mockClear();
     unmount();
-    expect(cancelAnimationFrame).toHaveBeenCalled();
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(pending);
     expect(frames.size).toBe(0);
   });
 
@@ -118,6 +120,37 @@ describe("useForceLayout", () => {
     }
     expect(result.current.positions.get("n0")).toEqual({ x: 0, y: 0 });
     expect(result.current.positions.has("n5")).toBe(false);
+  });
+
+  it("settles when reduced motion turns on while a node is held", () => {
+    const { nodes, edges } = star("c");
+    const { result, rerender } = renderHook((o: Opts) => useForceLayout(nodes, edges, o), { initialProps: opts() });
+    runFrames(3);
+    act(() => result.current.drag("n3", 200, -150));
+    runFrames(3);
+    rerender(opts({ reducedMotion: true }));
+    expect(frames.size).toBe(0);
+    expect(result.current.positions.get("n3")).toEqual({ x: 200, y: -150 });
+    const rest = new Map(result.current.positions);
+    runFrames(3);
+    expect(result.current.positions).toEqual(rest);
+  });
+
+  it("stops ticking after a release for a node a new answer has dropped", () => {
+    const first = star("c");
+    const { result, rerender } = renderHook(({ g }: { g: ReturnType<typeof star> }) => useForceLayout(g.nodes, g.edges, opts()), { initialProps: { g: first } });
+    act(() => result.current.drag("n3", 200, -150));
+    rerender({ g: { nodes: [node("c", { depth: 0 }), node("n0")], edges: [edge("c", "n0")] } });
+    act(() => result.current.drag("n3", null, null));
+    runFrames(1000);
+    expect(frames.size).toBe(0);
+  });
+
+  it("leaves out edges whose ends are not in the answer", () => {
+    const nodes = [node("c", { depth: 0 }), node("a")];
+    const edges = [edge("c", "a"), edge("a", "gone")];
+    const { result } = renderHook(() => useForceLayout(nodes, edges, opts({ reducedMotion: true })));
+    expect(result.current.positions.size).toBe(2);
   });
 
   it("pins a dragged node while held and lets it go", () => {
