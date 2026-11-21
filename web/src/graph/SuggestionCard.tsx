@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useRef } from "react";
+import { topDialog } from "../hooks/useDialog";
 import type { Suggestion } from "./suggestions";
 
 const coming = "Coming with link prediction";
@@ -10,9 +11,12 @@ const action = "min-h-11 flex-1 rounded-[10px] border border-line bg-surface px-
 export default function SuggestionCard({ suggestion, onClose }: { suggestion: Suggestion; onClose(): void }) {
   const card = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    // Caught on the way down and stopped there, or the dialog the graph is in would close with the same Escape.
+    // Caught on the way down and stopped there, or the dialog the graph is in would close with the same Escape. A
+    // dialog opened above the card (the palette) answers it instead.
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      const top = topDialog();
+      if (top && !top.contains(card.current)) return;
       e.stopPropagation();
       e.preventDefault();
       onClose();

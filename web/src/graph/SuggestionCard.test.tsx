@@ -2,6 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useDialog } from "../hooks/useDialog";
 import SuggestionCard from "./SuggestionCard";
 
 afterEach(cleanup);
@@ -46,6 +47,19 @@ describe("SuggestionCard", () => {
     document.removeEventListener("keydown", dialog);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(dialog).not.toHaveBeenCalled();
+  });
+
+  it("leaves Escape to a dialog opened above it", async () => {
+    const onClose = show();
+    const closeDialog = vi.fn();
+    function Above() {
+      const ref = useDialog<HTMLDivElement>(closeDialog);
+      return <div ref={ref} role="dialog" aria-label="Above" />;
+    }
+    render(<Above />);
+    await userEvent.keyboard("{Escape}");
+    expect(closeDialog).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("closes on a click outside, not on one inside", async () => {
