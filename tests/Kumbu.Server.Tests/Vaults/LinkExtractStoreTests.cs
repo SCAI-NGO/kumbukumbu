@@ -109,6 +109,33 @@ public sealed class LinkExtractStoreTests(MongoFixture fixture)
         Assert.Equal(["hidden-tag"], extract.Tags);
     }
 
+    [Theory]
+    [InlineData("[")]
+    [InlineData("[a](")]
+    [InlineData("[[a]]")]
+    public async Task Another_write_waits_no_longer_beside_a_long_line_of_links_than_beside_words(string unit)
+    {
+        var (world, catalog, store) = await WorldAsync();
+        const int size = 256 * 1024;
+        async Task<TimeSpan> BesideAsync(string name, string content)
+        {
+            var big = Task.Run(() => WriteAsync(store, $"/Work/{name}.md", content), Ct);
+            await Task.Delay(50, Ct);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            await WriteAsync(store, $"/Work/beside-{name}.md", "A small note.\n");
+            var took = watch.Elapsed;
+            await big;
+            return took;
+        }
+
+        var words = await BesideAsync("words", string.Concat(Enumerable.Repeat("The quick brown fox reads a plan of tomatoes ", size / 45)));
+        var odd = await BesideAsync("odd", string.Concat(Enumerable.Repeat(unit, size / unit.Length)));
+
+        var bound = TimeSpan.FromMilliseconds(Math.Max(2000, words.TotalMilliseconds * 50));
+        Assert.True(odd <= bound, $"the write waited {odd.TotalMilliseconds:0} ms beside the odd note, {words.TotalMilliseconds:0} ms beside words");
+        Assert.True(await AllCurrentAsync(world, catalog.OpenVaults.Single()));
+    }
+
     [Fact]
     public async Task Sealed_extract_opens_to_what_was_parsed()
     {

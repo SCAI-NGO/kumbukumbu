@@ -117,16 +117,17 @@ public static partial class FairCopies
         {
             var relinked = new StringBuilder();
             var at = 0;
-            foreach (Match m in NoteLinkRegex().Matches(text))
+            foreach (var link in NoteLinks(text))
             {
-                var to = target(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), m.Groups[3].Value);
+                var to = target(link.Id, link.Subpath);
                 if (to is null) continue;
-                var embed = m.Index > 0 && text[m.Index - 1] == '!';
-                relinked.Append(text, at, m.Index - (embed ? 1 : 0) - at);
-                at = m.Index + m.Length;
+                var embed = link.Start > 0 && text[link.Start - 1] == '!';
+                relinked.Append(text, at, link.Start - (embed ? 1 : 0) - at);
+                at = link.End;
+                var shown = text[(link.Start + 1)..link.TextEnd];
                 // Only the brackets the copy escaped in the text: any other escape stays, so the text reads as it did.
-                if (to.Length == 0) relinked.Append(Regex.Replace(m.Groups[1].Value, @"\\(.)", e => e.Groups[1].Value is "[" or "]" ? e.Groups[1].Value : e.Value));
-                else relinked.Append(embed ? "!" : "").Append('[').Append(m.Groups[1].Value).Append("](").Append(to).Append(')');
+                if (to.Length == 0) relinked.Append(Regex.Replace(shown, @"\\(.)", e => e.Groups[1].Value is "[" or "]" ? e.Groups[1].Value : e.Value));
+                else relinked.Append(embed ? "!" : "").Append('[').Append(shown).Append("](").Append(to).Append(')');
             }
 
             return at == 0 ? text : relinked.Append(text, at, text.Length - at).ToString();
@@ -138,11 +139,55 @@ public static partial class FairCopies
         var ids = new HashSet<int>();
         OutsideCode(markdown, text =>
         {
-            foreach (Match m in NoteLinkRegex().Matches(text)) ids.Add(int.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture));
+            foreach (var link in NoteLinks(text)) ids.Add(link.Id);
             return text;
         });
         return ids;
     }
+
+    /// <summary>
+    /// The links and embeds to a note of the copy in a stretch outside code, <c>[text](#kn-N)</c> or
+    /// <c>[text](#kn-N/subpath)</c>, found in one pass: each <c>]</c> closes the latest <c>[</c> still open, escaped
+    /// brackets aside, so brackets in the text, nested as Markdown allows (<c>[the [draft] budget]</c>), never hide where
+    /// it starts. <see cref="NoteLink.Start"/> is its <c>[</c>, an embed's <c>!</c> the character before.
+    /// </summary>
+    private static List<NoteLink> NoteLinks(string text)
+    {
+        const string Prefix = "](#kn-";
+        var links = new List<NoteLink>();
+        var open = new Stack<int>();
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '\\') i++;
+            else if (c == '[') open.Push(i);
+            else if (c == ']' && open.TryPop(out var start) && string.CompareOrdinal(text, i, Prefix, 0, Prefix.Length) == 0)
+            {
+                var p = i + Prefix.Length;
+                var digits = p;
+                while (p < text.Length && char.IsAsciiDigit(text[p]) && p - digits < 9) p++;
+                if (p == digits) continue;
+                var id = int.Parse(text.AsSpan(digits, p - digits), System.Globalization.CultureInfo.InvariantCulture);
+                var subpath = "";
+                if (p < text.Length && text[p] == '/')
+                {
+                    var from = ++p;
+                    while (p < text.Length && text[p] != ')' && !char.IsWhiteSpace(text[p])) p++;
+                    subpath = text[from..p];
+                }
+
+                if (p >= text.Length || text[p] != ')') continue;
+                links.Add(new NoteLink(start, i, p + 1, id, subpath));
+                // A link holds no link: what was open inside it is its text.
+                open.Clear();
+                i = p;
+            }
+        }
+
+        return links;
+    }
+
+    private readonly record struct NoteLink(int Start, int TextEnd, int End, int Id, string Subpath);
 
     /// <summary><paramref name="change"/> applied to each stretch of <paramref name="markdown"/> outside fenced code and
     /// code spans, paragraph by paragraph, as <see cref="Make"/> reads them.</summary>
@@ -990,7 +1035,14 @@ public static partial class FairCopies
 
     }
 
-    private static string Escape(string text) => text.Replace("[", "\\[").Replace("]", "\\]");
+    /// <summary>A link's text with its brackets escaped, and a backslash at its end doubled, which would escape the
+    /// closing bracket (<c>[[B|budget\]]</c>).</summary>
+    private static string Escape(string text)
+    {
+        var escaped = text.Replace("[", "\\[").Replace("]", "\\]");
+        var trailing = escaped.Length - escaped.TrimEnd('\\').Length;
+        return trailing % 2 == 1 ? escaped + "\\" : escaped;
+    }
 
     /// <summary>One text's constructs, found once: code spans, autolinks and HTML tags, matching brackets, wikilinks.</summary>
     private sealed class Scanner
@@ -1567,7 +1619,4 @@ public static partial class FairCopies
     [GeneratedRegex(@"^(?:[ \t>]|(?:[-*+]|[0-9]{1,9}[.)]|#{1,6})(?=[ \t]|$)|\[[ xX]\](?=[ \t]|$))*$")]
     private static partial Regex MarkersRegex();
 
-    // Linear in the text, as the outline's patterns; an embed's "!" is the character before the match.
-    [GeneratedRegex(@"\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)", RegexOptions.NonBacktracking)]
-    private static partial Regex NoteLinkRegex();
 }

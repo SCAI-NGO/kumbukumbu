@@ -593,6 +593,18 @@ describe("snapshotText", () => {
       expect(copyMarkdown(left).split("\n")[2]).toBe("See a \\*b\\* [c].");
     });
 
+    it("finds a link's start past brackets in its text, nested or escaped", () => {
+      const left = { ...bundle, notes: [{ ...bundle.notes[0], markdown: "See [the [draft] budget](#kn-7) and [it](#kn-1)." }, bundle.notes[1]] };
+      expect(copyMarkdown(left).split("\n")[2]).toBe("See the [draft] budget and [it](#n1).");
+    });
+
+    it("copies a line of many opening brackets in the time of an ordinary note", () => {
+      const long = { ...bundle, notes: [{ ...bundle.notes[0], markdown: "[".repeat(80_000) }, bundle.notes[1]] };
+      const start = performance.now();
+      copyMarkdown(long);
+      expect(performance.now() - start).toBeLessThan(500);
+    });
+
     it("copies the whole bundle as Markdown", () => {
       expect(copyMarkdown(bundle)).toBe(
         "# Questions on routing\n\nSee [Plan](#n1), Gone and ![Budget](#n2).\n\n---\n\n# Plan {#n1}\n\n## Big idea\n\nBack to [the start](#n0).\n\n---\n\n# Budget {#n2}\n\nSpend less. ![Plan](#n1)",

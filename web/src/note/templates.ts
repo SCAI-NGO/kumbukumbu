@@ -61,18 +61,27 @@ const token = /\[([^\]]*)\]|Mo|M{1,4}|Do|DDDo|D{1,4}|d{2,4}|do?|w[ow]?|W[oW]?|Qo
 
 /** The moment in `zone` as a Moment format (`dddd, MMMM Do YYYY`) of the tokens above; any other text, and any other token, stays as written. */
 export function formatMoment(now: Date, zone: string, format: string): string {
-  const parts = partsOf(now, zone);
-  return format.replace(token, (match, literal: string | undefined) => literal ?? tokens[match]?.(parts) ?? match);
+  return formatParts(partsOf(now, zone), format);
 }
+
+const formatParts = (parts: Parts, format: string) =>
+  format.replace(token, (match, literal: string | undefined) => literal ?? tokens[match]?.(parts) ?? match);
 
 /**
  * The text with `{{title}}`, `{{date}}`, `{{time}}`, `{{date:FORMAT}}` and `{{time:FORMAT}}` filled in, as Obsidian's
  * core Templates fills them. Anything else in braces, and Templater's `<% %>`, stays as written.
  */
+// The moment's parts once per insertion, not per placeholder or per property: `Intl` is slow to set up.
+const partsFor = new WeakMap<Context, Parts>();
+
 export function fillPlaceholders(text: string, at: Context): string {
-  return text.replace(/\{\{(title|date|time)(?::([^}]*))?\}\}/g, (match, name: string, format: string | undefined) => {
+  // A format within a line and of at most 100 characters: an unclosed `{{date:` is never read to the end of the text,
+  // so a template full of them fills in linear time; a longer format stays as written.
+  return text.replace(/\{\{(title|date|time)(?::([^}\n]{0,100}))?\}\}/g, (match, name: string, format: string | undefined) => {
     if (name === "title") return format === undefined ? at.title : match;
-    return formatMoment(at.now, at.zone, format || (name === "date" ? "YYYY-MM-DD" : "HH:mm"));
+    let parts = partsFor.get(at);
+    if (!parts) partsFor.set(at, (parts = partsOf(at.now, at.zone)));
+    return formatParts(parts, format || (name === "date" ? "YYYY-MM-DD" : "HH:mm"));
   });
 }
 
@@ -95,13 +104,20 @@ function readTemplate(template: string, at: Context): { props: Merged[] | null; 
   const body = fillPlaceholders(lines.slice(end + 1).join("\n"), at);
   const props = parseProperties(yaml.join("\n"));
   if (!props) return { props: null, body };
+  // Each key's line, the first that names it, found once rather than once per property.
+  const lineOf = new Map<string, string>();
+  for (const l of yaml) {
+    if (!/^[^\s:#][^:]*:/.test(l)) continue;
+    const key = l.slice(0, l.indexOf(":")).trim();
+    if (!lineOf.has(key)) lineOf.set(key, l.replace(/\r$/, ""));
+  }
   return {
     body,
     props: props.map(({ key, value }): Merged => {
       if (Array.isArray(value)) return { key, value: value.map((v) => fillPlaceholders(v, at)) };
       const filled = fillPlaceholders(value, at);
       // `created: {{date}}` stays a date for Obsidian.
-      const line = yaml.find((l) => /^[^\s:#][^:]*:/.test(l) && l.slice(0, l.indexOf(":")).trim() === key)!.replace(/\r$/, "");
+      const line = lineOf.get(key)!;
       const raw = fillPlaceholders(line.slice(line.indexOf(":") + 1).trim(), at);
       // As the template writes it only where that is how it would be written anyway, or where it is a date, a time or
       // a number that reads back as written: parseProperties is too lenient to vouch for other quoting (`'Bob's plan'`).

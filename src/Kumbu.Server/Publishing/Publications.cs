@@ -134,6 +134,7 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
+                RequireUnchanged(access.Vault, stored, current, made);
                 await store.InsertCopyAsync(session, access.Id, code, key, ownerId, made.Copy(at), made.Made.Bytes, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
@@ -184,6 +185,7 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
             };
             var written = await WriteAsync(access, attempt, async session =>
             {
+                RequireUnchanged(access.Vault, stored, current, made);
                 await store.ReplaceCopyAsync(session, entry.Code, entry.Key, made.Copy(at), made.Made.Bytes, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
@@ -944,6 +946,20 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
                 bytes,
                 plain);
         }
+    }
+
+    /// <summary>
+    /// Under the vault's gate, before a copy is stored: every note and file it took still stands at its path in the
+    /// version read. The copy is made before the gate is taken, so a move, a removal or a write that came between would
+    /// otherwise go out as it was read, at a path no later prune names; the mark that covers a moved note is in the
+    /// record, which the write compares already. Else the copy is read, walked and made again.
+    /// </summary>
+    private static void RequireUnchanged(UnlockedVault vault, VaultPath start, StoredNote read, MadeAny made)
+    {
+        // The working set as it stands under the gate: the store's own reads could take the gate again, for a path marked damaged.
+        var taken = new[] { (Path: start.Value, read.Version) }.Concat((made.Members ?? []).Select(m => (Path: m.Note, m.Version)));
+        if (taken.Any(t => (vault.Notes.TryGetValue(Parse(t.Path), out var n) ? n.Note.Version : null) != t.Version)) throw new PublishingConflictException();
+        if (made.Made.Files.Any(f => (vault.Attachments.TryGetValue(Parse(f.Path), out var a) ? a.Attachment.Version : null) != f.Version)) throw new PublishingConflictException();
     }
 
     /// <summary>

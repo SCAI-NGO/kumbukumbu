@@ -707,4 +707,34 @@ public sealed class LargeFileKestrelTests(KumbuAppFactory app)
         using var get = await dav.SendAsync(HttpMethod.Get, "/dav/Work/big.bin");
         Assert.Equal(HttpStatusCode.NotFound, get.StatusCode);
     }
+
+    /// <summary>A large upload to a path that can never be kept is refused on its first bytes, before the rest is read,
+    /// and stores no chunk the sweep would have to take.</summary>
+    [Theory]
+    [InlineData("files", "a:b.bin")]
+    [InlineData("files", "held.bin/below.bin")]
+    [InlineData("dav", "held.bin/below.bin")]
+    public async Task A_large_upload_to_a_path_that_cant_be_kept_is_refused_before_its_body_is_read(string route, string path)
+    {
+        var user = await RestClient.NewAsync(app.PublicApi, vault: "Work");
+        await user.CreateFileAsync("held.bin", [1, 2, 3]);
+        var content = new LargeFiles.Stalled(LargeFiles.Of(2 * FileApi.HeadBytes, 15), LargeFiles.Size);
+        try
+        {
+            Task<HttpResponseMessage> sending;
+            if (route == "files") sending = user.SendContentAsync(HttpMethod.Put, user.Url(path, "files"), content, followRedirects: false);
+            else sending = (await Dav.DavClient.NewAsync(app.PublicApi, user)).SendAsync(HttpMethod.Put, $"/dav/Work/{path}", content);
+
+            using var put = await sending.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+
+            Assert.True(put.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Conflict, $"{put.StatusCode}");
+            var vault = (await app.PublicApi.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == "Work").Vault;
+            var chunks = app.Database.GetCollection<BsonDocument>("blob_chunks");
+            Assert.Equal(0, await chunks.CountDocumentsAsync(Builders<BsonDocument>.Filter.Eq("vault", vault.Id), cancellationToken: Ct));
+        }
+        finally
+        {
+            content.Release();
+        }
+    }
 }

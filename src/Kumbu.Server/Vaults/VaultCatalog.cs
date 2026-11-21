@@ -1370,6 +1370,23 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         return before == Search.Byok.Provider && vault.EmbeddingProvider != Search.Byok.Provider;
     }
 
+    /// <summary>
+    /// The owner's key leaves each of <paramref name="vaultIds"/> this process holds, her account being deleted: the copy
+    /// and the choice go from the stored meta (a vault not held loses its copy at its next unlock, the key's owner being
+    /// gone), and the keys they held are answered, for <see cref="Search.ByokDrivers.Drop"/>.
+    /// </summary>
+    internal async Task<IReadOnlyList<string>> LeaveOwnersKeyAsync(IEnumerable<string> vaultIds, CancellationToken ct)
+    {
+        var keys = new List<string>();
+        foreach (var vault in vaultIds.Select(Current).OfType<UnlockedVault>())
+        {
+            if (vault.EmbeddingKey is { } key) keys.Add(key);
+            await FollowEmbeddingKeyAsync(vault, null, null, ct);
+        }
+
+        return keys;
+    }
+
     /// <summary>The stored meta sealed again as <paramref name="change"/> has it (null: left as it is), under the vault's
     /// gate and conditional on the bytes read; then the working set follows.</summary>
     private async Task ChangeEmbeddingsAsync(UnlockedVault vault, Func<VaultMeta, VaultMeta?> change, CancellationToken ct)
@@ -1477,11 +1494,16 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             vault.DisplayName = display;
+            vault.ForgetRebased();
             // A load that read the meta before the commit has published by the time _loading is ours. A request may hold an
             // older object: the current one must not lose the name either.
             await UnderLoadingAsync(() =>
             {
-                if (Current(vault.Id) is { } current) current.DisplayName = display;
+                if (Current(vault.Id) is { } current)
+                {
+                    current.DisplayName = display;
+                    current.ForgetRebased();
+                }
             });
         }
         finally
@@ -1871,25 +1893,68 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
     }
 
+    /// <summary>Under the vault's gate, after a commit: the content of each of <paramref name="paths"/> that is a note
+    /// path, null where no note is, for <see cref="WriteExtractsAsync(UnlockedVault, IReadOnlyList{ValueTuple{VaultPath, string}})"/>.</summary>
+    internal static IReadOnlyList<(VaultPath Path, string? Content)> ContentsOf(UnlockedVault vault, IReadOnlyList<VaultPath> paths) =>
+        [.. paths.Where(p => !p.IsAttachment).Select(p => (p, vault.Notes.TryGetValue(p, out var note) ? note.Note.Content : null))];
+
     /// <summary>
     /// Under the vault's gate, after a commit: for each of <paramref name="paths"/> that is a note, stores its extract for
     /// its content now (from <see cref="UnlockedVault.Extracts"/>, parsing if needed); for each that is no note, removes
     /// the document. A failure is logged and swallowed: the extract is a cache, and the next load parses what it misses.
     /// </summary>
-    internal async Task WriteExtractsAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths)
+    internal Task WriteExtractsAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths) =>
+        StoreExtractsAsync(vault, [.. ContentsOf(vault, paths).Select(w => (w.Path, w.Content, w.Content is null ? null : vault.ExtractOf(w.Path, w.Content)))]);
+
+    /// <summary>
+    /// After a write, outside the vault's gate: parses the notes <see cref="ContentsOf"/> found, then takes the gate to
+    /// store them, as long as the object is the vault's current one. A note written again meanwhile is left to that write;
+    /// any order the two stores land in is safe, as an extract is used only for the content it was sealed with.
+    /// </summary>
+    internal async Task WriteExtractsAsync(UnlockedVault vault, IReadOnlyList<(VaultPath Path, string? Content)> written)
+    {
+        if (written.Count == 0) return;
+        List<(VaultPath, string?, LinkExtract?)> parsed;
+        try
+        {
+            parsed = [.. written.Select(w => (w.Path, w.Content, w.Content is null ? null : vault.ExtractOf(w.Path, w.Content)))];
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "The link extracts of {Count} paths of vault {VaultId} were not written; the next unlock parses them", written.Count, vault.Id);
+            return;
+        }
+
+        await vault.Gate.WaitAsync();
+        try
+        {
+            if (!IsCurrentObject(vault)) return;
+            await StoreExtractsAsync(vault, [.. parsed.Where(p => Same(vault, p.Item1, p.Item2))]);
+        }
+        finally
+        {
+            vault.Gate.Release();
+        }
+
+        static bool Same(UnlockedVault vault, VaultPath path, string? content) =>
+            vault.Notes.TryGetValue(path, out var note) ? string.Equals(note.Note.Content, content, StringComparison.Ordinal) : content is null;
+    }
+
+    /// <summary>Under the vault's gate: each note's extract sealed and stored, a document removed where no note is.</summary>
+    private async Task StoreExtractsAsync(UnlockedVault vault, IReadOnlyList<(VaultPath Path, string? Content, LinkExtract? Extract)> notes)
     {
         var f = Builders<SealedDocument>.Filter;
         var writes = new List<WriteModel<SealedDocument>>();
         try
         {
-            foreach (var path in paths.Where(p => !p.IsAttachment))
+            foreach (var (path, content, extract) in notes)
             {
                 var pid = vault.PathId(path);
                 var filter = f.Eq(d => d.Vault, vault.Id) & f.Eq(d => d.PathId, pid);
-                if (vault.Notes.TryGetValue(path, out var note))
+                if (content is not null)
                 {
                     writes.Add(new UpdateOneModel<SealedDocument>(filter, Builders<SealedDocument>.Update
-                        .Set(d => d.Blob, vault.SealExtract(path, VersionToken.Hash(note.Note.Content), vault.ExtractOf(path, note.Note.Content)))
+                        .Set(d => d.Blob, vault.SealExtract(path, VersionToken.Hash(content), extract!))
                         .SetOnInsert(d => d.Vault, vault.Id)
                         .SetOnInsert(d => d.PathId, pid)) { IsUpsert = true });
                 }
@@ -1904,7 +1969,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         catch (Exception e)
         {
             // Whatever it was: the user's write has committed and must not be answered as failed.
-            log.LogWarning(e, "The link extracts of {Count} paths of vault {VaultId} were not written; the next unlock parses them", paths.Count, vault.Id);
+            log.LogWarning(e, "The link extracts of {Count} paths of vault {VaultId} were not written; the next unlock parses them", notes.Count, vault.Id);
         }
     }
 

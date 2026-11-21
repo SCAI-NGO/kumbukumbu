@@ -9,9 +9,10 @@ namespace Kumbu.Server.Api;
 /// <summary>
 /// An open upload: the credential the agent's MCP call carried (<see cref="Bearer"/>, UTF-8), where the file goes and
 /// who may have opened it. <see cref="Path"/> is as the caller saw it (<c>/Vault/x.png</c>); <see cref="Holder"/> is the
-/// key the cap counts by (key id, connection id or <c>"dev"</c>).
+/// key the cap counts by (key id, connection id or <c>"dev"</c>). <see cref="VaultId"/> is the vault the path named then
+/// (null for the dev token, which has no vault ids): a rename may give the name to another vault meanwhile.
 /// </summary>
-public sealed record UploadTicket(byte[] Bearer, string? ConnectionId, string Path, string? Version, string Holder, DateTime ExpiresAt);
+public sealed record UploadTicket(byte[] Bearer, string? ConnectionId, string Path, string? Version, string Holder, DateTime ExpiresAt, string? VaultId = null);
 
 /// <summary>
 /// One-time upload URLs for agents: an MCP call hands out a token, the agent <c>PUT</c>s the file's bytes to it and the
@@ -50,11 +51,11 @@ public sealed class UploadTickets : IDisposable
     /// A new ticket; <paramref name="bearer"/> is taken over (a copy the caller doesn't use again). It expires after
     /// <see cref="Lifetime"/>; a credential that expires sooner is refused by the PUT's own resolution.
     /// </summary>
-    public (string Token, DateTime ExpiresAt) Issue(byte[] bearer, string? connectionId, string path, string? version, string holder)
+    public (string Token, DateTime ExpiresAt) Issue(byte[] bearer, string? connectionId, string path, string? version, string holder, string? vaultId = null)
     {
         var token = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
         var expiresAt = Now + Lifetime;
-        var ticket = new UploadTicket(bearer, connectionId, path, version, holder, expiresAt);
+        var ticket = new UploadTicket(bearer, connectionId, path, version, holder, expiresAt, vaultId);
         var key = KeyOf(token);
         lock (_issuing)
         {

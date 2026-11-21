@@ -207,6 +207,7 @@ public sealed partial class VaultCatalog
                 return true;
             },
             cancellationToken: ct);
+        Current(own.Vault)?.ForgetRebased();
         return alias;
     }
 

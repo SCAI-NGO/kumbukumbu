@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { atxHeading, headingLine, headingLink, outline, section } from "./outline";
+import { atxHeading, codeSpans, headingLine, headingLink, outline, section, withoutHighlights, withoutMarkdownLinks } from "./outline";
 import { embedHeading } from "./wikiLinks";
 
 describe("outline", () => {
@@ -176,5 +176,45 @@ describe("a link to a heading whose text a link can't hold", () => {
   it("still reads a trailing [n] as an index", () => {
     expect(headingLine(body, "Notes[2]")).toBe(12);
     expect(headingLine(body, "Notes[1]")).toBe(11);
+  });
+});
+
+/** Every string over the alphabet up to the length, the empty one included. */
+function* allStrings(alphabet: string, maxLength: number): Generator<string> {
+  let level = [""];
+  yield "";
+  for (let length = 1; length <= maxLength; length++) {
+    level = level.flatMap((s) => [...alphabet].map((c) => s + c));
+    yield* level;
+  }
+}
+
+// The patterns these scans stand for, as the Core's SectionAddress gives them too (SectionAddressTests).
+describe("a heading's text, found in one pass", () => {
+  it("finds the code spans the pattern finds", () => {
+    const pattern = /(`+)[\s\S]*?(?<!`)\1(?!`)/g;
+    for (const s of allStrings("`a ", 9)) {
+      expect(codeSpans(s), s).toEqual([...s.matchAll(pattern)].map((m) => [m.index, m.index + m[0].length]));
+    }
+  });
+
+  it("takes out highlights and Markdown links as the patterns do", () => {
+    const highlight = /==(?=[^\s=])(.+?)(?<=[^\s=])==/g;
+    for (const s of allStrings("= a\n", 7)) expect(withoutHighlights(s), JSON.stringify(s)).toBe(s.replace(highlight, "$1"));
+    const link = /!?\[([^\]]*)\]\([^)]*\)/g;
+    for (const s of allStrings("![]()a\n", 6)) expect(withoutMarkdownLinks(s), JSON.stringify(s)).toBe(s.replace(link, "$1"));
+  });
+
+  it.each([
+    ["a heading of backticks and letters", "# " + "`a".repeat(32_768)],
+    ["a heading of backticks only", "# " + "`".repeat(65_536)],
+    ["a body line of backticks", "x " + "``a`".repeat(16_384)],
+    ["a heading of brackets", "# " + "[a](".repeat(16_384)],
+    ["a heading of highlight marks", "# " + "==a ".repeat(16_384)],
+  ])("reads %s of 64 KiB at once", (_, line) => {
+    const started = performance.now();
+    outline(line);
+    section(line, "x");
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });

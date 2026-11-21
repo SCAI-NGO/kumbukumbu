@@ -40,7 +40,12 @@ public sealed class UnlockedVault
     private long _graphCounter;
     private (LinkGraph Graph, object Notes, object Attachments)? _graph;
     private readonly Lock _rebasedLock = new();
-    private (LinkGraph? Source, Dictionary<string, LinkGraph> ByName) _rebased = (null, new(StringComparer.Ordinal));
+    /// <summary>The graph under other names than the stored one, the most recently read last.</summary>
+    private (LinkGraph? Source, List<(string Name, LinkGraph Graph)> ByName) _rebased = (null, []);
+
+    /// <summary>The most names the graph is kept under besides the stored one: a display name and a few members' aliases
+    /// read at once. A name read beyond them drops the one read longest ago.</summary>
+    internal const int RebasedNames = 4;
 
     public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks locks)
     {
@@ -188,9 +193,37 @@ public sealed class UnlockedVault
         if (string.Equals(name, Name, StringComparison.Ordinal)) return graph;
         lock (_rebasedLock)
         {
-            if (!ReferenceEquals(_rebased.Source, graph)) _rebased = (graph, new(StringComparer.Ordinal));
-            if (!_rebased.ByName.TryGetValue(name, out var rebased)) _rebased.ByName[name] = rebased = graph.Rebased(p => p.WithVault(name));
+            if (!ReferenceEquals(_rebased.Source, graph)) _rebased = (graph, []);
+            var byName = _rebased.ByName;
+            var at = byName.FindIndex(r => string.Equals(r.Name, name, StringComparison.Ordinal));
+            var rebased = at >= 0 ? byName[at].Graph : graph.Rebased(p => p.WithVault(name));
+            if (at >= 0) byName.RemoveAt(at);
+            else if (byName.Count == RebasedNames) byName.RemoveAt(0);
+            byName.Add((name, rebased));
             return rebased;
+        }
+    }
+
+    /// <summary>Drops the graph under every other name, once one of them is given up (a rename): the names still in use
+    /// are rebased again on their next read.</summary>
+    internal void ForgetRebased()
+    {
+        lock (_rebasedLock) _rebased = (null, []);
+    }
+
+    internal int RebasedGraphs
+    {
+        get
+        {
+            lock (_rebasedLock) return _rebased.ByName.Count;
+        }
+    }
+
+    private long RebasedBytes
+    {
+        get
+        {
+            lock (_rebasedLock) return _rebased.ByName.Sum(r => Size(r.Graph));
         }
     }
 
@@ -264,11 +297,12 @@ public sealed class UnlockedVault
     public DateTime LastUsed => new(Interlocked.Read(ref _lastUsed), DateTimeKind.Utc);
 
     /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included), the link extracts and
-    /// the graph built from them included; of attachments only their records, never their bytes.</summary>
+    /// the graph built from them included, under every name it is kept under; of attachments only their records, never
+    /// their bytes.</summary>
     public long ApproxBytes =>
         Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note)) + Embeddings.Values.Sum(e => 4L * e.Chunks.Sum(c => c.Vector.Length))
         + Attachments.Values.Sum(a => Size(a.Attachment)) + AttachmentTrash.Sum(t => Size(t.Trashed.Attachment))
-        + Extracts.Values.Sum(e => Size(e.Extract)) + (_graph?.Graph is { } graph ? Size(graph) : 0);
+        + Extracts.Values.Sum(e => Size(e.Extract)) + (_graph?.Graph is { } graph ? Size(graph) : 0) + RebasedBytes;
 
     public void Touch(DateTime now) => Interlocked.Exchange(ref _lastUsed, now.Ticks);
 
@@ -779,16 +813,19 @@ public sealed class UnlockedVault
 
     private const long StateBytes = 256;
 
-    /// <summary>A link's text about twice (its raw text and the parts cut from it), and a rough allowance for the rest.</summary>
+    /// <summary>A link's text about twice (its raw text and the parts cut from it), and the rest of its record as measured.</summary>
     private static long Size(LinkExtract e) =>
-        e.Links.Sum(l => 4L * l.Raw.Length + LinkBytes) + 2L * (e.Aliases.Sum(a => a.Length) + e.Tags.Sum(t => t.Length));
+        e.Links.Sum(l => 4L * l.Raw.Length + ExtractLinkBytes) + 2L * (e.Aliases.Sum(a => a.Length) + e.Tags.Sum(t => t.Length));
 
     /// <summary>The nodes' keys and titles, the edges, and each link resolved; the extracts it shares are counted above.</summary>
     private static long Size(LinkGraph g) =>
         g.Nodes.Sum(n => 2L * (n.Key.Length + n.Title.Length) + NodeBytes) + g.Edges.Sum(e => EdgeBytes + 4L * e.Lines.Count)
-        + g.Extracts.Values.Sum(e => (long)e.Links.Count) * LinkBytes;
+        + g.Extracts.Values.Sum(e => (long)e.Links.Count) * GraphLinkBytes;
 
-    private const long LinkBytes = 64;
+    // Measured on notes of short links (`[[a]]`, one a line): about 156 bytes a link in the extract, 84 in the graph.
+    private const long ExtractLinkBytes = 136;
+
+    private const long GraphLinkBytes = 84;
 
     private const long NodeBytes = 96;
 

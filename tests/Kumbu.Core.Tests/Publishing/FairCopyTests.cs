@@ -575,6 +575,23 @@ public class FairCopyTests
         Assert.Equal(@"a \*b\* [c] \\ d", FairCopies.Unlink(@"[a \*b\* \[c\] \\ d](#kn-3)", _ => false));
     }
 
+    /// <summary>Whatever shape of link to a note of the copy Make writes, Unlink takes back when the note leaves, and
+    /// Relink follows to its new id: brackets in its text, nested or escaped, never hide its start.</summary>
+    [Theory]
+    [InlineData("See [the [draft] budget](B.md).", "See the [draft] budget.")]
+    [InlineData("See [the *[x]* budget](B.md).", "See the *[x]* budget.")]
+    [InlineData(@"See [[B|budget\]].", @"See budget\\.")]
+    [InlineData("See [[B|the budget]] and [it](B.md).", "See the budget and it.")]
+    public void A_link_of_any_shape_is_taken_back_and_followed(string content, string unlinked)
+    {
+        var made = FairCopies.Make(P("/Work/A.md"), content, _ => null, _ => false, null, _ => 3).Markdown;
+        Assert.Contains("#kn-3", made);
+        Assert.Equal(unlinked, FairCopies.Unlink(made, _ => false));
+        var followed = FairCopies.Relink(made, (id, _) => id == 3 ? "#kn-1" : null);
+        Assert.DoesNotContain("#kn-3", followed);
+        Assert.Equal(made.Replace("#kn-3", "#kn-1", StringComparison.Ordinal), followed);
+    }
+
     [Fact]
     public void Unlink_leaves_code_alone()
     {
@@ -587,12 +604,9 @@ public class FairCopyTests
         Assert.Equal(new HashSet<int> { 4, 5 }, FairCopies.NoteIds("`[a](#kn-3)` [b](#kn-4/x)\n\n![c](#kn-5)").ToHashSet());
 
     [Fact]
-    public void Note_links_are_found_and_relinked_in_every_short_text_as_the_pattern_reads_them()
+    public void Note_links_are_found_and_relinked_alike_in_every_short_text()
     {
-        var pattern = new Regex(@"!?\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:/([^)\s]*))?\)");
         string[] tokens = ["[", "]", "](#kn-1)", "](#kn-2/a)", "](#kn-3)", "](#kn-4/a b)", "\\", "!"];
-        // Drops note 1, keeps note 3 as it is, and moves every other note.
-        string? Target(int id, string subpath) => id switch { 1 => "", 3 => null, _ => $"#kn-{id + 10}/{subpath}" };
         var texts = new List<string> { "" };
         for (var (from, length) = (0, 1); length <= 6; length++)
         {
@@ -604,14 +618,11 @@ public class FairCopyTests
 
         foreach (var text in texts)
         {
-            var relinked = pattern.Replace(text, m => Target(int.Parse(m.Groups[2].Value), m.Groups[3].Value) switch
-            {
-                null => m.Value,
-                "" => Regex.Replace(m.Groups[1].Value, @"\\(.)", e => e.Groups[1].Value is "[" or "]" ? e.Groups[1].Value : e.Value),
-                var target => $"{(m.Value[0] == '!' ? "!" : "")}[{m.Groups[1].Value}]({target})",
-            });
-            Assert.Equal(relinked, FairCopies.Relink(text, Target));
-            Assert.Equal(pattern.Matches(text).Select(m => int.Parse(m.Groups[2].Value)).ToHashSet(), FairCopies.NoteIds(text));
+            var ids = FairCopies.NoteIds(text);
+            Assert.Equal(text, FairCopies.Relink(text, (_, _) => null));
+            // Every link Relink sees, NoteIds names: moved, each is found again under its new id.
+            var moved = FairCopies.Relink(text, (id, subpath) => $"#kn-{id + 10}{(subpath.Length > 0 ? "/" + subpath : "")}");
+            Assert.Equal(ids.Select(id => id + 10).ToHashSet(), FairCopies.NoteIds(moved).Where(id => id >= 10).ToHashSet());
         }
     }
 }

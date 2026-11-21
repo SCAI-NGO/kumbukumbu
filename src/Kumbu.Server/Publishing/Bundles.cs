@@ -101,19 +101,22 @@ internal sealed partial class Publications
         var left = reached.Where(r => !ids.ContainsKey(r.Node)).Select(r => graph.Nodes[r.Node].Path!)
             .Select(p => new BundleLeftOut(p, Blocked(p) ? BundleReasons.Unpublishable : excluded.Contains(p.Value) ? BundleReasons.Without : BundleReasons.Behind))
             .OrderBy(l => l.Path.Value, StringComparer.Ordinal).ToList();
-        var edges = new HashSet<(int, int)>();
+        // In the order of each note's links, as the walk follows them: a walk over the stored edges after a note left
+        // then numbers the rest as a fresh one would (decision 3).
+        var edges = new List<(int, int)>();
+        var seen = new HashSet<(int, int)>();
         foreach (var (node, _) in taken)
         {
             foreach (var e in graph.OutEdges(node))
             {
-                if (ids.TryGetValue(graph.Edges[e].To, out var to) && to != ids[node]) edges.Add((ids[node], to));
+                if (ids.TryGetValue(graph.Edges[e].To, out var to) && to != ids[node] && seen.Add((ids[node], to))) edges.Add((ids[node], to));
             }
         }
 
         return new Walk(
             [.. taken.Select(t => new BundleNoteLine(graph.Nodes[t.Node].Path!, graph.Nodes[t.Node].Title, t.Depth))],
             left,
-            [.. edges.Order().Select(e => new[] { e.Item1, e.Item2 })],
+            [.. edges.Select(e => new[] { e.Item1, e.Item2 })],
             depth);
     }
 
@@ -336,7 +339,7 @@ internal sealed partial class Publications
             plain);
         PublishedBundleNote[] bundle = [.. made.Select(m => new PublishedBundleNote(m.Id, m.Fair.Title, m.Fair.Markdown, m.Depth, m.Files))];
         BundleMember[] members = [.. taken.Skip(1).Select(t => new BundleMember(ids[t.Id], access.ToVault(walk.Notes[t.Id].Path).Value, current[t.Id]!.Version))];
-        int[][] edges = [.. walk.Edges.Where(e => ids.ContainsKey(e[0]) && ids.ContainsKey(e[1])).Select(e => new[] { ids[e[0]], ids[e[1]] }).OrderBy(e => e[0]).ThenBy(e => e[1])];
+        int[][] edges = [.. walk.Edges.Where(e => ids.ContainsKey(e[0]) && ids.ContainsKey(e[1])).Select(e => new[] { ids[e[0]], ids[e[1]] })];
         return new MadeAny(result, bundle, edges, members);
     }
 
@@ -375,12 +378,14 @@ internal sealed partial class Publications
                 Id = ids[t.Id], Depth = t.Depth, Markdown = FairCopies.Relink(byId[t.Id].Markdown, Relinked), Files = [.. byId[t.Id].Files.Select(f => fileIds[f])],
             }),
         ];
+        // The start alone reads as a copy of one note, which has no list of notes: Contents would tell that one left.
+        var alone = kept.Length == 1;
         var pruned = copy with
         {
             Markdown = kept[0].Markdown,
             Files = [.. files.Select(f => new PublishedCopyFile(f.To, f.MediaType))],
-            Notes = kept,
-            Edges = [.. edges.Where(e => ids.ContainsKey(e[0]) && ids.ContainsKey(e[1])).Select(e => new[] { ids[e[0]], ids[e[1]] }).OrderBy(e => e[0]).ThenBy(e => e[1])],
+            Notes = alone ? null : kept,
+            Edges = alone ? null : [.. edges.Where(e => ids.ContainsKey(e[0]) && ids.ContainsKey(e[1])).Select(e => new[] { ids[e[0]], ids[e[1]] })],
         };
         return new PrunedCopy(
             pruned,
@@ -405,11 +410,12 @@ internal sealed partial class Publications
             return (p.Copy, p.Freed, p.Moved);
         }, ct);
         // The record follows the copy, ids and all; a member the copy no longer holds goes from it either way.
-        List<BundleMember> members = pruned is null
+        List<BundleMember>? members = pruned is null
             ? [.. (entry.Members ?? []).Where(m => !dropped.Contains(m.Id))]
+            : pruned.Copy.Notes is null ? null
             : [.. (entry.Members ?? []).Where(m => pruned.Ids.ContainsKey(m.Id)).Select(m => m with { Id = pruned.Ids[m.Id] }).OrderBy(m => m.Id)];
         IReadOnlyList<PublishedFile> files = pruned is null ? entry.Files : [.. entry.Files.Where((_, i) => !pruned.Positions.Contains(i))];
-        return (entry with { Members = members, Files = files }, (entry.Members?.Count ?? 0) - members.Count);
+        return (entry with { Members = members, Files = files }, (entry.Members?.Count ?? 0) - (members?.Count ?? 0));
     }
 
     /// <summary><paramref name="record"/> with <paramref name="entry"/> pruned of <paramref name="leaving"/>, and the log
@@ -419,7 +425,7 @@ internal sealed partial class Publications
         WriterRef byRef, CancellationToken ct)
     {
         var (after, left) = await PruneAsync(session, entry, leaving, ct);
-        var log = LogEntry(PublishingKinds.Updated, Parse(entry.Note), at, by, byRef, reason) with { Notes = after.Members!.Count + 1, Added = 0, Removed = left };
+        var log = LogEntry(PublishingKinds.Updated, Parse(entry.Note), at, by, byRef, reason) with { Notes = (after.Members?.Count ?? 0) + 1, Added = 0, Removed = left };
         return (record with { Publications = [.. record.Publications.Select(p => p.Id == entry.Id ? after : p)], Log = Appended(record.Log, log) }, log);
     }
 }

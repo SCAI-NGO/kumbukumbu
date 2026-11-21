@@ -216,7 +216,8 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     }
 
     /// <summary>Builds one batch: every move, with the moved notes' own link rewrites, and the link rewrites in
-    /// all other notes. A move changes no text, so a note or attachment without rewrites keeps its writer; rewritten
+    /// all other notes. A move changes no text, so a note or attachment without rewrites keeps its writer, but for a move that
+    /// touches a skills location; rewritten
     /// notes get their own history entry, marked with the command ("(mv)"). What <paramref name="replacing"/> trashes joins the batch, and
     /// neither links from it nor to it are rewritten: a link to it now leads to what took its place.</summary>
     private async Task<ShellResult> CommitAsync(
@@ -244,13 +245,19 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var links = 0;
         var changed = new List<VaultPath>();
         NoteVersion? version = null;
+        // A move into, within or out of a skills location counts as a write by the mover: which text a skill holds decides
+        // whether it starts an agent, so it must not pass for its writer's own when another user put it there.
+        var skillsVault = await store.SkillsVaultAsync(ct);
+        bool Skill(VaultPath from, VaultPath to) => SkillPaths.LocationOf(from, skillsVault) is not null || SkillPaths.LocationOf(to, skillsVault) is not null;
 
         foreach (var (from, to) in map)
         {
             if (await store.GetAsync(from, ct) is not { } current)
             {
                 if (await StoreAttachments.GetAsync(store, from, ct) is not { } attachment) return Changed(command, from);
-                var movedAttachment = attachment with { Path = to, Revision = attachment.Revision + 1 };
+                var movedAttachment = Skill(from, to)
+                    ? AttachmentWriter.Next(attachment, attachment.Current, marked, reference, now, changeset) with { Path = to }
+                    : attachment with { Path = to, Revision = attachment.Revision + 1 };
                 batch.AttachmentMoves.Add((attachment, movedAttachment));
                 version = new NoteVersion(to.Value, movedAttachment.Version);
                 continue;
@@ -266,6 +273,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
                 links += own.Count;
                 changed.Add(to);
             }
+            else if (Skill(from, to)) moved = NoteWriter.Next(current, current.Content, marked, reference, now, changeset) with { Path = to };
 
             batch.Moves.Add((current, moved));
             version = new NoteVersion(to.Value, moved.Version);

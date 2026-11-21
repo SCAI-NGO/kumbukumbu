@@ -182,6 +182,28 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_url_stays_with_its_vault_when_another_vault_takes_the_name()
+    {
+        var user = await RestClient.NewAsync(Api);
+        using (var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Zweit" })) Assert.True(created.IsSuccessStatusCode, await created.Content.ReadAsStringAsync(Ct));
+        var vaults = await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct);
+        var (key, _) = await KeyAsync(user, "Claude", vaults.ToDictionary(v => v.Id, _ => KeyRight.Write));
+        var url = await UrlAsync(user, key, "/Arbeit/a.png");
+        foreach (var (from, to) in new[] { ("Arbeit", "Alt"), ("Zweit", "Arbeit") })
+        {
+            using var renamed = await user.SendAsync(HttpMethod.Put, $"/api/vaults/{from}/name", new { name = to });
+            Assert.True(renamed.IsSuccessStatusCode, await renamed.Content.ReadAsStringAsync(Ct));
+        }
+
+        using var put = await PutAsync(url, Bytes(Png));
+
+        await AssertAskAgainAsync(HttpStatusCode.NotFound, put);
+        await AssertNoFileAsync(user, "a.png");
+        using var old = await user.GetAsync("/api/files/Alt/a.png");
+        Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+    }
+
+    [Fact]
     public async Task Lowered_right_is_refused()
     {
         var (alice, _, membership, key) = await SharedAsync();
@@ -203,8 +225,9 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
 
         using var put = await PutAsync(url, Bytes(Png));
 
-        // The key still opens Bob's own vault; the shared one is no longer there for it.
+        // The key still opens Bob's own vault; the shared one is no longer there for it, and the answer names no vault.
         await AssertAskAgainAsync(HttpStatusCode.NotFound, put);
+        Assert.DoesNotContain("garten", await RestClient.ErrorAsync(put), StringComparison.OrdinalIgnoreCase);
         await AssertNoFileAsync(alice, "a.png");
     }
 
@@ -323,7 +346,7 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Answers_a_conflict_with_the_file_as_it_is_now()
+    public async Task Answers_a_conflict_without_the_file_as_it_is_now()
     {
         var user = await RestClient.NewAsync(Api);
         var version = await user.CreateFileAsync("kept.png", Png);
@@ -332,8 +355,10 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
 
         using var put = await PutAsync(url, Bytes(FileApiTests.Png(8, 8)));
 
+        // The URL's holder learns that the path is taken, nothing of the file there.
         var conflict = await CreatedAsync(put, HttpStatusCode.Conflict);
-        Assert.Equal(6, conflict["current"]!["width"]!.GetValue<int>());
+        Assert.Null(conflict["current"]);
+        Assert.Contains("changed", conflict["error"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -493,6 +518,25 @@ public sealed class AgentUploadApiTests(KumbuAppFactory app)
 
         await AssertAskAgainAsync(HttpStatusCode.Forbidden, plain);
         Assert.Contains("HTTPS", await RestClient.ErrorAsync(plain), StringComparison.Ordinal);
+        await AssertAskAgainAsync(HttpStatusCode.Unauthorized, again);
+        await AssertNoFileAsync(user, "a.png");
+    }
+
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("GET")]
+    [InlineData("HEAD")]
+    [InlineData("DELETE")]
+    public async Task Plain_http_spends_the_url_whatever_the_method(string method)
+    {
+        await using var production = Api.WithWebHostBuilder(b => b.UseEnvironment("Production"));
+        var user = (await RestClient.NewAsync(Api)).On(production);
+        var url = await UrlAsync(user, await user.KeyAsync("Claude", KeyRight.Write), "/Arbeit/a.png");
+
+        using var plain = await PutAsync(url, Bytes(Png), production, r => r.Method = new HttpMethod(method), scheme: "http");
+        using var again = await PutAsync(url, Bytes(Png), production);
+
+        Assert.Equal(HttpStatusCode.Forbidden, plain.StatusCode);
         await AssertAskAgainAsync(HttpStatusCode.Unauthorized, again);
         await AssertNoFileAsync(user, "a.png");
     }

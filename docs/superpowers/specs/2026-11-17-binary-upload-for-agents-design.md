@@ -72,7 +72,7 @@ Not under `/api/upload/`: that is the web app's Markdown upload (`POST /api/uplo
 - **Answers** `201` (new) or `200` (overwritten) with `FileStateView` plus:
   - `markdown`: what to put into the note, `![name](/path/inside/vault.png)` for an image, `[name](/path/inside/vault.pdf)` otherwise, the path inside the vault without the vault's name, `%20` for spaces (the link form `Manual.cs` teaches);
   - `link`: the file's deep link (`docs/superpowers/specs/2026-11-17-note-deep-links-design.md`).
-- Errors as the files API's: `400` format or cut-off body, `409` with the file as it is now, `413`, `507` quota.
+- Errors as the files API's: `400` format or cut-off body, `409` saying only that the file exists or changed (changed 2026-11-21: the URL's holder may have no account and is to learn nothing of the file there, not even its version; the agent reads it again with `cat`), a `404` naming no vault for the same reason, `413`, `507` quota.
 - HTTPS only outside `Development`, as every credentialed route.
 
 ### System skill `kumbu-binary-upload`

@@ -70,6 +70,15 @@ describe("renderSvg", () => {
     expect(isWhite(await pixel(r.data, r.width - 5, r.height - 5))).toBe(true);
   });
 
+  it("refuses to draw an SVG over 4 MiB, and draws one of 4 MiB", async () => {
+    const padded = (bytes: number) => {
+      const head = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/>';
+      return new TextEncoder().encode(head + " ".repeat(bytes - head.length - 6) + "</svg>");
+    };
+    await expect(renderSvg(padded(4 * 1024 * 1024 + 1), SMALL, { width: 10, height: 10 })).rejects.toMatchObject({ code: "too_large" });
+    expect((await renderSvg(padded(4 * 1024 * 1024), SMALL, { width: 10, height: 10 })).width).toBeGreaterThan(0);
+  });
+
   it("refuses what is no SVG", async () => {
     await expect(renderSvg(new TextEncoder().encode("hello"), SMALL)).rejects.toMatchObject({ code: "not_image" });
     const png = createCanvas(10, 10).toBuffer("image/png");

@@ -41,6 +41,9 @@ public sealed class ByokDrivers(IHttpClientFactory http, ILoggerFactory logs, Ti
         _refused.TryRemove(route, out _);
     }
 
+    /// <summary>Whether the process holds a driver of the key.</summary>
+    internal bool Holds(string key) => _drivers.ContainsKey(Route(key));
+
     /// <summary>When TensorX last refused the key (401 or 403) since this process started; null if it didn't, or a check
     /// accepted it since.</summary>
     public DateTimeOffset? RefusedAt(string key) => _refused.TryGetValue(Route(key), out var at) ? at : null;

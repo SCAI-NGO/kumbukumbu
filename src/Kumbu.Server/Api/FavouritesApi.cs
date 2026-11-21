@@ -45,7 +45,8 @@ public static partial class FavouritesApi
     private static async Task<Ok<FavouritesView>> ReadAsync(RequestCaller caller, Favourites favourites, CancellationToken ct)
     {
         var names = await ListedAsync(caller, ct);
-        var (entries, version) = await favourites.ReadAsync(caller.User!.Id, caller.UserKey!, ct);
+        var hidden = (await caller.HiddenVaultsAsync(ct)).Select(v => v.Id).ToHashSet(StringComparer.Ordinal);
+        var (entries, version) = await favourites.ReadAsync(caller.User!.Id, caller.UserKey!, hidden, ct);
         return TypedResults.Ok(View(entries, version, names));
     }
 

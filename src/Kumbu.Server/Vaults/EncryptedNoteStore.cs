@@ -891,6 +891,14 @@ public sealed class EncryptedNoteStore(
             }
         }
 
+        // The owner's own key is hers to spend: while her account is deactivated, or gone, her vault is searched by words.
+        var ownerAway = vaults.Where(a => a.Vault.EmbeddingProvider == Search.Byok.Provider && catalog.OwnerInactive(a.Id)).ToList();
+        if (ownerAway.Count > 0)
+        {
+            vaults = vaults.Except(ownerAway).ToList();
+            unavailable.Add((Kumbu.Core.Search.SemanticState.Off, "its owner's account is deactivated, and its owner's own key isn't used meanwhile", ownerAway));
+        }
+
         // By route: per provider, and per key for vaults on people's own keys (EmbeddingProviders.RouteOf).
         var groups = vaults.GroupBy(v => index.Providers.RouteOf(v.Vault), StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
         if (groups.Count == 0 && unavailable.Count == 0)
@@ -1310,6 +1318,7 @@ public sealed class EncryptedNoteStore(
         UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, VaultAccess? access,
         Accounts.QuotaReservation? reservation, CancellationToken ct)
     {
+        IReadOnlyList<(VaultPath Path, string? Content)> written;
         await vault.Gate.WaitAsync(ct);
         try
         {
@@ -1343,16 +1352,19 @@ public sealed class EncryptedNoteStore(
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
             if (reservation is not null) _quota!.Commit(reservation);
-            // After the commit, not in it: a stale or missing extract is parsed anew on the next unlock (graph backend spec §4.1).
-            await catalog.WriteExtractsAsync(vault, paths);
+            written = VaultCatalog.ContentsOf(vault, paths);
             index?.Enqueue(vault, paths.Where(p => !p.IsAttachment || AttachmentFormat.IsPdf(p)));
             await RecordAsync(vault, paths);
-            return true;
         }
         finally
         {
             vault.Gate.Release();
         }
+
+        // After the commit, not in it, and parsed outside the gate, so that the vault's other writers never wait for a
+        // note's links to be read: a stale or missing extract is parsed anew on the next unlock (graph backend spec §4.1).
+        await catalog.WriteExtractsAsync(vault, written);
+        return true;
     }
 
     /// <summary>

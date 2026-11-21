@@ -214,17 +214,52 @@ function NoteMarkdown({ note }: { note: ReaderNote }) {
 const keepNoteLinks = (url: string) => (noteLink(url) ? url : defaultUrlTransform(url));
 
 /**
+ * The links and embeds to a note of the copy (`[text](#kn-3)`, `[text](#kn-3/Heading)`) in one pass, as the server
+ * finds them: each `]` closes the latest `[` still open, escaped brackets aside, so brackets in the text never hide
+ * where it starts. `start` is its `[`, an embed's `!` the character before.
+ */
+const noteLinks = (text: string) => {
+  const links: { start: number; textEnd: number; end: number; id: number }[] = [];
+  const open: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\") i++;
+    else if (c === "[") open.push(i);
+    else if (c === "]" && open.length > 0) {
+      const start = open.pop()!;
+      const m = /^\]\(#kn-(\d{1,9})(?:\/[^)\s]*)?\)/y;
+      m.lastIndex = 0;
+      const found = text.startsWith("](#kn-", i) ? m.exec(text.slice(i, i + 4096)) : null;
+      if (!found) continue;
+      links.push({ start, textEnd: i, end: i + found[0].length, id: Number(found[1]) });
+      // A link holds no link: what was open inside it is its text.
+      open.length = 0;
+      i += found[0].length - 1;
+    }
+  }
+  return links;
+};
+
+/**
  * The copy as one Markdown text, title first, for pasting into an AI's chat: its fetch tools can't read this page. A
  * bundle's notes each under their own heading, links between them to those headings, as the AI link gives them.
  */
 export const copyMarkdown = (copy: ReaderCopy) => {
   if (!copy.notes || copy.notes.length < 2) return `# ${copy.title}\n\n${copy.markdown}`;
   const ids = new Set(copy.notes.map((n) => n.id));
-  const relink = (markdown: string) =>
-    markdown.replace(/(!?)\[((?:\\.|[^\\\]])*)\]\(#kn-(\d+)(?:\/[^)\s]*)?\)/g, (_, bang: string, text: string, id: string) =>
+  const relink = (markdown: string) => {
+    let out = "";
+    let at = 0;
+    for (const link of noteLinks(markdown)) {
+      const bang = link.start > 0 && markdown[link.start - 1] === "!" ? "!" : "";
+      const text = markdown.slice(link.start + 1, link.textEnd);
+      out += markdown.slice(at, link.start - bang.length);
       // A note that left the copy: its text, with only the brackets unescaped that the copy escaped.
-      ids.has(Number(id)) ? `${bang}[${text}](#n${id})` : text.replace(/\\(.)/g, (escape, c: string) => (c === "[" || c === "]" ? c : escape)),
-    );
+      out += ids.has(link.id) ? `${bang}[${text}](#n${link.id})` : text.replace(/\\(.)/g, (escape, c: string) => (c === "[" || c === "]" ? c : escape));
+      at = link.end;
+    }
+    return out + markdown.slice(at);
+  };
   return copy.notes.map((n) => (n.id === 0 ? `# ${copy.title}\n\n${relink(n.markdown)}` : `\n\n---\n\n# ${n.title} {#n${n.id}}\n\n${relink(n.markdown)}`)).join("");
 };
 

@@ -4,8 +4,9 @@
 // can neither stall the others nor leave state behind for the next. Memory outside the heaps
 // (decoded images, canvases) is bounded only by the container's limit, which kills the whole
 // process, jobs under way included. A bounded queue holds the rest; past it a job is refused at once.
-// An SVG runs in a child process instead: Skia draws it in one native call, which terminate() can't
-// interrupt (a few filters or a fan of <use> take minutes), and a process can be killed at its deadline.
+// A job that draws runs in a child process instead: Skia draws an SVG, and rasterises a PDF page or region
+// inside its first encode, in one native call, which terminate() can't interrupt (a few filters, a fan of
+// <use> or a page of translucent fills take minutes), and a process can be killed at its deadline.
 
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -31,9 +32,9 @@ export type WorkerMessage =
 
 const FAILED = "The job failed.";
 
-type Pending = { job: Job; timeoutMs: number; extend?: (pages: number) => number; resolve: (v: unknown) => void; reject: (e: unknown) => void };
+type Pending = { job: Job; timeoutMs: number; extend?: (pages: number) => number; resolve: (v: unknown) => void; reject: (e: unknown) => void; leave?: () => void };
 
-/** A worker thread or, for an SVG, a child process: the pool's one view of both. */
+/** A worker thread or, for a job that draws, a child process: the pool's one view of both. */
 type Runner = {
   on(event: "message", f: (m: WorkerMessage) => void): void;
   on(event: "error" | "exit", f: () => void): void;
@@ -42,6 +43,9 @@ type Runner = {
 };
 
 const HEAP_MB = 384;
+
+/** The jobs that draw with Skia, run in a child process; reading a PDF's text, boxes or images stays in a thread. */
+const DRAWS: ReadonlySet<Job["kind"]> = new Set(["svg", "page", "region", "extract", "image"]);
 
 function thread(entry: URL): Runner {
   const worker = new Worker(entry, { resourceLimits: { maxOldGenerationSizeMb: HEAP_MB } });
@@ -61,6 +65,7 @@ function child(entry: URL): Runner {
 
 const busy = () => new PdfError("The sidecar is busy; try again shortly.", "busy");
 const closing = () => new PdfError("The sidecar is shutting down.", "failed");
+const gone = () => new PdfError("The request was closed before its job began.", "gone");
 
 /** A place in the pool held for a job whose input is still arriving. */
 export type Reservation = {
@@ -134,8 +139,11 @@ export class Pool {
     return this.running.size;
   }
 
-  /** Holds a place for a job, or throws busy: lets the server refuse before it reads a body. */
-  reserve(): Reservation {
+  /**
+   * Holds a place for a job, or throws busy: lets the server refuse before it reads a body. A job run
+   * in it is dropped while it waits once signal aborts (its client has gone), rejected with gone.
+   */
+  reserve(signal?: AbortSignal): Reservation {
     if (this.closed) throw closing();
     if (this.load >= this.capacity) throw busy();
     this.reserved++;
@@ -149,7 +157,7 @@ export class Pool {
     return {
       run: <T>(job: Job, timeoutMs: number, extend?: (pages: number) => number) => {
         if (!give()) return Promise.reject(new Error("A reservation runs one job."));
-        return this.enqueue<T>(job, timeoutMs, extend);
+        return this.enqueue<T>(job, timeoutMs, extend, signal);
       },
       release: () => {
         if (give()) this.pump();
@@ -162,9 +170,9 @@ export class Pool {
    * limit. The job's bytes are transferred to the worker when they fill their own buffer, which
    * leaves the caller's array empty.
    */
-  run<T>(job: Job, timeoutMs: number, extend?: (pages: number) => number): Promise<T> {
+  run<T>(job: Job, timeoutMs: number, extend?: (pages: number) => number, signal?: AbortSignal): Promise<T> {
     try {
-      return this.reserve().run<T>(job, timeoutMs, extend);
+      return this.reserve(signal).run<T>(job, timeoutMs, extend);
     } catch (e) {
       return Promise.reject(e);
     }
@@ -176,10 +184,22 @@ export class Pool {
     await Promise.all([...this.running].map((w) => w.stop()));
   }
 
-  private enqueue<T>(job: Job, timeoutMs: number, extend?: (pages: number) => number): Promise<T> {
+  private enqueue<T>(job: Job, timeoutMs: number, extend?: (pages: number) => number, signal?: AbortSignal): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       if (this.closed) return reject(closing());
-      this.waiting.push({ job, timeoutMs, extend, resolve: resolve as (v: unknown) => void, reject });
+      if (signal?.aborted) return reject(gone());
+      const p: Pending = { job, timeoutMs, extend, resolve: resolve as (v: unknown) => void, reject };
+      if (signal) {
+        const drop = () => {
+          const at = this.waiting.indexOf(p);
+          if (at < 0) return;
+          this.waiting.splice(at, 1);
+          reject(gone());
+        };
+        signal.addEventListener("abort", drop, { once: true });
+        p.leave = () => signal.removeEventListener("abort", drop);
+      }
+      this.waiting.push(p);
       this.pump();
     });
   }
@@ -189,7 +209,8 @@ export class Pool {
   }
 
   private start(p: Pending) {
-    const worker = p.job.kind === "svg" ? child(this.entry) : thread(this.entry);
+    p.leave?.();
+    const worker = DRAWS.has(p.job.kind) ? child(this.entry) : thread(this.entry);
     this.running.add(worker);
     const started = Date.now();
     let settled = false;

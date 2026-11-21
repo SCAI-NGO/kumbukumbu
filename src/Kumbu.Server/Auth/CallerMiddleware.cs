@@ -77,7 +77,7 @@ public sealed class CallerMiddleware(
             return;
         }
 
-        if (HttpMethods.IsPut(context.Request.Method) && context.Request.Path.StartsWithSegments(AgentUploadPrefix, StringComparison.OrdinalIgnoreCase, out var token))
+        if (context.Request.Path.StartsWithSegments(AgentUploadPrefix, StringComparison.OrdinalIgnoreCase, out var token) && (HttpMethods.IsPut(context.Request.Method) || (!context.Request.IsHttps && !environment.IsDevelopment())))
         {
             await AgentUploadAsync(context, token.Value is { Length: > 0 } t ? t[1..] : "");
             return;
@@ -314,7 +314,7 @@ public sealed class CallerMiddleware(
     /// <summary>
     /// <c>PUT /api/agent-upload/{token}</c> (binary upload design): the token alone authorises; no cookie and no
     /// <c>Authorization</c> header is read. Only over HTTPS outside Development, as for <c>/dav</c>; a token sent in the
-    /// clear is spent all the same, as whoever saw it on the way could use it. The ticket is taken out of the store under
+    /// clear is spent all the same, by any method, as whoever saw it on the way could use it. The ticket is taken out of the store under
     /// the wrong-key limit, an unknown, used or expired one counting as a wrong key, and its credential then resolved as
     /// the same credential in a bearer header (on <c>/mcp</c>) or on its connection's URL is: its slots opened afresh,
     /// revocation, expiry, user, membership and right all checked by that code. The ticket's copy of the credential is

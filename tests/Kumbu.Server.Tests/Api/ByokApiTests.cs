@@ -616,6 +616,76 @@ public sealed class ByokApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal([Key], _tensorx.Keys);
     }
 
+    /// <summary>Alice's shared vault Gartenarbeit on her key, Bob a member who OKed it; his search goes out with her key.</summary>
+    private async Task<(RestClient Alice, RestClient Bob, string VaultId)> SharedOnHerKeyAsync()
+    {
+        var alice = await WithKeyAsync("Gartenarbeit");
+        await alice.CreateAsync("hens.md", "# Hens\n\nThe hens laid eggs today.\n");
+        var bob = await RestClient.NewAsync(alice.Api, "Work");
+        var membership = await alice.ShareWithAsync(bob, "garten");
+        using (var chosen = await ChooseAsync(alice, "Gartenarbeit", Byok.Provider)) Assert.Equal(HttpStatusCode.OK, chosen.StatusCode);
+        await IndexedAsync(alice);
+        using (var ok = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{membership}/provider-seen", new { provider = Byok.Provider }))
+            Assert.Equal(HttpStatusCode.NoContent, ok.StatusCode);
+        Assert.Equal([Key], (await BobsSearchAsync(bob)).Keys);
+        return (alice, bob, await alice.VaultIdAsync());
+    }
+
+    /// <summary>Bob's search in the shared vault (by meaning, or as the search box asks): the keys it went out with,
+    /// and the answer.</summary>
+    private async Task<(List<string?> Keys, JsonNode Answer)> BobsSearchAsync(RestClient bob, string mode = "&mode=meaning")
+    {
+        lock (_tensorx.Keys) _tensorx.Keys.Clear();
+        using var search = await bob.GetAsync($"/api/search?q=eggs{mode}&path=/garten");
+        Assert.Equal(HttpStatusCode.OK, search.StatusCode);
+        var answer = await RestClient.JsonAsync(search);
+        lock (_tensorx.Keys) return ([.. _tensorx.Keys], answer);
+    }
+
+    /// <summary>The copy of the key in the vault's stored meta, as a member's credentials open it.</summary>
+    private static async Task<string?> MembersCopyAsync(RestClient member, string vaultId)
+    {
+        var catalog = member.Api.Services.GetRequiredService<VaultCatalog>();
+        var access = (await catalog.OpenForUserAsync(member.User.Id, member.UserKey, Ct)).Single(a => a.Id == vaultId);
+        return access.Vault.OpenMeta((await catalog.Vaults.Find(d => d.Id == vaultId).FirstAsync(Ct)).Meta).EmbeddingsKey;
+    }
+
+    [Fact]
+    public async Task Once_the_owner_deleted_her_account_her_key_is_neither_used_nor_kept()
+    {
+        var (alice, bob, vaultId) = await SharedOnHerKeyAsync();
+        var drivers = alice.Api.Services.GetRequiredService<ByokDrivers>();
+        Assert.Equal(Key, await MembersCopyAsync(bob, vaultId));
+
+        using (var deleted = await alice.SendAsync(HttpMethod.Post, "/api/account/delete", new { password = RestClient.Password, confirm = alice.Username }))
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+
+        Assert.Empty((await BobsSearchAsync(bob)).Keys);
+        Assert.Null(await MembersCopyAsync(bob, vaultId));
+        Assert.False(drivers.Holds(Key));
+        // After a restart too.
+        Assert.Empty((await BobsSearchAsync(bob.On(Api()))).Keys);
+    }
+
+    [Fact]
+    public async Task While_the_owner_is_deactivated_the_members_search_by_words_and_her_key_is_kept_for_her_return()
+    {
+        var (alice, bob, vaultId) = await SharedOnHerKeyAsync();
+        var admin = await RestClient.NewAsync(alice.Api, vault: "Admin", role: Roles.Admin);
+        var accounts = alice.Api.Services.GetRequiredService<Admin>();
+        Assert.True(await accounts.SetActiveAsync(admin.User, alice.User.Id, false, Ct));
+
+        var (keys, answer) = await BobsSearchAsync(bob, mode: "");
+        Assert.Empty(keys);
+        Assert.Equal("/garten/hens.md", answer["results"]![0]!["path"]!.GetValue<string>());
+        Assert.StartsWith("Ranked by words only", answer["notice"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Empty((await BobsSearchAsync(bob.On(Api()))).Keys);
+
+        Assert.True(await accounts.SetActiveAsync(admin.User, alice.User.Id, true, Ct));
+        Assert.Equal(Key, await MembersCopyAsync(bob, vaultId));
+        Assert.Equal([Key], (await BobsSearchAsync(bob)).Keys);
+    }
+
     [Fact]
     public async Task The_key_never_appears_in_answers_or_the_log()
     {

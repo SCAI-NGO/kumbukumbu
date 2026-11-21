@@ -318,6 +318,25 @@ describe("Lightbox", () => {
     expect(writeText).toHaveBeenCalledWith("[[data.xlsx]]");
   });
 
+  it.each([
+    ["over 50 megapixels", 8000, 8000],
+    ["wider than 16,384 px", 20_000, 10],
+  ])("shows an image %s as a card with a download, and fetches nothing to draw it", async (_, width, height) => {
+    const fetch = api({ "GET /api/version/*": () => json(200, fileInfo("/W/shots/huge.png", { width, height })) });
+    renderApp(opened("/W/shots/huge.png", ["/W/shots/huge.png"]));
+    const card = await screen.findByRole("region", { name: "huge.png" });
+    expect(card).toHaveTextContent("Too large to draw here");
+    expect(within(card).getByRole("button", { name: "Download" })).toBeInTheDocument();
+    expect(screen.queryByTestId("image-stage")).toBeNull();
+    expect(fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname)).not.toContain("/api/files/W/shots/huge.png");
+  });
+
+  it("draws an image at the bound", async () => {
+    api({ "GET /api/version/*": () => json(200, fileInfo("/W/shots/big.png", { width: 5000, height: 10_000 })) });
+    renderApp(opened("/W/shots/big.png", ["/W/shots/big.png"]));
+    expect(await screen.findByRole("img", { name: "big.png" })).toBeInTheDocument();
+  });
+
   it("goes by the server's kind: a .csv of bytes in an ordinary vault named Skills is a file", async () => {
     api({ "GET /api/version/*": () => json(200, { ...fileInfo("/Skills/x/data.csv"), kind: "file", mediaType: "application/octet-stream", width: undefined, height: undefined }) });
     renderApp(opened("/Skills/x/data.csv", ["/Skills/x/data.csv"]));
