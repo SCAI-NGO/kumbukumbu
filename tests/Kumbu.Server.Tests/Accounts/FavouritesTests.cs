@@ -199,6 +199,22 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_list_read_while_hidden_and_written_once_shown_is_409_and_keeps_the_discreet_vaults()
+    {
+        var w = await HiddenWorld.NewAsync(Api);
+        await WriteAsync(w.Alice, Note("Work", "plan.md"), Note("Tagebuch", "geheim.md"));
+        await w.HideAsync();
+        var hiddenVersion = await VersionAsync(w.Alice);
+        // Another tab of the session shows the vaults before this one has heard of it.
+        await w.RevealAsync();
+
+        using var stale = await w.Alice.SendAsync(HttpMethod.Put, Url, new { favourites = new[] { Note("Work", "plan.md") }, version = hiddenVersion });
+
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        Assert.Equal(["note Work/plan.md", "note Tagebuch/geheim.md"], await EntriesAsync(w.Alice));
+    }
+
+    [Fact]
     public async Task A_vault_no_longer_listed_is_left_out()
     {
         var alice = await NewAsync(Api, vault: "Work");
@@ -429,7 +445,7 @@ public sealed class FavouritesTests(KumbuAppFactory app) : IAsyncDisposable
         {
             if (Interlocked.Exchange(ref once, 1) == 1) return;
             // Another device, which shows Tagebuch, writes between this write's read and its write.
-            var (_, version) = await favourites.ReadAsync(w.Alice.User.Id, w.Alice.UserKey, Ct);
+            var (_, version) = await favourites.ReadAsync(w.Alice.User.Id, w.Alice.UserKey, new HashSet<string>(), Ct);
             await favourites.ReplaceVisibleAsync(
                 w.Alice.User.Id, w.Alice.UserKey, version, new HashSet<string>(),
                 [new StoredFavourite("board", null, w.TagebuchId, null, _time.GetUtcNow())], Ct);

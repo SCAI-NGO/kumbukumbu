@@ -53,12 +53,12 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
 
     /// <summary>All her favourites, in the order added, and their <see cref="VersionOf">version</see>; none for a user who is
     /// gone, and none bound to a vault when they don't open.</summary>
-    public async Task<(IReadOnlyList<StoredFavourite> Entries, string Version)> ReadAsync(string userId, byte[] userKey, CancellationToken ct)
+    public async Task<(IReadOnlyList<StoredFavourite> Entries, string Version)> ReadAsync(string userId, byte[] userKey, IReadOnlySet<string> hiddenVaultIds, CancellationToken ct)
     {
         var user = await Users.Find(u => u.Id == userId).Project(u => new { u.Favourites, u.FavouritesSealed }).FirstOrDefaultAsync(ct);
         return user is null
-            ? ([], VersionOf(userId, userKey, null, null))
-            : (Ordered(OpenCommands(userId, user.Favourites), OpenSealed(userId, userKey, user.FavouritesSealed)), VersionOf(userId, userKey, user.Favourites, user.FavouritesSealed));
+            ? ([], VersionOf(userId, userKey, null, null, hiddenVaultIds))
+            : (Ordered(OpenCommands(userId, user.Favourites), OpenSealed(userId, userKey, user.FavouritesSealed)), VersionOf(userId, userKey, user.Favourites, user.FavouritesSealed, hiddenVaultIds));
     }
 
     /// <summary>
@@ -79,7 +79,7 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
         var f = Builders<UserDocument>.Filter;
         var user = await Users.Find(u => u.Id == userId).Project(u => new { u.KeyId, u.Favourites, u.FavouritesSealed }).FirstOrDefaultAsync(ct);
         if (user is null || !CryptographicOperations.FixedTimeEquals(user.KeyId, keyId)) throw new CredentialsChangedException();
-        if (VersionOf(userId, userKey, user.Favourites, user.FavouritesSealed) != version) throw new FavouritesConflictException();
+        if (VersionOf(userId, userKey, user.Favourites, user.FavouritesSealed, hiddenVaultIds) != version) throw new FavouritesConflictException();
         var before = OpenCommands(userId, user.Favourites).Concat(OpenSealed(userId, userKey, user.FavouritesSealed)).ToList();
         var kept = before.Where(b => b.VaultId is { } id && hiddenVaultIds.Contains(id));
         var now = time.GetUtcNow();
@@ -105,18 +105,20 @@ public sealed class Favourites(IMongoDatabase db, TimeProvider time, ILogger<Fav
             Builders<UserDocument>.Update.Set(u => u.Favourites, plain).Set(u => u.FavouritesSealed, sealedList),
             cancellationToken: ct);
         if (written.MatchedCount != 1) throw new FavouritesConflictException();
-        return (Ordered(commands, bound), VersionOf(userId, userKey, plain, sealedList));
+        return (Ordered(commands, bound), VersionOf(userId, userKey, plain, sealedList, hiddenVaultIds));
     }
 
     /// <summary>
     /// The version of both stored parts, as stored: what a write names to say which list it changes. The sealed part is
     /// sealed afresh on every write, so the version tells nothing of what it holds, a hidden vault's entries included; and
     /// it is keyed under the user key, so a list never written can't be told from one written, or one user's from another's.
+    /// The vaults the session hides are part of it: a list read while they were hidden, and written once they are shown
+    /// (another tab, the moment before this one heard of it), would drop their entries, so it names another version.
     /// </summary>
-    private static string VersionOf(string userId, byte[] userKey, string[]? commands, byte[]? sealedList) =>
+    private static string VersionOf(string userId, byte[] userKey, string[]? commands, byte[]? sealedList, IReadOnlySet<string> hiddenVaultIds) =>
         Base64Url.EncodeToString(HMACSHA256.HashData(
             VaultCrypto.Derive(userKey, VersionLabel, Encoding.UTF8.GetBytes(userId)),
-            JsonSerializer.SerializeToUtf8Bytes(new object?[] { commands, sealedList })));
+            JsonSerializer.SerializeToUtf8Bytes(new object?[] { commands, sealedList, hiddenVaultIds.Order(StringComparer.Ordinal).ToArray() })));
 
     private static int IndexIn(List<StoredFavourite> before, StoredFavourite entry) =>
         before.FindIndex(entry.SameAs) is var i and >= 0 ? i : int.MaxValue;
