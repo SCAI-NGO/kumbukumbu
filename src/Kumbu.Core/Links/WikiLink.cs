@@ -32,9 +32,12 @@ public sealed partial record WikiLink(int Line, int Start, string Raw, bool Embe
             if (code[i]) continue;
             var line = lines[i];
             var spans = CodeSpans(line);
+            var span = 0;
             foreach (Match m in LinkRegex().Matches(line))
             {
-                if (spans.Any(s => m.Index >= s.Start && m.Index < s.End)) continue;
+                // Both in order: the spans that end before this match are behind every later one too.
+                while (span < spans.Count && spans[span].End <= m.Index) span++;
+                if (span < spans.Count && spans[span].Start <= m.Index) continue;
                 var link = FromMatch(i, m);
                 // [[ ]] and [[|x]] name nothing; Obsidian doesn't treat them as links either.
                 if (link.Target.Trim().Length == 0 && link.Subpath.Length == 0) continue;

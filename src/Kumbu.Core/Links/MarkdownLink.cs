@@ -81,103 +81,170 @@ public sealed partial record MarkdownLink(
 
     private static void ParseLine(int index, string line, List<MarkdownLink> result)
     {
-        var code = CodeSpans(line);
-        var wikilinks = WikiLink.LinkRegex().Matches(line).Select(m => (Start: m.Index, End: m.Index + m.Length)).ToList();
+        if (!line.Contains('[')) return;
+        var scan = new Scan(line);
         for (var start = 0; start < line.Length; start++)
         {
-            if (line[start] != '[' || code.Concat(wikilinks).Any(s => start >= s.Start && start < s.End)) continue;
-            if (Escaped(line, start)) continue;
-            var embed = start > 0 && line[start - 1] == '!' && !Escaped(line, start - 1) && !code.Any(s => start - 1 >= s.Start && start - 1 < s.End);
-            if (TryParse(index, line, start, embed) is not { } link) continue;
-            // With a wikilink anywhere in it, "[see [[x]]](y.md)" or "[a](x[[y]].md)", Obsidian reads the
-            // wikilink, not a Markdown link.
-            var end = link.Start + link.Raw.Length;
-            if (wikilinks.Any(w => w.Start < end && start < w.End)) continue;
+            if (line[start] != '[' || scan.Hidden[start] || scan.Escaped[start]) continue;
+            var embed = start > 0 && line[start - 1] == '!' && !scan.Escaped[start - 1] && !scan.Code[start - 1];
+            if (TryParse(index, scan, start, embed) is not { } link) continue;
             result.Add(link);
             start = link.Start + link.Raw.Length - 1;
         }
     }
 
-    private static MarkdownLink? TryParse(int index, string line, int start, bool embed)
+    /// <summary>The link at <paramref name="start"/>, every part found by a lookup in <paramref name="scan"/>: no scan of the
+    /// line from here, so a line of many '[' costs its length, not its length squared. Nothing is copied until it is a link,
+    /// and links don't overlap.</summary>
+    private static MarkdownLink? TryParse(int index, Scan scan, int start, bool embed)
     {
-        // Link text: brackets balance, backslash escapes don't count.
-        var i = start + 1;
-        for (var depth = 0; i < line.Length; i++)
-        {
-            if (line[i] == '\\') i++;
-            else if (line[i] == '[') depth++;
-            else if (line[i] == ']' && depth-- == 0) break;
-        }
-
-        // No '(' right after ']': plain brackets or a reference-style link, neither is read.
-        if (i + 1 >= line.Length || line[i + 1] != '(') return null;
-        var text = line[start..(i + 1)];
-        i = SkipSpaces(line, i + 2);
+        var line = scan.Line;
+        // Link text: brackets balance, backslash escapes don't count. No '(' right after ']': plain brackets or a
+        // reference-style link, neither is read.
+        var i = scan.Close[start];
+        if (i < 0 || i + 1 >= line.Length || line[i + 1] != '(') return null;
+        i = scan.NextNonSpace[i + 2];
         var destinationStart = i;
-        string inner;
+        int innerStart, innerEnd;
         if (i < line.Length && line[i] == '<')
         {
-            for (i++; i < line.Length && line[i] != '>'; i++)
-            {
-                if (line[i] == '<') return null;
-                if (line[i] == '\\') i++;
-            }
-
-            if (i >= line.Length) return null;
-            inner = line[(destinationStart + 1)..i];
+            i = scan.NextAngle[i + 1];
+            if (i < 0 || line[i] == '<') return null;
+            (innerStart, innerEnd) = (destinationStart + 1, i);
             i++;
         }
         else
         {
-            // Parentheses inside a bare destination must balance: "Plan%20(v2).md".
-            for (var depth = 0; i < line.Length && line[i] != ' ' && line[i] != '\t' && !char.IsControl(line[i]); i++)
-            {
-                if (line[i] == '\\') i++;
-                else if (line[i] == '(') depth++;
-                else if (line[i] == ')' && depth-- == 0) break;
-            }
-
-            inner = line[destinationStart..Math.Min(i, line.Length)];
+            // Parentheses inside a bare destination must balance: "Plan%20(v2).md". It ends at the first space, tab or
+            // control character, or at the ')' that takes the depth below where it started.
+            var stop = scan.NextStop[i];
+            var close = scan.DepthDrop[i] - 1;
+            if (close >= 0 && close < stop) stop = close;
+            if (stop >= line.Length) return null;
+            (innerStart, innerEnd) = (destinationStart, stop);
+            i = stop;
         }
 
         var destinationEnd = i;
-        i = SkipSpaces(line, i);
+        i = scan.NextNonSpace[i];
         if (i > destinationEnd && i < line.Length && line[i] is '"' or '\'' or '(')
         {
-            var close = line[i] == '(' ? ')' : line[i];
-            for (i++; i < line.Length && line[i] != close; i++)
-            {
-                if (line[i] == '\\') i++;
-            }
-
-            if (i >= line.Length) return null;
-            i = SkipSpaces(line, i + 1);
+            i = (line[i] switch { '"' => scan.NextDouble, '\'' => scan.NextSingle, _ => scan.NextParen })[i + 1];
+            if (i < 0) return null;
+            i = scan.NextNonSpace[i + 1];
         }
 
         if (i >= line.Length || line[i] != ')') return null;
+        // With a wikilink anywhere in it, "[see [[x]]](y.md)" or "[a](x[[y]].md)", Obsidian reads the wikilink, not a
+        // Markdown link.
+        if (scan.WikiBefore[i + 1] > scan.WikiBefore[start]) return null;
+        var inner = line.AsSpan(innerStart, innerEnd - innerStart);
         if (inner.Length == 0 || SchemeRegex().IsMatch(inner) || inner.StartsWith("//", StringComparison.Ordinal)) return null;
 
         // The fragment starts at the first raw '#', so an encoded "%23" stays part of the name.
         var hash = inner.IndexOf('#');
         var path = hash >= 0 ? inner[..hash] : inner;
-        var subpath = hash >= 0 ? inner[hash..] : "";
+        var subpath = hash >= 0 ? inner[hash..] : [];
         if (path.Length == 0 && subpath.Length <= 1) return null;
         var from = embed ? start - 1 : start;
-        return new MarkdownLink(index, from, line[from..(i + 1)], Decode(path), subpath, text,
+        return new MarkdownLink(index, from, line[from..(i + 1)], Decode(path.ToString()), subpath.ToString(), line[start..(scan.Close[start] + 1)],
             line[destinationStart..destinationEnd], line[destinationEnd..(i + 1)], embed);
+    }
+
+    /// <summary>
+    /// What <see cref="TryParse"/> asks of a line, each worked out for every position in a pass or two. A backslash
+    /// escapes the character after it, so a character is escaped when an odd number of backslashes stand right before
+    /// it; every scan the parser used to make starts right after an unescaped character, so this one reading of the
+    /// escapes is the one each of those scans made. The "next" lookups are -1 where there is none.
+    /// </summary>
+    private sealed class Scan
+    {
+        public readonly string Line;
+        public readonly bool[] Escaped;
+        /// <summary>Inside inline code.</summary>
+        public readonly bool[] Code;
+        /// <summary>Inside inline code or a wikilink: no link starts there.</summary>
+        public readonly bool[] Hidden;
+        /// <summary>How many characters before each position lie inside a wikilink.</summary>
+        public readonly int[] WikiBefore;
+        /// <summary>The ']' that closes the '[' at each position, brackets balanced.</summary>
+        public readonly int[] Close;
+        /// <summary>The first unescaped space, tab or control character at or after each position; the line's length if none.</summary>
+        public readonly int[] NextStop;
+        /// <summary>With the depth before each position counted over unescaped parentheses, the first later position
+        /// where the depth is lower than here: one past the ')' that closes what starts here.</summary>
+        public readonly int[] DepthDrop;
+        public readonly int[] NextAngle, NextDouble, NextSingle, NextParen;
+        /// <summary>The first position at or after each that isn't a space or tab; the line's length if none.</summary>
+        public readonly int[] NextNonSpace;
+
+        public Scan(string line)
+        {
+            Line = line;
+            var n = line.Length;
+            Escaped = new bool[n];
+            for (var k = 1; k < n; k++) Escaped[k] = line[k - 1] == '\\' && !Escaped[k - 1];
+
+            Code = new bool[n];
+            Hidden = new bool[n];
+            foreach (var (s, e) in CodeSpans(line))
+            {
+                for (var k = s; k < e; k++) Code[k] = Hidden[k] = true;
+            }
+
+            var wiki = new bool[n];
+            foreach (System.Text.RegularExpressions.Match m in WikiLink.LinkRegex().Matches(line))
+            {
+                for (var k = m.Index; k < m.Index + m.Length; k++) wiki[k] = Hidden[k] = true;
+            }
+
+            WikiBefore = new int[n + 1];
+            for (var k = 0; k < n; k++) WikiBefore[k + 1] = WikiBefore[k] + (wiki[k] ? 1 : 0);
+
+            Close = new int[n];
+            var open = new Stack<int>();
+            for (var k = 0; k < n; k++)
+            {
+                Close[k] = -1;
+                if (Escaped[k]) continue;
+                if (line[k] == '[') open.Push(k);
+                else if (line[k] == ']' && open.Count > 0) Close[open.Pop()] = k;
+            }
+
+            var depth = new int[n + 1];
+            for (var k = 0; k < n; k++) depth[k + 1] = depth[k] + (Escaped[k] ? 0 : line[k] == '(' ? 1 : line[k] == ')' ? -1 : 0);
+            // The depth moves by one at a time, so the first lower depth is the first of one less: found from the
+            // right, by the last position seen at each depth (offset by n, as depths run from -n to n).
+            DepthDrop = new int[n + 1];
+            var seenAt = new int[2 * n + 2];
+            Array.Fill(seenAt, -1);
+            for (var k = n; k >= 0; k--)
+            {
+                DepthDrop[k] = depth[k] + n - 1 >= 0 ? seenAt[depth[k] + n - 1] : -1;
+                seenAt[depth[k] + n] = k;
+            }
+
+            NextStop = Next(n, k => !Escaped[k] && (line[k] is ' ' or '\t' || char.IsControl(line[k])), n);
+            NextAngle = Next(n, k => !Escaped[k] && line[k] is '<' or '>', -1);
+            NextDouble = Next(n, k => !Escaped[k] && line[k] == '"', -1);
+            NextSingle = Next(n, k => !Escaped[k] && line[k] == '\'', -1);
+            NextParen = Next(n, k => !Escaped[k] && line[k] == ')', -1);
+            NextNonSpace = Next(n, k => line[k] is not (' ' or '\t'), n);
+        }
+
+        private static int[] Next(int n, Func<int, bool> at, int none)
+        {
+            var next = new int[n + 1];
+            next[n] = none;
+            for (var k = n - 1; k >= 0; k--) next[k] = at(k) ? k : next[k + 1];
+            return next;
+        }
     }
 
     private static int SkipSpaces(string line, int i)
     {
         while (i < line.Length && line[i] is ' ' or '\t') i++;
         return i;
-    }
-
-    private static bool Escaped(string line, int index)
-    {
-        var backslashes = 0;
-        while (index - backslashes - 1 >= 0 && line[index - backslashes - 1] == '\\') backslashes++;
-        return backslashes % 2 == 1;
     }
 
     internal static string Decode(string path) => Uri.UnescapeDataString(EscapeRegex().Replace(path, "$1"));
