@@ -54,6 +54,9 @@ async function reserve(ledgerName: string, limit = 5) {
 /** Before each password check (a confirmation, a dialog asking for it): 5 a minute per username, apart from sign-ins. */
 export const reservePassword = (user: User) => reserve(`password-${user}`);
 
+/** Before each entry of Alice's PIN, in the app or through the API: 5 a minute per account. */
+export const reservePin = () => reserve("pin-alice");
+
 /**
  * Before each read of a published note by a reader (opening the reader page, making or fetching a link for AIs):
  * the server allows 60 a minute per address, and every test reads from localhost.
@@ -85,7 +88,7 @@ export async function newSession(browser: Browser, user: User, options: BrowserC
  * session ends it.
  */
 export async function enterPin(page: Page) {
-  await reserve("pin-alice");
+  await reservePin();
   const dialog = page.getByRole("dialog", { name: "More vaults" });
   await dialog.getByLabel("PIN").fill(secrets().pin);
   await dialog.getByRole("button", { name: "Open" }).click();
