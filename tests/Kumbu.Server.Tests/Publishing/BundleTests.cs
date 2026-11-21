@@ -407,15 +407,30 @@ public sealed class BundleTests(KumbuAppFactory app)
 
         await MarkAsync(alice, "/Work/B.md");
 
+        // The note alone reads as a copy of one note: no list of notes, as a fresh copy of it has none.
         var copy = await CopyAsync(published);
-        Assert.Equal([0], copy.Notes!.Select(n => n.Id));
+        Assert.Null(copy.Notes);
+        Assert.Null(copy.Edges);
         Assert.Equal("See B.", copy.Markdown.TrimEnd());
-        Assert.Equal("See B.", copy.Notes![0].Markdown.TrimEnd());
-        Assert.Empty(copy.Edges!);
         var (_, access) = await AliceAsync(alice);
         var record = (await Store.ReadAsync(null, access.Vault, Ct)).Record;
-        Assert.Empty(Assert.Single(record.Publications).Members!);
+        Assert.Null(Assert.Single(record.Publications).Members);
         Assert.Equal((PublishingKinds.Updated, WithdrawalReasons.Unpublishable, 1), (record.Log[^1].Kind, record.Log[^1].Reason, record.Log[^1].Removed));
+    }
+
+    [Fact]
+    public async Task After_a_note_leaves_the_others_stand_as_a_fresh_walk_numbers_them()
+    {
+        // D reaches Q before N does; without D a walk meets P first, by N's links in their order.
+        var alice = await WorkAsync(("A.md", "[[D]] [[N]]"), ("D.md", "[[Q]]"), ("N.md", "[[P]] [[Q]]"), ("P.md", "p"), ("Q.md", "q"));
+        var published = await PublishAsync(alice, "/Work/A.md", 2);
+
+        await MarkAsync(alice, "/Work/D.md");
+
+        var pruned = await CopyAsync(published);
+        var fresh = await CopyAsync(await UpdateAsync(alice, "/Work/A.md"));
+        Assert.Equal(fresh.Notes!.Select(n => (n.Id, n.Title, n.Markdown)), pruned.Notes!.Select(n => (n.Id, n.Title, n.Markdown)));
+        Assert.Equal(fresh.Edges!.Select(e => (e[0], e[1])), pruned.Edges!.Select(e => (e[0], e[1])));
     }
 
     [Fact]
@@ -541,7 +556,7 @@ public sealed class BundleTests(KumbuAppFactory app)
 
         using (var deleted = await alice.SendAsync(HttpMethod.Delete, alice.Url("B.md"))) Assert.True(deleted.IsSuccessStatusCode);
 
-        Assert.Equal(["A"], (await CopyAsync(published)).Notes!.Select(n => n.Title));
+        Assert.Null((await CopyAsync(published)).Notes);
     }
 
     [Fact]
