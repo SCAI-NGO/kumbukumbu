@@ -450,6 +450,17 @@ public class NoteWriterTests
         Assert.Null(clean);
     }
 
+    [Theory]
+    [InlineData("tidied\u200B  (current)", "tidied (current)")]
+    [InlineData("tidied \u00A0\u00A0(restored)", "tidied (restored)")]
+    [InlineData("\u202Eevil\u2066 name\uFEFF", "evil name")]
+    [InlineData("\u200B", null)]
+    public void A_message_loses_format_characters_and_runs_of_spaces_so_it_cant_pass_for_historys_marks(string message, string? expected)
+    {
+        Assert.True(NoteWriter.TryMessage(message, "write", out var clean, out _));
+        Assert.Equal(expected, clean);
+    }
+
     [Fact]
     public async Task A_bad_message_writes_nothing()
     {
