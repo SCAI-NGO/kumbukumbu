@@ -36,14 +36,22 @@ afterEach(() => {
   useEditor.getState().reset();
 });
 
-const section = () => screen.findByRole("region", { name: "Search by meaning" });
+const section = () => screen.findByRole("region", { name: "Embeddings" });
 
-describe("Settings: Search by meaning with your own key", () => {
-  it("isn't there when the server doesn't offer it", async () => {
+describe("Settings, External: Embeddings with your own key", () => {
+  it("isn't there when the server doesn't offer it, nor is the External entry", async () => {
     api({ ...none, offered: false });
+    renderApp("/settings/external");
+    expect(await screen.findByText("This server offers no external services.")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Embeddings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "External" })).not.toBeInTheDocument();
+  });
+
+  it("isn't on the Vaults page any more", async () => {
+    api(none);
     renderApp("/settings/vaults");
     await screen.findByRole("region", { name: "Vaults" });
-    expect(screen.queryByRole("region", { name: "Search by meaning" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Embeddings" })).not.toBeInTheDocument();
   });
 
   it("saves a key, then offers to move the person's own vaults, all ticked", async () => {
@@ -62,7 +70,7 @@ describe("Settings: Search by meaning with your own key", () => {
         return json(200, {});
       },
     });
-    renderApp("/settings/vaults");
+    renderApp("/settings/external");
     const region = await section();
     expect(region).toHaveTextContent("TensorX");
     // With the spaces a paste may bring along: the key goes without them.
@@ -86,7 +94,7 @@ describe("Settings: Search by meaning with your own key", () => {
     const fetch = api(none, {
       "PUT /api/account/embeddings-key": () => json(200, saved),
     });
-    renderApp("/settings/vaults");
+    renderApp("/settings/external");
     const region = await section();
     await userEvent.type(within(region).getByLabelText("TensorX key"), "sk-test-key-abcd");
     await userEvent.click(within(region).getByRole("button", { name: "Save key" }));
@@ -96,7 +104,7 @@ describe("Settings: Search by meaning with your own key", () => {
 
   it("shows the server's sentence for a refused key", async () => {
     api(none, { "PUT /api/account/embeddings-key": () => json(400, { error: "TensorX refused this key." }) });
-    renderApp("/settings/vaults");
+    renderApp("/settings/external");
     const region = await section();
     await userEvent.type(within(region).getByLabelText("TensorX key"), "sk-wrong-key-0000");
     await userEvent.click(within(region).getByRole("button", { name: "Save key" }));
@@ -114,7 +122,7 @@ describe("Settings: Search by meaning with your own key", () => {
         return noContent();
       },
     });
-    renderApp("/settings/vaults");
+    renderApp("/settings/external");
     const region = await section();
     expect(await within(region).findByText("TensorX key: saved, ends in …abcd")).toBeInTheDocument();
     expect(region).toHaveTextContent("TensorX refused the key");

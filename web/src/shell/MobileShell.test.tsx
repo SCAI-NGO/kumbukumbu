@@ -349,7 +349,7 @@ describe("the shell", () => {
   });
 
   it("offers the person's own TensorX key only once it is saved", async () => {
-    const byok = { name: "tensorx-byok", label: "TensorX (your own key)", description: "As TensorX states: EU (Ireland), zero data retention", external: true, available: false, reason: "save your TensorX key in Settings, Vaults first", default: false, needsKey: true };
+    const byok = { name: "tensorx-byok", label: "TensorX (your own key)", description: "As TensorX states: EU (Ireland), zero data retention", external: true, available: false, reason: "save your TensorX key in Settings, External first", default: false, needsKey: true };
     signedInApi({
       "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal" }]),
       "GET /api/embeddings": () => json(200, [internalProvider, byok]),
@@ -362,7 +362,7 @@ describe("the shell", () => {
 
     const radio = await within(dialog).findByRole("radio", { name: /TensorX \(your own key\)/ });
     expect(radio).toBeDisabled();
-    expect(dialog).toHaveTextContent("Save your TensorX key in Settings, Vaults first.");
+    expect(dialog).toHaveTextContent("Save your TensorX key in Settings, External first.");
   });
 
   it("marks the provider that is the server's default", async () => {

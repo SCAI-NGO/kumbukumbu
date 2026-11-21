@@ -5,7 +5,7 @@ import { useEffect, useId, useMemo, useState, type KeyboardEvent, type Synthetic
 import { createPortal, flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { favouriteKey, useFavourites, type Favourite, type FavouriteInput } from "../api/favourites";
-import { treeQuery, useVaults, type TreeView } from "../api/notes";
+import { treeQuery, useByok, useVaults, type TreeView } from "../api/notes";
 import { crumbOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { usePublishEnabled } from "../api/publications";
 import { useMarketplaces } from "../api/skills";
@@ -58,6 +58,8 @@ function useRows(note: PaletteNote | null, onSplit: (() => void) | null, typed: 
   // As the Skills window decides its tabs.
   const shared = usePublishEnabled() === true;
   const marketplaces = useMarketplaces().data?.enabled === true;
+  // As the settings window decides its External entry.
+  const external = useByok().data?.offered === true;
   const vaults = useVaults().data;
   // The note the editor writes, while one is in Write mode.
   const writing = useEditor((s) => (writingSide(s) ? editedPath(s) : null));
@@ -73,13 +75,13 @@ function useRows(note: PaletteNote | null, onSplit: (() => void) | null, typed: 
   const all = useMemo(
     () => ({
       rows: [
-        ...commandRows({ admin, shared, marketplaces }),
+        ...commandRows({ admin, shared, marketplaces, external }),
         ...vaultRows(vaults ?? []),
         ...(vaults ?? []).flatMap((v, i) => (trees[i] ? noteRows(v.name, trees[i].tree.root) : [])),
       ],
       trees: new Map((vaults ?? []).flatMap((v, i) => (trees[i] ? [[v.name, trees[i]] as const] : []))),
     }),
-    [admin, shared, marketplaces, vaults, trees],
+    [admin, shared, marketplaces, external, vaults, trees],
   );
   // Apart from the rest: the shell hands over new items on each of its renders, and the trees needn't be walked again for them.
   return {

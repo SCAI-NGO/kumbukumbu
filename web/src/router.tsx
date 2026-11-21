@@ -148,6 +148,7 @@ export const routes: RouteObject[] = [
                   { path: "/settings/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
                   { path: "/settings/skills", element: <Navigate to="/settings/skills/installed" replace /> },
                   { path: "/settings/calendar", lazy: lazyPage(() => import("./routes/settings/Calendar")) },
+                  { path: "/settings/external", lazy: lazyPage(() => import("./routes/settings/External")) },
                   { path: "/settings/security", lazy: lazyPage(() => import("./routes/settings/Security")) },
                   { path: "/settings/data", lazy: lazyPage(() => import("./routes/settings/Data")) },
                   { path: "/settings/about", lazy: lazyPage(() => import("./routes/settings/About")) },

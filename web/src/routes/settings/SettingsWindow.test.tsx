@@ -6,8 +6,9 @@ import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
 import { fakeApi, json, renderApp, user } from "../../test/app";
 
-function api() {
+function api(byok = false) {
   return fakeApi({
+    "GET /api/account/embeddings-key": () => json(200, { offered: byok, keySaved: false, last4: null, refusedAt: null }),
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3 }]),
     "GET /api/embeddings": () => json(200, []),
@@ -49,6 +50,16 @@ describe("the settings window", () => {
     expect(within(nav).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/settings/access/keys");
     expect(within(nav).getByRole("link", { name: "Skills" })).toHaveAttribute("href", "/settings/skills/installed");
     expect(within(nav).getByRole("link", { name: "Appearance" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("adds External, with Embeddings on it, where the server offers a key of one's own", async () => {
+    api(true);
+    renderApp("/settings/external");
+    const window = await settings();
+    const nav = within(window).getByRole("navigation", { name: "Settings" });
+    expect(await within(nav).findByRole("link", { name: "External" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getAllByRole("link").map((l) => l.textContent)).toEqual(["Appearance", "Vaults", "Access", "Skills", "Calendar", "External", "Security", "Your data", "About"]);
+    expect(await within(window).findByRole("region", { name: "Embeddings" })).toBeInTheDocument();
   });
 
   it("each entry shows its sections only", async () => {

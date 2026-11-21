@@ -11,7 +11,6 @@ import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from 
 import { PasswordField } from "../../components/PasswordField";
 import { useDialog } from "../../hooks/useDialog";
 import PublicationsSection from "../PublicationsSection";
-import ByokSection from "./ByokSection";
 import SharedVaultsSection from "../SharedVaultsSection";
 import DeleteVaultDialog from "../../shell/DeleteVaultDialog";
 import { Done, Section } from "./Section";
@@ -20,7 +19,6 @@ export default function Vaults() {
   return (
     <>
       <VaultsSection />
-      <ByokSection />
       <Section title="Shared vaults">
         <SharedVaultsSection />
       </Section>

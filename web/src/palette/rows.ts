@@ -28,7 +28,7 @@ const command = (id: string, place: string, name: string, run: Row["run"]): Row 
 const go = (id: string, place: string, name: string, to: string) => command(id, place, name, { to });
 
 /** Follows the settings navigation, the tabs of Access and Skills, and the routes of `router.tsx`. */
-export function commandRows({ admin, shared, marketplaces }: { admin: boolean; shared: boolean; marketplaces: boolean }): Row[] {
+export function commandRows({ admin, shared, marketplaces, external }: { admin: boolean; shared: boolean; marketplaces: boolean; external: boolean }): Row[] {
   return [
     go("settings.appearance", "Settings", "Appearance", "/settings/appearance"),
     go("settings.vaults", "Settings", "Vaults", "/settings/vaults"),
@@ -40,6 +40,7 @@ export function commandRows({ admin, shared, marketplaces }: { admin: boolean; s
     ...(shared ? [go("settings.skills.shared", "Settings / Skills", "Shared", "/settings/skills/shared")] : []),
     ...(marketplaces ? [go("settings.skills.marketplaces", "Settings / Skills", "Marketplaces", "/settings/skills/marketplaces")] : []),
     go("settings.calendar", "Settings", "Calendar", "/settings/calendar"),
+    ...(external ? [go("settings.external", "Settings", "External", "/settings/external")] : []),
     go("settings.security", "Settings", "Security", "/settings/security"),
     go("settings.data", "Settings", "Your data", "/settings/data"),
     go("settings.about", "Settings", "About", "/settings/about"),
