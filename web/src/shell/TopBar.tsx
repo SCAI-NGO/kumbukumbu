@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ListTree, PanelLeft, PanelRight, Star } from "lucide-react";
+import { ListTree, PanelLeft, PanelRight, Star, Waypoints } from "lucide-react";
 import { crumbOf, titleOf } from "../api/paths";
+import { graphColumnId } from "../graph/GraphColumn";
 import { sidePanelId } from "../note/SidePanel";
 import { isMac } from "../palette/usePaletteShortcut";
 import { useEditor } from "../state/editor";
@@ -11,11 +12,14 @@ import { sidebarId } from "./TreeDrawer";
 export const sidebarToggleId = "file-tree-toggle";
 /** The side panel's toggle, likewise. */
 export const sidePanelToggleId = "side-panel-toggle";
+/** The graph column's toggle, likewise. */
+export const graphToggleId = "graph-column-toggle";
 
 /**
  * Orientation: the tree button, where the note is and its title (a tap opens the tree), the palette's star, its outline, and Read / Write.
  * Write only where the caller may change the note (`writable`); `refusal` says why not. With `sidebar` (desktop widths), the tree button collapses and expands the docked sidebar instead of opening the drawer.
  * With `sidePanel` (wide windows, a note open), the panel's toggle comes last in the bar, and the outline is in the panel instead of the top bar.
+ * With `graph` (the widest windows), the graph column's toggle comes after it.
  */
 export default function TopBar({
   path,
@@ -23,12 +27,14 @@ export default function TopBar({
   refusal,
   sidebar,
   sidePanel = null,
+  graph = null,
 }: {
   path: string | null;
   writable: boolean;
   refusal?: string | null;
   sidebar: { expanded: boolean; toggle(): void } | null;
   sidePanel?: { expanded: boolean; toggle(): void } | null;
+  graph?: { expanded: boolean; toggle(): void } | null;
 }) {
   const openTree = () => useEditor.getState().setOverlay("tree");
   const mode = useEditor((s) => s.mode);
@@ -102,6 +108,21 @@ export default function TopBar({
           className={buttonClass}
         >
           <PanelRight size={22} strokeWidth={1.8} aria-hidden />
+        </button>
+      )}
+      {graph && (
+        <button
+          id={graphToggleId}
+          type="button"
+          aria-label="Graph"
+          aria-expanded={graph.expanded}
+          aria-controls={graphColumnId}
+          aria-keyshortcuts="Control+Shift+G Meta+Shift+G"
+          title={`${graph.expanded ? "Hide" : "Show"} the graph (Ctrl+Shift+G or ⌘⇧G)`}
+          onClick={graph.toggle}
+          className={buttonClass}
+        >
+          <Waypoints size={22} strokeWidth={1.8} aria-hidden />
         </button>
       )}
     </header>

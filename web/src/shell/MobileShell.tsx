@@ -13,6 +13,8 @@ import { PointMenu } from "../components/PointMenu";
 import { topDialog } from "../hooks/useDialog";
 import { useDesktop } from "../hooks/useDesktop";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
+import { useGraphColumnCollapsed } from "../hooks/useGraphColumn";
+import { useGraphWide, useGraphWideSplit } from "../hooks/useGraphWide";
 import { useSidePanelCollapsed } from "../hooks/useSidePanel";
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { useWide } from "../hooks/useWide";
@@ -21,6 +23,7 @@ import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPi
 import { useTellOpenNote } from "../discreet/openNote";
 import { useUnnamedVault } from "../discreet/errorText";
 import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
+import GraphColumn, { graphColumnId } from "../graph/GraphColumn";
 import { FindBar } from "../note/NoteTools";
 import { DeleteNoteDialog } from "../note/NoteView";
 import SidePanel, { sidePanelId } from "../note/SidePanel";
@@ -38,7 +41,7 @@ import NewVaultDialog from "./NewVaultDialog";
 import SkillsNotice from "./SkillsNotice";
 import SharedBanner, { MemberNotices } from "./SharedBanner";
 import StorageNotice from "./StorageNotice";
-import TopBar, { sidePanelToggleId, sidebarToggleId } from "./TopBar";
+import TopBar, { graphToggleId, sidePanelToggleId, sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
 import { useNoteActions } from "./useNoteActions";
 import { useNoteMenuKey } from "./useNoteMenuKey";
@@ -332,6 +335,31 @@ export default function MobileShell() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [sidePanel, toggleSidePanel]);
 
+  // From 1920 px on (2880 px in the split view, two panes beside each other), the graph column sits after the side
+  // panel: the focused pane's note in its graph, the other pane's named in its foot.
+  const graphWide = useGraphWide();
+  const graphWideSplit = useGraphWideSplit();
+  const [graphCollapsed, setGraphCollapsed] = useGraphColumnCollapsed();
+  const graph = !!shownNote && (split ? graphWideSplit : graphWide);
+  const toggleGraph = useCallback(() => {
+    if (!graphCollapsed && document.getElementById(graphColumnId)?.contains(document.activeElement)) document.getElementById(graphToggleId)?.focus();
+    setGraphCollapsed(!graphCollapsed);
+  }, [graphCollapsed, setGraphCollapsed]);
+
+  // Ctrl+Shift+G (Cmd+Shift+G on a Mac); `code` too, for layouts where G is elsewhere. Not while a dialog is open.
+  useEffect(() => {
+    if (!graph) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || !e.shiftKey || e.defaultPrevented) return;
+      if (e.key !== "G" && e.key !== "g" && e.code !== "KeyG") return;
+      if (topDialog()) return;
+      e.preventDefault();
+      toggleGraph();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [graph, toggleGraph]);
+
   usePaletteShortcut();
 
   // The URL says which notes are open, the left pane's and the right one's (`beside`); the store follows it when it
@@ -484,6 +512,7 @@ export default function MobileShell() {
         refusal={refusal}
         sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null}
         sidePanel={sidePanel ? { expanded: !panelCollapsed, toggle: toggleSidePanel } : null}
+        graph={graph ? { expanded: !graphCollapsed, toggle: toggleGraph } : null}
       />
       {framed && (
         <div className="flex-none px-3 pt-2">
@@ -530,6 +559,7 @@ export default function MobileShell() {
           {!split && footer}
         </div>
         {sidePanel && <NoteSidePanel path={shownNote!} hidden={panelCollapsed} />}
+        {graph && <GraphColumn path={shownNote!} otherPath={split ? (focusedSide === "right" ? path : beside) : null} hidden={graphCollapsed} />}
       </div>
 
       {!docked && overlay === "tree" && <TreeDrawer {...treeProps} />}
