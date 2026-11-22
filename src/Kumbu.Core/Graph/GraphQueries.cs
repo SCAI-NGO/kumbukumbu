@@ -176,6 +176,7 @@ public static partial class GraphQueries
     private static bool[] Kept(LinkGraph g, GraphFilter f)
     {
         var asked = f.Tags.Select(t => TagMatch.Normalise(t) ?? t).ToList();
+        var without = f.WithoutTags.Select(t => TagMatch.Normalise(t) ?? t).ToList();
         var kept = new bool[g.Nodes.Count];
         for (var i = 0; i < kept.Length; i++)
         {
@@ -186,7 +187,8 @@ public static partial class GraphQueries
                     (node.Kind == NodeKind.Note || f.Days)
                     && (f.Archive || !node.Archived)
                     && (f.Paths.Count == 0 || f.Paths.Any(p => Below(node.Path!, p)))
-                    && asked.All(a => node.Tags.Any(t => TagMatch.Covers(a, t))),
+                    && asked.All(a => node.Tags.Any(t => TagMatch.Covers(a, t)))
+                    && !without.Any(a => node.Tags.Any(t => TagMatch.Covers(a, t))),
                 _ => false,
             };
         }

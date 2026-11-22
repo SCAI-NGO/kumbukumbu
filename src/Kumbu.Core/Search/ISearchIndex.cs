@@ -38,6 +38,16 @@ public sealed record SemanticResult(SemanticState State, IReadOnlyList<SemanticH
     public IReadOnlyList<VaultPath> StaleNotes { get; init; } = [];
 }
 
+/// <summary>A stored chunk's vector, as the index holds it: the note, the chunk's first line and part, and the
+/// embedding space it lives in (the model's key). Vectors of two spaces don't compare.</summary>
+public sealed record ChunkVector(VaultPath Path, int StartLine, int Part, string Space, float[] Vector);
+
+/// <param name="Chunks">The chunks of the notes below the scope embedded by their vault's current model under the
+/// current chunking scheme. The arrays are the index's own: read them, never write to them.</param>
+/// <param name="Pending">Notes below the scope without such embeddings yet.</param>
+/// <param name="Reason">Why the state isn't <see cref="SemanticState.Ready"/>; when Ready, the vaults left out and why.</param>
+public sealed record StoredVectors(SemanticState State, IReadOnlyList<ChunkVector> Chunks, int Pending, string? Reason = null);
+
 /// <summary>Search by meaning over the embeddings of the caller's vaults. <c>limit</c> caps the hits; pass
 /// <see cref="int.MaxValue"/> to get a cosine for every chunk.</summary>
 public interface ISearchIndex
@@ -46,6 +56,11 @@ public interface ISearchIndex
 
     /// <summary>The bound the stored chunks were made with; search-time chunking uses the same.</summary>
     ChunkBound Bound => ChunkBound.Fallback;
+
+    /// <summary>The stored vectors of the notes below <paramref name="scope"/>, for comparing notes with each other
+    /// (<c>similar</c>). Nothing is embedded, so nothing is sent to an embedding provider.</summary>
+    Task<StoredVectors> VectorsAsync(VaultPath scope, CancellationToken ct) =>
+        Task.FromResult(new StoredVectors(SemanticState.Off, [], 0, "search by meaning is off on this server"));
 }
 
 public sealed class NoSearchIndex : ISearchIndex

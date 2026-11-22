@@ -64,6 +64,18 @@ public static partial class GraphQueries
         return new PathsResult([.. found.Take(MaxPaths)], found.Count > MaxPaths, Disconnection.None);
     }
 
+    /// <summary>
+    /// How many links every note the filter keeps is from <paramref name="from"/>, in either direction, walking notes
+    /// only as <see cref="Paths"/> does; the start is 0 and always walked from. Notes that can't be reached are missing.
+    /// </summary>
+    public static IReadOnlyDictionary<VaultPath, int> Distances(LinkGraph g, VaultPath from, GraphFilter filter)
+    {
+        if (g.IndexOf(from) is not { } start || !IsNote(g, start)) return new Dictionary<VaultPath, int>();
+        var kept = Kept(g, filter);
+        kept[start] = true;
+        return Distances(g, start, GraphDirection.Both, kept).ToDictionary(d => g.Nodes[d.Key].Path!, d => d.Value);
+    }
+
     private static GraphDirection Flip(GraphDirection dir) => dir switch
     {
         GraphDirection.Out => GraphDirection.In,
