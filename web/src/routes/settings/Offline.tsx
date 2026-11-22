@@ -3,6 +3,7 @@
 // their budget, what is kept offline whole, the browser's storage, and the devices with a copy.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { attachmentKind, isMarker } from "eidolon-core/engine/paths";
+import { OfflineError, RejectedError } from "eidolon-core/engine/ports";
 import { attachmentsUsed, BUDGETS, mirrors } from "eidolon-core/store/choice";
 import type { SealedMirror } from "eidolon-core/store/mirror";
 import { useEffect, useId, useReducer, useState, type ReactNode } from "react";
@@ -22,6 +23,13 @@ import { openCopy, turnOff, turnOn } from "../../offline/turnOn";
 import { useSession } from "../../state/session";
 import { isStandalone } from "../../update/InstallHint";
 import { Section } from "./Section";
+
+/** The store's and the slots' errors are the core's, not HttpError: their sentences are shown as errorText shows the API's. */
+function failureText(e: unknown): string {
+  if (e instanceof RejectedError) return e.message;
+  if (e instanceof OfflineError) return "The server can't be reached right now. Try again in a moment.";
+  return errorText(e);
+}
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en-GB")} ${n === 1 ? one : many}`;
 const changes = (n: number) => plural(n, "change", "changes");
@@ -119,7 +127,7 @@ function TurnOnDialog({ user, onClose }: { user: { id: string; username: string 
       text="Your password seals the copy, and opens it when you're offline."
       action="Keep them here"
       pending={on.isPending}
-      error={on.isError ? errorText(on.error) : null}
+      error={on.isError ? failureText(on.error) : null}
       password={password}
       onPasswordChange={setPassword}
       onConfirm={() => on.mutate()}
@@ -138,7 +146,7 @@ function RemoveCopyDialog({ waiting, onClose }: { waiting: number | null; onClos
       text={`${lost}Your notes stay in Kumbu²; this device no longer has them offline.`}
       action="Remove"
       busy={off.isPending}
-      error={off.isError ? errorText(off.error) : null}
+      error={off.isError ? failureText(off.error) : null}
       onConfirm={() => off.mutate()}
       onClose={onClose}
     />
@@ -163,7 +171,7 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
   // Never a discreet vault, shown or not (§4.3); nor one still being set up.
   const listed = vaults.data?.filter((v) => !v.discreet && !v.pending) ?? [];
   const chosen = useChoose(mirror);
-  const choose = (change: Parameters<typeof chooseOffline>[1]) => chosen(change).catch((e: unknown) => setError(errorText(e)));
+  const choose = (change: Parameters<typeof chooseOffline>[1]) => chosen(change).catch((e: unknown) => setError(failureText(e)));
   const set = (vault: VaultView, keep: boolean) => {
     const waiting = mirror.vault(vault.id)?.waiting() ?? 0;
     if (!keep && waiting > 0 && dropping === null) return setDropping({ vault, waiting });
@@ -357,7 +365,7 @@ function DevicesSection() {
           text={`${removing.waiting > 0 ? `${changes(removing.waiting)} on that device haven't uploaded and will be lost. ` : ""}The copy goes when that device next comes online.`}
           action="Remove"
           busy={remove.isPending}
-          error={remove.isError ? errorText(remove.error) : null}
+          error={remove.isError ? failureText(remove.error) : null}
           onConfirm={() => remove.mutate(removing.id)}
           onClose={() => setRemoving(null)}
         />

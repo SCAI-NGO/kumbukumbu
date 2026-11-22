@@ -132,6 +132,16 @@ describe("Settings: Offline", () => {
     await waitFor(() => expect(calls(fake, "DELETE /api/account/mirror-slots/s2")).toHaveLength(1));
   });
 
+  it("shows the server's sentence when a removal is refused", async () => {
+    api({ "DELETE /api/account/mirror-slots/*": () => json(403, { error: "Only sessions remove offline copies." }) });
+    renderApp("/settings/offline");
+    const devices = await screen.findByRole("list", { name: "Devices with a copy" });
+    await userEvent.click(within(devices).getByRole("button", { name: "Remove offline copy" }));
+    const dialog = screen.getByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    expect(await within(dialog).findByText("Only sessions remove offline copies.")).toBeInTheDocument();
+  });
+
   it("removes the copy from this device, and its place in the list", { timeout: 20_000 }, async () => {
     const fake = await turnedOn();
     await userEvent.click(screen.getByRole("button", { name: "Remove the copy" }));
