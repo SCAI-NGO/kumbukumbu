@@ -31,7 +31,7 @@ Not in this change: the global graph, a cache of all pairs, the suggestions' dat
 - `pairs`: one per note-to-note edge, keyed by the two paths, so the client matches them to its edges by key and never by an index of another answer. `null`: not measurable now (a note not embedded yet, or by another model).
 - `state`: `ready`, `preparing` (the model or tokenizer is loading) or `off` (search by meaning is off on the server, or the vault's provider is unavailable), with `reason` in the words the search already uses.
 - *Why the local graph's parameters and not a list of pairs:* the server bounds the work itself (at most the local graph's edges, about 160 nodes), there is no list to validate, and a caller can't ask for pairs outside what it may already see. *Why a second request and not a field of `/local`:* the local graph's `ETag` changes with links and names only, so that a save doesn't redraw it; similarity changes with the prose. The second answer is cached by the query client on its own key and asked again after a `changed` nudge, as the graph is.
-- **No text leaves the server**: only stored vectors are compared, so the provider consent of shared vaults (collab design §8.5) isn't touched; an unconsented member still gets the scores of vectors the server already holds. *Claude's call; the maintainer may prefer to answer `off` there.*
+- **No text leaves the server**: only stored vectors are compared, so the provider consent of shared vaults (collab design §8.5) isn't touched; an unconsented member still gets the scores of vectors the server already holds. *Decided by the maintainer on 2026-11-22: no text leaves the server, so there is nothing to consent to.*
 
 ### The score
 
