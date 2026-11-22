@@ -52,18 +52,18 @@ export function LeaveVaultDialog({ vault, membership, onClose, onLeft }: { vault
           <button
             type="button"
             disabled={leave.isPending}
-            onClick={() =>
-              leave.mutate(
-                { membership, vault },
-                {
-                  onSuccess: () => {
-                    leaveGone(vault, `You no longer have access to ${vault}.`);
-                    onLeft?.();
-                    onClose();
-                  },
-                },
-              )
-            }
+            onClick={async () => {
+              // Awaited rather than given to mutate as onSuccess: leaving forgets the vault, and what showed this dialog
+              // for it (the member panel, the provider banner) may go with it, and mutate's callbacks with them.
+              try {
+                await leave.mutateAsync({ membership, vault });
+              } catch {
+                return; // shown above, from leave.error
+              }
+              leaveGone(vault, `You no longer have access to ${vault}.`);
+              onLeft?.();
+              onClose();
+            }}
             className={`${primaryButtonClass} flex-1`}
           >
             Leave vault
