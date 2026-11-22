@@ -9,12 +9,12 @@ import { useErrorTextFor } from "../discreet/errorText";
 import { mediaQueryHook } from "../hooks/mediaQuery";
 import { useWide } from "../hooks/useWide";
 import { useOpenNote } from "../shell/openInPane";
-import { useGraphPaths, useLocalGraph, type GraphFilters, type GraphPathsView } from "./api";
+import { useGraphPaths, useGraphSimilarity, useLocalGraph, type GraphFilters, type GraphPathsView } from "./api";
 import GraphCanvas from "./GraphCanvas";
 import { toModel, type GNode, type SizeBy } from "./model";
 import NodeCard from "./NodeCard";
 import NodePreview from "./NodePreview";
-import { similarity } from "./similarity";
+import { edgeSimilarities, pairKey, similarityLine } from "./similarity";
 import SuggestionCard from "./SuggestionCard";
 import { suggestedLinks, type Suggestion } from "./suggestions";
 import { useGraphPrefs, type GraphPrefs } from "./useGraphPrefs";
@@ -35,6 +35,12 @@ const toggles: { pref: "days" | "attachments" | "ghosts" | "preview" | "suggesti
   { pref: "preview", label: "Preview", icon: Eye },
   { pref: "suggestions", label: "Suggestions", icon: Sparkles },
 ];
+
+/**
+ * Until link prediction gives the suggested links layer its data, its switch is development's only: a switch that draws
+ * nothing is no part of a finished view (spec 2026-11-22-graph-out-of-preview §2). Link prediction lifts this.
+ */
+const suggestionsOffered = () => import.meta.env.DEV;
 
 const tool =
   "flex size-8 flex-none items-center justify-center rounded-md text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-accent aria-pressed:bg-surface-2 aria-pressed:text-text aria-expanded:bg-surface-2 aria-expanded:text-text";
@@ -65,6 +71,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   const { depth, days, attachments, ghosts } = prefs;
   const filters = useMemo<GraphFilters>(() => ({ depth, days, attachments, ghosts }), [depth, days, attachments, ghosts]);
   const local = useLocalGraph(path, filters, running);
+  const similar = useGraphSimilarity(path, filters, running);
   const tree = useTree(vaultOf(path));
   const errorFor = useErrorTextFor(path);
   const other = useGraphPaths(path, otherPath, filters, running);
@@ -81,12 +88,26 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   // The last graph stands in while the next is asked for only if the note is in it; else it would show another note's.
   const stale = local.isPlaceholderData && !local.data?.nodes.some((n) => n.path === path);
   // Memoised per answer, or the layout would warm again on every render.
-  const model = useMemo(() => (local.data && !stale ? toModel(local.data, tree.data) : null), [local.data, stale, tree.data]);
-  const unmeasured = useMemo(() => {
-    if (!model) return false;
-    const keys = new Map(model.nodes.map((n) => [n.id, n.key]));
-    return model.edges.some((e) => !similarity(keys.get(e.source)!, keys.get(e.target)!).measured);
-  }, [model]);
+  const plain = useMemo(() => (local.data && !stale ? toModel(local.data, tree.data) : null), [local.data, stale, tree.data]);
+  // Each edge with its similarity, and the foot's line on it: how many distinct links between two notes are measured.
+  const { model, similarityText } = useMemo(() => {
+    if (!plain) return { model: null, similarityText: null };
+    const byId = new Map(plain.nodes.map((n) => [n.id, n]));
+    const ends = plain.edges.map((e) => [byId.get(e.source)!.key, byId.get(e.target)!.key] as const);
+    const scores = edgeSimilarities(ends, similar.data);
+    const isNote = (id: string) => ["note", "day"].includes(byId.get(id)!.kind);
+    const links = new Map<string, boolean>();
+    plain.edges.forEach((e, i) => {
+      if (e.source !== e.target && isNote(e.source) && isNote(e.target)) links.set(pairKey(...ends[i]), scores[i].measured);
+    });
+    // Another graph's answer (the filters just changed) may score these edges where it shares them, but says nothing of the rest.
+    const answer = similar.isPlaceholderData ? undefined : similar.data;
+    const measured = [...links.values()].filter(Boolean).length;
+    return {
+      model: { nodes: plain.nodes, edges: plain.edges.map((e, i) => ({ ...e, s: scores[i].score })) },
+      similarityText: similarityLine(links.size, measured, answer),
+    };
+  }, [plain, similar.data, similar.isPlaceholderData]);
   const neighbours = useMemo(
     () => (model?.nodes ?? []).filter((n) => n.depth > 0).sort((a, b) => a.depth - b.depth || a.title.localeCompare(b.title)),
     [model],
@@ -146,7 +167,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
 
   const switches = (
     <>
-      {toggles.map(({ pref, label, icon: Icon }) => (
+      {toggles.filter((t) => t.pref !== "suggestions" || suggestionsOffered()).map(({ pref, label, icon: Icon }) => (
         <button key={pref} type="button" aria-label={label} title={label} aria-pressed={prefs[pref]} onClick={() => change({ [pref]: !prefs[pref] } as Partial<GraphPrefs>)} className={tool}>
           <Icon size={16} strokeWidth={1.8} aria-hidden />
         </button>
@@ -225,7 +246,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
             otherKey={otherPath}
             sizeBy={prefs.sizeBy}
             suggestions={suggestions}
-            showSuggestions={prefs.suggestions}
+            showSuggestions={prefs.suggestions && suggestionsOffered()}
             onOpen={open}
             onHover={hovered}
             onSuggestion={(s) => setSuggestion({ s, on: path })}
@@ -268,9 +289,9 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
           )}
         </div>
       )}
-      {(unmeasured || otherText) && (
-        <p className="flex flex-none gap-3 border-t border-line px-3 py-1.5 font-mono text-[11px] text-dim">
-          {unmeasured && <span>Similarity not measured yet</span>}
+      {(similarityText || otherText) && (
+        <p className="flex flex-none flex-wrap gap-x-3 border-t border-line px-3 py-1.5 font-mono text-[11px] text-dim">
+          {similarityText && <span>{similarityText}</span>}
           {otherText && <span>{otherText}</span>}
         </p>
       )}
