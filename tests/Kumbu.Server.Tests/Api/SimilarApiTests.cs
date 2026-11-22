@@ -107,4 +107,20 @@ public sealed class SimilarApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.BadRequest, other.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
     }
+
+    [Fact]
+    public async Task The_openapi_document_describes_it()
+    {
+        var user = await NewAsync(Api);
+        using var response = await user.GetAsync("/api/openapi.json");
+
+        var document = await JsonAsync(response);
+        Assert.NotNull(document["paths"]!["/api/similar/{vault}/{path}"]?["get"]);
+        Assert.NotNull(document["paths"]!["/api/vaults/{vault}/similar/link"]?["post"]);
+        Assert.NotNull(document["paths"]!["/api/vaults/{vault}/similar/not-related"]?["post"]);
+        foreach (var schema in new[] { "SimilarNotesView", "SimilarNoteView", "SimilarLinkRequest", "NotRelatedRequest", "SimilarWrittenView" })
+        {
+            Assert.NotNull(document["components"]!["schemas"]![schema]);
+        }
+    }
 }

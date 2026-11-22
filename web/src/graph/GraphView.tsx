@@ -16,7 +16,7 @@ import NodeCard from "./NodeCard";
 import NodePreview from "./NodePreview";
 import { similarity } from "./similarity";
 import SuggestionCard from "./SuggestionCard";
-import { suggestedLinks, type Suggestion } from "./suggestions";
+import { useSuggestedLinks, type Suggestion } from "./suggestions";
 import { useGraphPrefs, type GraphPrefs } from "./useGraphPrefs";
 
 /** Tailwind's `sm` (40rem): from here on the dialog's toolbar fits one row and Open beside is offered. */
@@ -103,10 +103,8 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
 
   const otherText = otherLine(other.data);
 
-  const suggestions = useMemo(
-    () => (prefs.suggestions && model ? suggestedLinks(path, new Set(model.nodes.flatMap((n) => (n.path ? [n.path] : []))), tree.data) : []),
-    [prefs.suggestions, model, path, tree.data],
-  );
+  const inGraph = useMemo(() => new Set(model?.nodes.flatMap((n) => (n.path ? [n.path] : [])) ?? []), [model]);
+  const suggestions = useSuggestedLinks(path, inGraph, prefs.suggestions && !!model);
 
   // Where a card goes: beside the pointer, or the node that has the keyboard's focus, in the body's coordinates.
   const body = useRef<HTMLDivElement>(null);
@@ -242,7 +240,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
         {/* The selected node's card says all the hover card would. */}
         {model && prefs.preview && hover?.on === path && hover.node.key !== selected?.node.key && <NodePreview node={hover.node} anchor={hover.anchor} width={hover.width} />}
         {model && selected && <NodeCard ref={card} node={selected.node} anchor={selected.anchor} width={selected.width} height={selected.height} docked={!smUp} beside={smUp} onOpen={open} />}
-        {model && suggestion?.on === path && <SuggestionCard suggestion={suggestion.s} onClose={closeSuggestion} />}
+        {model && suggestion?.on === path && <SuggestionCard from={path} suggestion={suggestion.s} onClose={closeSuggestion} />}
       </div>
       {prefs.list && model && (
         <div id={`${id}-list`} className="max-h-[40%] flex-none overflow-y-auto border-t border-line px-[18px] py-2">
