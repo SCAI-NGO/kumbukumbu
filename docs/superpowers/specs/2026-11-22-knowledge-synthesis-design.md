@@ -44,7 +44,7 @@ Anti-goals:
 6. **`--unlinked` leaves out distance 1 only.** *Because* distance 2 (a common neighbour) is exactly where many good bridges sit; the agent sees the distance and judges.
 7. **`--outside` leaves out notes (and on `semsearch` PDF pages) at or below a path; repeatable, at most 50 like the graph's filters.** **`--without-tag` leaves out notes carrying the tag, nested ones included; repeatable, a note carrying any of them goes.** PDFs carry no tags, so they stay. An unknown tag is no error for `--without-tag` (leaving out nothing is the right answer).
 8. **Pending and other-model notes are counted in the footer, never guessed.** A source note without current embeddings is an error that says so, and points to `semsearch` for its topic meanwhile.
-9. **The skill ships as a system skill** in `src/Kumbu.Core/Skills/System/synthesize-knowledge/`, with a hand-test list. The pre-analysis suggests trying it as a user skill first; the PR proposes both ways (§7), Chris decides.
+9. **The skill ships as a system skill** in `src/Kumbu.Core/Skills/System/synthesize-knowledge/`, with a hand-test list. Decided by Chris on 2026-11-22, against the pre-analysis's user skill first. *Because* then the 0.7.0 test rounds take it in as the system skill it will be.
 
 ## 4. The index: stored vectors
 
@@ -97,9 +97,7 @@ With `--between`: `score 0.71 (0.74 to A, 0.71 to C)  2 steps from A, not connec
 
 Both leave out earlier findings with `--without-tag synthesis/hypothesis`, cap the run at five hypotheses, say for each why it could be wrong, and write one report note tagged `#synthesis/hypothesis` with `source: synthesized` and a review date, the inference in an `[!inferred]` callout, each B link linked to the section it stands in. They never change A or C.
 
-How it lands, for Chris to pick in the PR:
-- **(a) as in the PR, a system skill now** (recommended): the commands it needs ship in the same change, and a system skill is updated with the server, so a run that teaches us something is fixed in one place.
-- **(b) a user skill first**: drop the skill's commit, put its `SKILL.md` into `/Skills/synthesize-knowledge/` on Chris's instance, run the hand tests two or three times, then freeze it with what was learned.
+It lands as a system skill now (§3.9), so the test rounds of 0.7.0 run it as such.
 
 The hand-test list goes to `/SWE/Kumbu/Tests/` once the release is chosen.
 
