@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { BookOpen, Pencil, type LucideIcon } from "lucide-react";
 import { useEditor, type Mode } from "../state/editor";
 
-const modes: { mode: Mode; label: string }[] = [
-  { mode: "read", label: "Read" },
-  { mode: "write", label: "Write" },
+// An icon below sm, so that a phone's top bar keeps room for the note's title beside Outline and Graph.
+const modes: { mode: Mode; label: string; icon: LucideIcon }[] = [
+  { mode: "read", label: "Read", icon: BookOpen },
+  { mode: "write", label: "Write", icon: Pencil },
 ];
 
 const standInId = "write-stand-in";
@@ -34,20 +36,22 @@ export default function ModeToggle({ writable, refusal }: { writable: boolean; r
         data-stand-in
         className="pointer-events-none absolute size-px text-[16px] opacity-0"
       />
-      {modes.map(({ mode, label }) => (
+      {modes.map(({ mode, label, icon: Icon }) => (
         <button
           key={mode}
           type="button"
+          aria-label={label}
           aria-pressed={current === mode}
           disabled={mode === "write" && !writable}
           title={mode === "write" && !writable ? (refusal ?? "You can only read this note.") : undefined}
           // Each on the focused pane only: its Read ends Write mode there, never in the other pane.
           onClick={() => (mode === "read" ? current === "write" && void endWrite() : current !== "write" && startWrite())}
-          className={`min-h-11 rounded-[9px] px-3.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${
+          className={`flex min-h-11 items-center rounded-[9px] px-2.5 text-sm sm:px-3.5 font-medium focus-visible:outline-2 focus-visible:outline-accent ${
             current === mode ? "bg-accent text-on-accent" : "text-muted"
           } disabled:opacity-50`}
         >
-          {label}
+          <Icon size={18} strokeWidth={1.8} aria-hidden className="sm:hidden" />
+          <span className="hidden sm:inline">{label}</span>
         </button>
       ))}
     </div>
