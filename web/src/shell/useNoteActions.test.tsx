@@ -124,6 +124,7 @@ describe("the note's actions", () => {
       "Find in note",
       "History",
       "Who wrote what",
+      "Open graph…",
       "Copy file path",
       "Copy link",
       "Copy markdown link",

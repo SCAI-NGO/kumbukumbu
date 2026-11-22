@@ -155,7 +155,7 @@ describe("attachments in the tree", () => {
     });
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for plan" }));
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Open graph…", "Copy file path", "Copy link", "Copy markdown link"]);
     await userEvent.click(screen.getByRole("menuitem", { name: "Copy markdown link" }));
     expect(writeText).toHaveBeenCalledWith("[plan](/plan.md)");
   });

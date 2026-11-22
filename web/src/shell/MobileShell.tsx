@@ -352,16 +352,30 @@ export default function MobileShell() {
   const graphColumn = !!shownNote && (split ? graphWideSplit : graphWide);
   // The other pane's note, for its ring and its distance line.
   const graphOther = split ? (focusedSide === "right" ? path : beside) : null;
+  // The button and the shortcut: where no column fits, and on a phone in read mode only.
   const graphDialogAllowed = !!shownNote && !graphColumn && (docked || mode === "read");
-  const [graphDialog, setGraphDialog] = useState(false);
-  // Gone once the column fits or the note goes, not back when the window narrows again.
+  // The note whose graph the dialog shows: the one shown, or another one from its menu in the tree.
+  const [graphDialog, setGraphDialog] = useState<string | null>(null);
+  // Gone once the column fits for its note, not back when the window narrows again.
   useEffect(() => {
-    if (!graphDialogAllowed) setGraphDialog(false);
-  }, [graphDialogAllowed]);
+    if (graphDialog !== null && graphColumn && graphDialog === shownNote) setGraphDialog(null);
+  }, [graphDialog, graphColumn, shownNote]);
   const toggleGraph = useCallback(() => {
     if (!graphCollapsed && document.getElementById(graphColumnId)?.contains(document.activeElement)) document.getElementById(graphToggleId)?.focus();
     setGraphCollapsed(!graphCollapsed);
   }, [graphCollapsed, setGraphCollapsed]);
+
+  // Open graph… in the note's menus: the column where it shows that note, else the dialog; the tree's drawer makes way.
+  const openGraph = useCallback(
+    (note: string) => {
+      if (graphColumn && note === shownNote) setGraphCollapsed(false);
+      else {
+        setGraphDialog(note);
+        if (!docked) useEditor.getState().setOverlay("none");
+      }
+    },
+    [graphColumn, shownNote, setGraphCollapsed, docked],
+  );
 
   // Ctrl+Shift+G (Cmd+Shift+G on a Mac); `code` too, for layouts where G is elsewhere. Not while a dialog is open, the
   // graph's own included: Escape closes that.
@@ -373,11 +387,11 @@ export default function MobileShell() {
       if (topDialog()) return;
       e.preventDefault();
       if (graphColumn) toggleGraph();
-      else setGraphDialog(true);
+      else setGraphDialog(shownNote);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [graphColumn, graphDialogAllowed, toggleGraph]);
+  }, [graphColumn, graphDialogAllowed, toggleGraph, shownNote]);
 
   usePaletteShortcut();
 
@@ -439,7 +453,7 @@ export default function MobileShell() {
 
   // The note's ⋯ and the tree's share one flag menu, and its message outlives both.
   const flagging = useFlagging();
-  const noteActions = useNoteActions(focusedPath, { onMove: setMoving, onDelete: setDeleting, onDate: setDating, onFlag: flagging.open });
+  const noteActions = useNoteActions(focusedPath, { onMove: setMoving, onDelete: setDeleting, onDate: setDating, onFlag: flagging.open, onGraph: shownNote && (docked || mode === "read") ? openGraph : undefined });
   const noteMenu = useNoteMenuKey(focusedPath);
   const openInPane = useOpenNote();
   const paneUrlOf = usePaneUrl();
@@ -519,7 +533,7 @@ export default function MobileShell() {
       )}
     </>
   );
-  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet, onDate: setDating, onFlag: flagging.open };
+  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet, onDate: setDating, onFlag: flagging.open, onGraph: openGraph };
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
@@ -535,7 +549,7 @@ export default function MobileShell() {
           graphColumn
             ? { expanded: !graphCollapsed, toggle: toggleGraph, dialog: false }
             : graphDialogAllowed
-              ? { expanded: false, toggle: () => setGraphDialog(true), dialog: true }
+              ? { expanded: false, toggle: () => setGraphDialog(shownNote), dialog: true }
               : null
         }
       />
@@ -588,10 +602,10 @@ export default function MobileShell() {
       </div>
 
       {!docked && overlay === "tree" && <TreeDrawer {...treeProps} />}
-      {graphDialog && graphDialogAllowed && (
-        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setGraphDialog(false)} />}>
+      {graphDialog !== null && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setGraphDialog(null)} />}>
           <Suspense>
-            <GraphDialog path={shownNote!} otherPath={graphOther} onClose={() => setGraphDialog(false)} />
+            <GraphDialog path={graphDialog} otherPath={graphDialog === shownNote ? graphOther : null} onClose={() => setGraphDialog(null)} />
           </Suspense>
         </LoadBoundary>
       )}

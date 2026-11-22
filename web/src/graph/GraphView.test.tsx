@@ -33,11 +33,13 @@ vi.mock("./GraphCanvas", () => ({
 const { default: GraphView } = await import("./GraphView");
 
 let fromSm = false;
+let wide = false;
 beforeEach(() => {
   fromSm = false;
+  wide = false;
   vi.stubGlobal("matchMedia", (query: string) => ({
     get matches() {
-      return query === "(min-width: 40rem)" && fromSm;
+      return (query === "(min-width: 40rem)" && (fromSm || wide)) || (query === "(min-width: 80rem)" && wide);
     },
     media: query,
     addEventListener: () => {},
@@ -115,6 +117,41 @@ describe("GraphView in the dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open beside" }));
     expect(screen.getByTestId("where")).toHaveTextContent("/notes/Work/Budget.md?beside=Work/Plan.md");
     expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("a second tap on the selected node opens it", async () => {
+    const { onOpened } = show();
+    await userEvent.click(await screen.findByRole("button", { name: "node Plan" }));
+    expect(screen.getByTestId("where")).toHaveTextContent("/notes/Work/Budget.md");
+    await userEvent.click(screen.getByRole("button", { name: "node Plan" }));
+    expect(screen.getByTestId("where")).toHaveTextContent("/notes/Work/Plan.md");
+    expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("where the split view fits, a second tap opens it beside", async () => {
+    wide = true;
+    useEditor.getState().openNote(BUDGET);
+    const { onOpened } = show();
+    await userEvent.click(await screen.findByRole("button", { name: "node Plan" }));
+    await userEvent.click(screen.getByRole("button", { name: "node Plan" }));
+    expect(screen.getByTestId("where")).toHaveTextContent("/notes/Work/Budget.md?beside=Work/Plan.md");
+    expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("a second tap on a selected ghost opens nothing", async () => {
+    const { onOpened } = show();
+    await userEvent.click(await screen.findByRole("button", { name: "node Anna" }));
+    await userEvent.click(screen.getByRole("button", { name: "node Anna" }));
+    expect(screen.getByRole("group", { name: "Anna" })).toBeInTheDocument();
+    expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("a tap on another node moves the selection without opening", async () => {
+    const { onOpened } = show();
+    await userEvent.click(await screen.findByRole("button", { name: "node Plan" }));
+    await userEvent.click(screen.getByRole("button", { name: "node Anna" }));
+    expect(screen.getByRole("group", { name: "Anna" })).toBeInTheDocument();
+    expect(onOpened).not.toHaveBeenCalled();
   });
 
   it("a new note clears the selection", async () => {

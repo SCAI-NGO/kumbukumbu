@@ -7,6 +7,7 @@ import { useTree } from "../api/notes";
 import { vaultOf, viewUrl } from "../api/paths";
 import { useErrorTextFor } from "../discreet/errorText";
 import { mediaQueryHook } from "../hooks/mediaQuery";
+import { useWide } from "../hooks/useWide";
 import { useOpenNote } from "../shell/openInPane";
 import { useGraphPaths, useLocalGraph, type GraphFilters, type GraphPathsView } from "./api";
 import GraphCanvas from "./GraphCanvas";
@@ -71,6 +72,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   const openNote = useOpenNote();
   const navigate = useNavigate();
   const smUp = useSmUp();
+  const wide = useWide();
   const dialog = mode === "dialog";
   // Below sm the dialog's row has room for depth, List and Fit only; the rest is behind Options.
   const folded = dialog && !smUp;
@@ -231,7 +233,8 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
             running={running}
             select={dialog}
             selectedKey={selected?.node.key ?? null}
-            onSelect={(n) => setSelection(n && anchored(n))}
+            // The selected node tapped again opens it, beside where the split view fits (from 1280 px, as the tree's Open beside).
+            onSelect={(n) => (n && n.key === selected?.node.key ? open(n, wide) : setSelection(n && anchored(n)))}
           />
         ) : (
           <p className="m-auto text-sm text-muted">Drawing the graph…</p>
