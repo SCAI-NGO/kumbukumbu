@@ -13,6 +13,8 @@ import { PointMenu } from "../components/PointMenu";
 import { topDialog } from "../hooks/useDialog";
 import { useDesktop } from "../hooks/useDesktop";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
+import { useGraphColumnCollapsed } from "../hooks/useGraphColumn";
+import { useGraphWide, useGraphWideSplit } from "../hooks/useGraphWide";
 import { useSidePanelCollapsed } from "../hooks/useSidePanel";
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { useWide } from "../hooks/useWide";
@@ -21,6 +23,7 @@ import DiscreetPill, { DiscreetFrame, useRevealed } from "../discreet/DiscreetPi
 import { useTellOpenNote } from "../discreet/openNote";
 import { useUnnamedVault } from "../discreet/errorText";
 import { goneVault, useDiscreet, useGoneWithVaults } from "../discreet/state";
+import GraphColumn, { graphColumnId } from "../graph/GraphColumn";
 import { FindBar } from "../note/NoteTools";
 import { DeleteNoteDialog } from "../note/NoteView";
 import SidePanel, { sidePanelId } from "../note/SidePanel";
@@ -38,7 +41,7 @@ import NewVaultDialog from "./NewVaultDialog";
 import SkillsNotice from "./SkillsNotice";
 import SharedBanner, { MemberNotices } from "./SharedBanner";
 import StorageNotice from "./StorageNotice";
-import TopBar, { sidePanelToggleId, sidebarToggleId } from "./TopBar";
+import TopBar, { graphToggleId, sidePanelToggleId, sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject, type VaultSheet } from "./TreeDrawer";
 import { useNoteActions } from "./useNoteActions";
 import { useNoteMenuKey } from "./useNoteMenuKey";
@@ -69,6 +72,7 @@ const ArchiveSheet = lazy(() => import("./ArchiveSheet"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 const Palette = lazy(() => import("../palette/Palette"));
+const GraphDialog = lazy(() => import("../graph/GraphDialog"));
 
 /** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
 function SearchLoadFailed({ onClose }: { onClose(): void }) {
@@ -339,6 +343,42 @@ export default function MobileShell() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [sidePanel, toggleSidePanel]);
 
+  // From 1920 px on (2880 px in the split view, two panes beside each other), the graph column sits after the side
+  // panel: the focused pane's note in its graph, the other pane's named in its foot. Where no column fits, the graph is
+  // a dialog; on a phone in read mode only, since in Write mode it would fight the keyboard and the caret.
+  const graphWide = useGraphWide();
+  const graphWideSplit = useGraphWideSplit();
+  const [graphCollapsed, setGraphCollapsed] = useGraphColumnCollapsed();
+  const graphColumn = !!shownNote && (split ? graphWideSplit : graphWide);
+  // The other pane's note, for its ring and its distance line.
+  const graphOther = split ? (focusedSide === "right" ? path : beside) : null;
+  const graphDialogAllowed = !!shownNote && !graphColumn && (docked || mode === "read");
+  const [graphDialog, setGraphDialog] = useState(false);
+  // Gone once the column fits or the note goes, not back when the window narrows again.
+  useEffect(() => {
+    if (!graphDialogAllowed) setGraphDialog(false);
+  }, [graphDialogAllowed]);
+  const toggleGraph = useCallback(() => {
+    if (!graphCollapsed && document.getElementById(graphColumnId)?.contains(document.activeElement)) document.getElementById(graphToggleId)?.focus();
+    setGraphCollapsed(!graphCollapsed);
+  }, [graphCollapsed, setGraphCollapsed]);
+
+  // Ctrl+Shift+G (Cmd+Shift+G on a Mac); `code` too, for layouts where G is elsewhere. Not while a dialog is open, the
+  // graph's own included: Escape closes that.
+  useEffect(() => {
+    if (!graphColumn && !graphDialogAllowed) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || !e.shiftKey || e.defaultPrevented) return;
+      if (e.key !== "G" && e.key !== "g" && e.code !== "KeyG") return;
+      if (topDialog()) return;
+      e.preventDefault();
+      if (graphColumn) toggleGraph();
+      else setGraphDialog(true);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [graphColumn, graphDialogAllowed, toggleGraph]);
+
   usePaletteShortcut();
 
   // The URL says which notes are open, the left pane's and the right one's (`beside`); the store follows it when it
@@ -491,6 +531,13 @@ export default function MobileShell() {
         refusal={refusal}
         sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null}
         sidePanel={sidePanel ? { expanded: !panelCollapsed, toggle: toggleSidePanel } : null}
+        graph={
+          graphColumn
+            ? { expanded: !graphCollapsed, toggle: toggleGraph, dialog: false }
+            : graphDialogAllowed
+              ? { expanded: false, toggle: () => setGraphDialog(true), dialog: true }
+              : null
+        }
       />
       {framed && (
         <div className="flex-none px-3 pt-2">
@@ -537,9 +584,17 @@ export default function MobileShell() {
           {!split && footer}
         </div>
         {sidePanel && <NoteSidePanel path={shownNote!} hidden={panelCollapsed} />}
+        {graphColumn && <GraphColumn path={shownNote!} otherPath={graphOther} hidden={graphCollapsed} />}
       </div>
 
       {!docked && overlay === "tree" && <TreeDrawer {...treeProps} />}
+      {graphDialog && graphDialogAllowed && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setGraphDialog(false)} />}>
+          <Suspense>
+            <GraphDialog path={shownNote!} otherPath={graphOther} onClose={() => setGraphDialog(false)} />
+          </Suspense>
+        </LoadBoundary>
+      )}
       {overlay === "search" && (
         <LoadBoundary fallback={<SearchLoadFailed onClose={() => setOverlay("none")} />}>
           <Suspense>

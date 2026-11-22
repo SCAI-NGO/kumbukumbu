@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 import type { HistoryEntry } from "../api/notes";
-import { lastSeen, pauseText } from "./AgentBanner";
+import { ago, lastSeen, pauseText } from "./AgentBanner";
 
 const entry = (version: string, writtenAt: string, writer: string, writerKind: string | null, current = false): HistoryEntry => ({
   version,
@@ -77,5 +77,23 @@ describe("pauseText", () => {
     expect(pauseText(...since(22))).toBe("3 weeks");
     expect(pauseText(...since(70))).toBe("2 months");
     expect(pauseText(...since(400))).toBe("1 year");
+  });
+});
+
+describe("ago", () => {
+  const now = Date.parse("2026-11-21T12:00:00Z");
+  const back = (days: number) => new Date(now - days * 86_400_000).toISOString();
+
+  it("speaks in weeks, months and years once a span gets long", () => {
+    expect(ago(back(1), now)).toBe("yesterday");
+    expect(ago(back(5), now)).toBe("5 days ago");
+    expect(ago(back(21), now)).toBe("3 weeks ago");
+    expect(ago(back(90), now)).toBe("3 months ago");
+    expect(ago(back(400), now)).toBe("last year");
+  });
+
+  it("counts in days at most when asked to be fine", () => {
+    expect(ago(back(-28), now, true)).toBe("in 28 days");
+    expect(ago(back(-28), now)).toBe("in 4 weeks");
   });
 });

@@ -12,17 +12,19 @@ import type { Highlight } from "./MarkdownView";
 
 export type Change = components["schemas"]["ChangeView"];
 
-const units: [Intl.RelativeTimeFormatUnit, number][] = [
+const fineUnits: [Intl.RelativeTimeFormatUnit, number][] = [
   ["day", 86_400],
   ["hour", 3_600],
   ["minute", 60],
 ];
+// `fine` where a countdown matters to the day: the trash's "in 28 days", not "in 4 weeks".
+const units: [Intl.RelativeTimeFormatUnit, number][] = [["year", 365 * 86_400], ["month", 30 * 86_400], ["week", 7 * 86_400], ...fineUnits];
 const relative = new Intl.RelativeTimeFormat("en-GB", { numeric: "auto" });
 
-/** "3 minutes ago", "yesterday", "just now". */
-export function ago(iso: string, now = Date.now()) {
+/** "3 minutes ago", "yesterday", "3 weeks ago", "last year", "just now"; `fine`, days at most. */
+export function ago(iso: string, now = Date.now(), fine = false) {
   const seconds = (Date.parse(iso) - now) / 1000;
-  const [unit, size] = units.find(([, s]) => Math.abs(seconds) >= s) ?? [];
+  const [unit, size] = (fine ? fineUnits : units).find(([, s]) => Math.abs(seconds) >= s) ?? [];
   return unit ? relative.format(Math.round(seconds / size!), unit) : "just now";
 }
 
