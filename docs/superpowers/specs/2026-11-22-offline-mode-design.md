@@ -150,6 +150,19 @@ A purge also removes changes that haven't uploaded yet, so the device list says 
 - "There is no service worker": now there is one, caching the built assets only; API answers stay `no-store` and are never cached.
 - A new §6 entry "Offline mirror", and the 0.7.0 audit (Mythos, blue team) covers it, the service worker and the mirror slot endpoints.
 
+### 4.6 The mirror slot API (work package 3, built)
+
+Decisions of 2026-11-22 while building it, each with its reason; to be confirmed in review.
+
+- **Routes.** `GET /api/account/mirror-slots` (the device list: id, label, created, last contact, changes waiting, whether it is this browser's), `POST /api/account/mirror-slots` with a `label` (answers `201` with the id, the token, the key and the vaults), `POST /api/account/mirror-slots/contact` with the `token` and the changes `waiting` (answers the id, the key and the vaults), `DELETE /api/account/mirror-slots/{id}`. Sessions only. Why a contact route beside the three of §4.2: the slot records the changes waiting at each contact, a write, so it is a `POST`, and it is the one call a browser makes on every reconnect to learn what to purge.
+- **The server makes the mirror key**, and seals it under a key from the user key **and** a random token the browser keeps in the clear. Why: no weak key from a buggy client, and neither the database nor the user key alone (which every session of the user holds) opens a browser's key without that browser's token. The token, not the slot's id, is what a contact and the `401` take; the id is only for the device list's removal.
+- **The vault list is the signal for one vault.** A contact lists the vaults the browser may mirror now; a mirrored vault not listed is purged (access lost, deleted, marked discreet), and one listed with another tag than it was mirrored under was re-keyed. Why: one answer covers all the per-vault signals of §4.4, with no new code on the notes and sync routes, and the tag needs no new field (it is an HMAC of the vault's key id under a key from the token).
+- **`mirror-wipe` purges the whole mirror**: the code on a contact's `404`, and on the `401` of a request without a caller that hands in the token in `Kumbu-Mirror` when no slot of it exists. Why the header: a browser whose session ended can't make contact, and must still learn that its copy was removed or its account deleted; a session that merely ended keeps the copy.
+- **"End other sessions" deletes the user's other slots**: all but those the asking session made or last contacted. Why the session and not a token in the request: the server knows it without the client's help, and the browser that asks contacts its slot on every sign-in.
+- **A re-encryption or recovery deletes every slot**, the asking browser's too. Why: its mirror is sealed under a mirror key the old user key wrapped; it is synced again under a new one (§4.4).
+- **The socket frame `{"type":"mirror"}`** asks a tab to make contact now: on a removed slot, and on a session's socket that lost a vault. **Never on a discreet mark.** Why: the discreet design shows nothing on a socket that names a mark (its close says only "connect again"); the sockets that held the vault close anyway, and a tab makes contact whenever its socket connects again.
+- **At most 20 slots per user.** Why: a person's browsers are few, and a stolen session mustn't fill the database.
+
 ## 5. Browser storage
 
 - **IndexedDB only**, attachment bytes as Blobs in it. OPFS would be faster for big files, but one store is simpler, and on-demand fetching keeps the mirror small. OPFS stays an option if measurement says so.

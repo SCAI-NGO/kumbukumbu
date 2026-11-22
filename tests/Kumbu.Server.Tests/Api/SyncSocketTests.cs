@@ -246,6 +246,8 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         await Hub.CheckAsync(Ct);
 
         Assert.Equal([("Skills", AccessLevel.Owner), ("Work", AccessLevel.Owner)], SessionVaults(bob));
+        // A session that lost a vault is told to make contact with its offline mirror's slot (offline mode design §4.4).
+        Assert.Equal("""{"type":"mirror"}""", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
         await alice.CreateAsync("plan.md", "x\n");
         Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
         await bob.CreateAsync("eigen.md", "y\n");
@@ -549,6 +551,8 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         }
 
         Assert.Equal([("Skills", AccessLevel.Owner), ("Work", AccessLevel.Owner)], SessionVaults(bob));
+        // A session that lost a vault is told to make contact with its offline mirror's slot (offline mode design §4.4).
+        Assert.Equal("""{"type":"mirror"}""", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
         await alice.CreateAsync("plan.md", "x\n");
         Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
     }

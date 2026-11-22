@@ -68,6 +68,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
     private static readonly string RevealedFrame = JsonSerializer.Serialize(new { type = "revealed" });
 
+    /// <summary>"Make contact with your mirror slot now" (offline mode design §4.4): a vault left the session's socket, or
+    /// a slot of the user was removed. Never for a discreet mark, which nothing on a socket may name. Only a nudge, as a hint is: what to purge, the contact says.</summary>
+    internal static readonly string MirrorFrame = JsonSerializer.Serialize(new { type = "mirror" });
+
     /// <summary>Connections per subject: a person with several tabs has four in one session.</summary>
     public const int MaxPerKey = 4;
 
@@ -296,6 +300,17 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         await RefreshAsync(c => vaultIds.Any(c.Has), ct);
     }
 
+    /// <summary>A mirror slot of the user was removed: every socket of her sessions is told <see cref="MirrorFrame"/>, so the
+    /// browser whose copy it was purges it at once.</summary>
+    public async Task MirrorChangedAsync(string userId, CancellationToken ct)
+    {
+        if (BeforeAccessChange is { } before) await before();
+        foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.Kind == SubjectKind.Session && c.Grant.Subject.User == userId))
+        {
+            connection.Notify(MirrorFrame);
+        }
+    }
+
     /// <summary>The session <paramref name="subject"/> (<see cref="Sessions.SubjectOf"/>) hid its discreet vaults again
     /// (discreet vaults design, Decision 8): each of its sockets is told, and those whose ticket was asked while they
     /// were shown close with <see cref="Hidden"/>.</summary>
@@ -336,6 +351,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         PruneMarks();
         _marks[userId] = time.GetUtcNow().UtcDateTime;
         if (BeforeAccessChange is { } before) await before();
+        // No mirror frame: like the close's reason, nothing on the socket may name the mark. A socket closed here connects
+        // again, and its tab makes contact with its mirror slot then, which leaves the vault out (offline mode design §4.3).
         var picked = _connections.Keys.Where(c => c.Grant.Subject.Kind == SubjectKind.Session && c.Grant.Subject.User == userId && c.Has(vaultId)).ToList();
         var closed = 0;
         await Task.WhenAll(picked.Select(async connection =>
@@ -511,6 +528,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             return false;
         }
 
+        // A session that lost a vault purges its mirror of it (offline mode design §4.4).
+        if (subject.Kind == SubjectKind.Session && before.Keys.Any(v => !after.ContainsKey(v))) connection.Notify(MirrorFrame);
         return true;
     }
 

@@ -41,6 +41,17 @@ public static class ApiErrors
     /// and sign in as its owner.</summary>
     public const string OtherAccount = "other-account";
 
+    /// <summary>The <see cref="ApiError.Code"/> that tells a browser to purge its whole offline mirror (offline mode design
+    /// §4.4): its mirror slot is gone. On the 404 of a contact (<see cref="MirrorSlotsApi"/>), and on the 401 of a request
+    /// that hands in the slot's token in <see cref="MirrorHeader"/> when no slot of it exists any more.</summary>
+    public const string MirrorWipe = "mirror-wipe";
+
+    /// <summary>The header a browser with an offline mirror sends its slot's token in, so that a 401 can tell it to purge.</summary>
+    public const string MirrorHeader = "Kumbu-Mirror";
+
+    public static ApiException MirrorGone(int status) =>
+        new(status, "This browser's offline copy was removed; it is deleted here too.", code: MirrorWipe);
+
     public static ApiException NotFound(string message) => new(StatusCodes.Status404NotFound, message);
 
     public static ApiException BadRequest(string message) => new(StatusCodes.Status400BadRequest, message);

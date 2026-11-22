@@ -475,9 +475,13 @@ public static class AccountApi
         return TypedResults.NoContent();
     }
 
-    private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, SyncHub hub, CancellationToken ct)
+    private static async Task<NoContent> EndOtherSessionsAsync(
+        HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, SyncHub hub, MirrorSlots mirrors, CancellationToken ct)
     {
-        await sessions.EndAllAsync(caller.User!.Id, http.Request.Cookies[CallerMiddleware.SessionCookie], ct);
+        var secret = http.Request.Cookies[CallerMiddleware.SessionCookie];
+        await sessions.EndAllAsync(caller.User!.Id, secret, ct);
+        // Their browsers' offline copies go too (offline mode design §4.4), this browser's stays.
+        await mirrors.EndOthersAsync(caller.User!.Id, secret is null ? null : Sessions.SubjectOf(secret), ct);
         // A code made by one of the sessions ended (perhaps the one that prompted this) goes with them.
         pairings.DropAll(caller.User!.Id);
         await hub.SubjectsEndedAsync(caller.User!.Id, CancellationToken.None);
