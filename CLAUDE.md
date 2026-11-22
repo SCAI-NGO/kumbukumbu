@@ -34,7 +34,11 @@ dotnet test --solution Kumbu.slnx          # server and core; 4 tests skip witho
 pnpm -C web install --frozen-lockfile      # first, or after a pull: stale node_modules make tests and build fail
 pnpm -C web test --run
 pnpm -C web build
+pnpm -C packages/eidolon-core test         # the Eidolon core, with its boundary check
+pnpm -C packages/eidolon-core build
 ```
+
+`web/` and `packages/eidolon-core` are one pnpm workspace with one `pnpm-lock.yaml` at the root (the install above installs both); `pdf/` keeps its own, so install it with `pnpm -C pdf install --ignore-workspace`. The Eidolon core imports nothing of React, `web/` or Obsidian and sees no DOM types; the host reaches it through ports (offline mode design §2a). Its sync part (`src/engine`, `src/api`, `src/live` and the test fakes) is vendored into the Obsidian plugin (`kumbu-obsidian`), which checks its copy against a commit named in its `eidolon-core.json`: change the sync code here, then move the plugin's copy.
 
 The search tests that need the real embedding model run with `KUMBU_MODEL_DIR` pointing at a folder holding `arctic-m/` (the server downloads it into its `models` volume on the first start).
 

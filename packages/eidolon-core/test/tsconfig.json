@@ -1,0 +1,10 @@
+{
+  // The tests run in Node, with its globals; src/globals.d.ts is left out, as Node's types declare the same.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"]
+  },
+  "include": ["../src/**/*.ts", "./**/*.ts", "../vitest.config.ts"],
+  "exclude": ["../src/globals.d.ts"]
+}

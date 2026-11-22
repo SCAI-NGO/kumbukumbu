@@ -706,6 +706,13 @@ pnpm -C web build     # type check and build into web/dist
 pnpm -C web gen:api   # regenerate src/api/schema.d.ts from a running server
 ```
 
+The web app is part of a pnpm workspace at the repository's root (`pnpm-workspace.yaml`, one `pnpm-lock.yaml`) with the Eidolon core in `packages/eidolon-core`: the client-side data layer (sync, and for offline mode the sealed store, the local index and the tools), kept free of React, the web app and the DOM so that it can be taken out as a library later. See [its README](packages/eidolon-core/README.md).
+
+```sh
+pnpm -C packages/eidolon-core test    # Vitest, the boundary check included
+pnpm -C packages/eidolon-core build   # type check, without DOM types
+```
+
 The dev server proxies to `http://localhost:8083`, so start the stack with `KUMBU_PORT=8083` (or change `server` in `web/vite.config.ts`). The server refuses a POST, PUT or DELETE from a browser unless its `Origin` header matches `KUMBU_PUBLIC_URL` (or, when that is unset, the request's own host). The proxy keeps the browser's host, so the Vite page at `:5173` fails with `403` ("This request didn't come from Kumbu's own pages") if `KUMBU_PUBLIC_URL` points elsewhere. For development either leave `KUMBU_PUBLIC_URL` empty or set it to `http://localhost:5173`; `bootstrap-admin` needs it, so for the first admin use the second and open the printed link as `http://localhost:5173/join#…`. Rebuild with `docker compose up -d --build` after changing it. `gen:api` reads `http://localhost:8083/api/openapi.json`; set `KUMBU_OPENAPI_URL` to use another address.
 
 The web build takes its version from `KUMBU_VERSION` and `KUMBU_GIT_SHA` (`KUMBU_VERSION=0.2.0 KUMBU_GIT_SHA=a6362ec pnpm -C web build`), as the Dockerfile passes them with the server's `-p:Version` and `-p:SourceRevisionId`. Give an image build both `VERSION` and `GIT_SHA` (the release workflow does): with `VERSION` alone the server reports it, but the web app counts as a development build. Without both, as in `pnpm -C web dev` and local builds, the app reports `0.0.0-dev`, and a version without a commit or starting with `0.0.0-dev` on either side turns update detection off; so does a server without the header. A local image build (`docker compose -f compose.yaml -f compose.build.yaml up -d --build`) reports `0.0.0-dev` on both sides.
@@ -715,7 +722,7 @@ The web build takes its version from `KUMBU_VERSION` and `KUMBU_GIT_SHA` (`KUMBU
 Node 22.13+ and pnpm, in `pdf/`; the server's tests replace it with a fake.
 
 ```sh
-pnpm -C pdf install
+pnpm -C pdf install --ignore-workspace   # its own lockfile, not the root workspace's
 pnpm -C pdf test      # type check and Vitest, on PDFs and images the tests generate
 pnpm -C pdf build     # into pdf/dist
 pnpm -C pdf start     # on port 8090 (PORT), for a server run with Kumbu__Pdf__Url=http://localhost:8090
