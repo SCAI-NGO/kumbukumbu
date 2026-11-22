@@ -2,7 +2,7 @@
   "name": "eidolon-core",
   "private": true,
   "version": "0.0.0",
-  "description": "The client-side data layer of Kumbu²: sync, and later the sealed store, the local index and the tools.",
+  "description": "The client-side data layer of Kumbu²: sync and the sealed store, and later the local index and the tools.",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "exports": {
