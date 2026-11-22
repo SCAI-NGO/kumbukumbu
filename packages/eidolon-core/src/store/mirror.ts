@@ -54,8 +54,14 @@ export class MirrorCopies {
   async headers(): Promise<CopyHeader[]> {
     const found: CopyHeader[] = [];
     for (const [, value] of await this.p.storage.scan(HEADERS)) {
-      const header = JSON.parse(new TextDecoder().decode(value)) as CopyHeader;
-      if (header.schema === 1) found.push(header);
+      // The one record in the clear, so anyone with the disk can change it: one that doesn't parse is passed over.
+      let header: CopyHeader | null = null;
+      try {
+        header = JSON.parse(new TextDecoder().decode(value)) as CopyHeader | null;
+      } catch {
+        continue;
+      }
+      if (header !== null && typeof header === "object" && header.schema === 1) found.push(header);
     }
     return found;
   }
@@ -75,9 +81,10 @@ export class MirrorCopies {
    * already here is replaced, its unsynced changes with it: the caller looks for one first and unlocks it instead.
    */
   async create(o: { userId: string; username: string; password: string; label: string; idleMs: number; iterations?: number }): Promise<SealedMirror> {
+    // Before the slot: a failure here leaves none behind on the server.
+    const old = await this.forUser(o.userId);
     const answer = await this.p.slots.create(o.label);
     const raw = mirrorKey(answer);
-    const old = await this.forUser(o.userId);
     if (old !== null) await this.wipe(old.copy);
     const copy = toBase64Url(this.p.crypto.randomBytes(16));
     const header: CopyHeader = {

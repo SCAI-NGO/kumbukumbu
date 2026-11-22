@@ -221,7 +221,8 @@ describe("the engine over the mirror", () => {
     browser.storage.records.set(bodies[0]!, two!);
     browser.storage.records.set(bodies[1]!, one!);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(await vault.files().read("a.md")).toBeNull();
+    // Damage, not a deletion: the engine must never read it as one.
+    await expect(vault.files().read("a.md")).rejects.toThrow(/damaged/);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

@@ -30,6 +30,23 @@ export interface Entry {
   remote?: { version: Version; kind?: FileKind; size?: number };
   /** What this device holds. `text`: written as a note's text (its version is of the text, newlines normalised). */
   local?: { version: Version; size: number; mtime: number; text: boolean };
+  /** Deleted on this device: the one way a path with a base comes to have no bytes here (see VaultMirror.damaged). */
+  deleted?: true;
+}
+
+/** An entry with these bytes here: no longer deleted. */
+function here(entry: Entry | undefined, path: string, local: NonNullable<Entry["local"]>): Entry {
+  return { path, ...(entry?.remote ? { remote: entry.remote } : {}), local };
+}
+
+/** An entry with its bytes gone from this device: by a deletion here, or let go (`deleted` false). */
+function gone(entry: Entry, path: string, deleted: boolean): Entry {
+  return { path, ...(entry.remote ? { remote: entry.remote } : {}), ...(deleted ? { deleted: true as const } : {}) };
+}
+
+/** A record that should be here doesn't open, or is missing: damage on the device, never a deletion made on it. */
+export class DamagedRecordError extends Error {
+  constructor(path: string) { super(`The offline copy of ${path} is damaged on this device; it is left as it is in Kumbu².`); }
 }
 
 export interface VaultMeta {
@@ -154,12 +171,14 @@ export class VaultMirror {
   get dataPrefix(): string { return this.keys.data; }
   private get stateKey(): string { return `${this.keys.data}s`; }
 
+  /** A vault taken into the copy: its meta, and nothing else under its name, whatever an earlier mirror left there. */
   static async writeMeta(r: Records, meta: VaultMeta): Promise<void> {
     const keys = await r.vaultNames(meta.id);
-    await r.p.storage.write({ put: [await r.sealJson(keys.meta, meta)] });
+    await r.p.locks.run(r.lockName, async () => r.p.storage.write({ removePrefix: [keys.data], put: [await r.sealJson(keys.meta, meta)] }));
   }
 
   async setMeta(change: Partial<Omit<VaultMeta, "id">>): Promise<void> {
+    this.assertHeld();
     this.meta = { ...this.meta, ...change };
     await this.r.p.storage.write({ put: [await this.r.sealJson(this.keys.meta, this.meta)] });
   }
@@ -178,7 +197,20 @@ export class VaultMirror {
     this.assertHeld();
     if (this.entries.get(path)?.local === undefined) return null;
     const body = await this.bodyKey(path);
-    return this.r.open(body, await this.r.p.storage.get(body));
+    const bytes = await this.r.open(body, await this.r.p.storage.get(body));
+    // The entry says the bytes are here: missing or unopenable, they were damaged, not deleted.
+    if (bytes === null) throw new DamagedRecordError(path);
+    return bytes;
+  }
+
+  /**
+   * A path the engine agreed on (it has a base) with neither bytes here nor the mark of a deletion made here: its
+   * records were removed or changed on the device. The engine must not read that as a deletion and trash it in
+   * Kumbu².
+   */
+  damaged(path: string): boolean {
+    const entry = this.entries.get(path);
+    return entry?.local === undefined && entry?.deleted !== true && this.state.bases[path] !== undefined;
   }
 
   /** Changes made here that Kumbu² doesn't have yet: paths whose bytes differ from the agreed version, deletions too. */
@@ -249,12 +281,12 @@ export class VaultMirror {
    * stopped, as it holds the state in memory; a path changed here in the meantime is left as it is.
    */
   async evict(paths: readonly string[]): Promise<void> {
-    const gone = await this.change(paths, (p, entry) => Promise.resolve(
+    const done = await this.change(paths, (p, entry) => Promise.resolve(
       entry?.local === undefined || this.state.bases[p] !== entry.local.version ? false
-        : { entry: { path: p, ...(entry.remote ? { remote: entry.remote } : {}) }, body: null }));
+        : { entry: gone(entry, p, false), body: null }));
     const state = clone(this.state);
     paths.forEach((p, i) => {
-      if (!gone[i]) return;
+      if (!done[i]) return;
       delete state.bases[p];
       delete state.hashed?.[p];
     });
@@ -315,7 +347,7 @@ export class VaultMirror {
         }
         done.push(true);
         let entry = outcome.entry;
-        if (entry !== null && entry.local === undefined && entry.remote === undefined) entry = null;
+        if (entry !== null && entry.local === undefined && entry.remote === undefined && !(entry.deleted && this.state.bases[path] !== undefined)) entry = null;
         if (entry === null) remove.push(key);
         else put.push(await this.r.sealJson(key, entry));
         const body = await this.bodyKey(path);
@@ -376,6 +408,7 @@ class MirrorFiles implements LocalFiles {
 
   async read(path: string): Promise<string | null> {
     this.v.assertHeld();
+    if (this.v.damaged(path)) throw new DamagedRecordError(path);
     const draft = this.drafts?.text(path) ?? null;
     if (draft !== null && this.v.entry(path)?.local !== undefined) return draft;
     const bytes = await this.v.bytes(path);
@@ -393,8 +426,9 @@ class MirrorFiles implements LocalFiles {
     return local === undefined ? null : { size: local.size, mtime: local.mtime };
   }
 
-  readBinary(path: string): Promise<ArrayBuffer | null> {
-    return this.v.bytes(path).then((b) => b?.buffer ?? null);
+  async readBinary(path: string): Promise<ArrayBuffer | null> {
+    if (this.v.damaged(path)) throw new DamagedRecordError(path);
+    return (await this.v.bytes(path))?.buffer ?? null;
   }
 
   async writeIf(path: string, expected: Version | null, content: string): Promise<boolean> {
@@ -402,7 +436,7 @@ class MirrorFiles implements LocalFiles {
     const version = await versionOf(content);
     const [done] = await this.v.change([path], async (p, entry) => {
       if ((await this.textVersion(p, entry)) !== expected) return false;
-      return { entry: { ...(entry ?? { path: p }), local: { version, size: bytes.byteLength, mtime: this.v.nextMtime(), text: true } }, body: bytes };
+      return { entry: here(entry, p, { version, size: bytes.byteLength, mtime: this.v.nextMtime(), text: true }), body: bytes };
     });
     if (done && this.drafts?.text(path) != null) this.drafts.replaced?.(path, content);
     return done!;
@@ -416,7 +450,7 @@ class MirrorFiles implements LocalFiles {
       // A marker's content is never compared: it exists or it doesn't.
       if (isMarker(p) && (expected !== null || exists)) return false;
       if ((await this.bytesVersion(p, entry)) !== expected) return false;
-      return { entry: { ...(entry ?? { path: p }), local: { version, size: bytes.byteLength, mtime: this.v.nextMtime(), text: false } }, body: bytes };
+      return { entry: here(entry, p, { version, size: bytes.byteLength, mtime: this.v.nextMtime(), text: false }), body: bytes };
     });
     if (!done && isMarker(path)) return expected !== null && this.v.entry(path)?.local !== undefined;
     return done!;
@@ -442,8 +476,8 @@ class MirrorFiles implements LocalFiles {
     const local = this.v.entry(from)?.local;
     if (bytes === null || local === undefined) return;
     await this.v.change([to, from], (p, entry) => Promise.resolve(p === to
-      ? { entry: { ...(entry ?? { path: to }), local: { ...local, mtime: this.v.nextMtime() } }, body: bytes }
-      : { entry: entry === undefined ? null : { path: p, ...(entry.remote ? { remote: entry.remote } : {}) }, body: null }));
+      ? { entry: here(entry, to, { ...local, mtime: this.v.nextMtime() }), body: bytes }
+      : { entry: entry === undefined ? null : gone(entry, p, true), body: null }));
   }
 
   // Folders are only the paths below them: none is ever empty, and none is made by itself.
@@ -458,7 +492,7 @@ class MirrorFiles implements LocalFiles {
   private async removeIf(path: string, check: (path: string, entry: Entry) => Promise<boolean>): Promise<boolean> {
     const [done] = await this.v.change([path], async (p, entry) => {
       if (entry?.local === undefined || !(await check(p, entry))) return false;
-      return { entry: { path: p, ...(entry.remote ? { remote: entry.remote } : {}) }, body: null };
+      return { entry: gone(entry, p, true), body: null };
     });
     return done!;
   }
