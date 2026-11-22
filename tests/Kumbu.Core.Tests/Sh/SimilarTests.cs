@@ -111,6 +111,19 @@ public class SimilarTests
     }
 
     [Fact]
+    public async Task Unlinked_leaves_out_the_pairs_called_not_related_from_either_side()
+    {
+        var store = Store(("/R/Cod.md", "---\nnot-related: [Island]\n---\nfish liver oil\n"), ("/R/Echo.md", "---\nnot-related: [Cod]\n---\nviscosity echo\n"));
+
+        var unlinked = Hits(await Run("similar --unlinked /R/Cod.md", store));
+        var all = Hits(await Run("similar /R/Cod.md", store));
+
+        Assert.DoesNotContain(unlinked, h => h.Contains("/R/Island.md") || h.Contains("/R/Echo.md"));
+        Assert.Contains(unlinked, h => h.Contains("/R/Viscosity.md"));
+        Assert.Contains(all, h => h.Contains("/R/Island.md"));
+    }
+
+    [Fact]
     public async Task Distance_counts_links_through_other_notes()
     {
         var store = Store(("/R/Middle.md", "[[Viscosity]] [[Island]]\n"));
