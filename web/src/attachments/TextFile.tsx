@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { fileAtUrl, type FileAt } from "../api/paths";
 import { fetchFile } from "../api/notes";
 import { download } from "../data/exportUrl";
+import { notOnDevice, OPENS_ONLINE } from "../offline/source";
 
 /**
  * A text file of a skill's folder as its text, in a `pre`: never rendered. A script, an HTML or an SVG file is data
@@ -33,7 +34,7 @@ export default function TextFile({ vault, path, at = {} }: { vault: string; path
     <div className="flex h-full w-full flex-col gap-3 overflow-hidden px-3 pt-[72px] pb-[88px]">
       {state === "failed" ? (
         <p role="alert" className="text-[14px] text-[#a09d96]">
-          The file couldn't be read.
+          {notOnDevice(`/${vault}/${path}`) ? OPENS_ONLINE : "The file couldn't be read."}
         </p>
       ) : (
         <pre

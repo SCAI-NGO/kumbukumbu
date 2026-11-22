@@ -17,6 +17,7 @@ import DeleteFileDialog from "./DeleteFileDialog";
 import { useZoomPan } from "./gestures";
 import PdfPages, { type PdfStatus } from "./PdfPages";
 import TextFile from "./TextFile";
+import { notOnDevice, OPENS_ONLINE } from "../offline/source";
 
 const HistorySheet = lazy(() => import("../note/HistorySheet"));
 
@@ -401,7 +402,7 @@ function ImageStage({
     <div ref={stage} data-testid="image-stage" className="absolute inset-0 touch-none overflow-hidden select-none" {...handlers}>
       {url === null || broken ? (
         <p role="alert" className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-[#d9d6cf]">
-          This image can't be shown. Check the connection and try again.
+          {notOnDevice(path) ? OPENS_ONLINE : "This image can't be shown. Check the connection and try again."}
         </p>
       ) : url === undefined ? (
         <p className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-[#a09d96]">Loading …</p>
