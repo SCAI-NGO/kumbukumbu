@@ -52,7 +52,7 @@ export const commandTable: Record<string, CommandEntry> = {
   backlinks: oneNote(),
   // GraphCommand.cs: --path takes two notes; the lists take an optional scope, every vault without one; else the note.
   graph: {
-    values: ["--depth", "--cap", "-n", "--top", "--tag"],
+    values: ["--depth", "--cap", "-n", "--top", "--tag", "--without-tag"],
     find: (o, options) => {
       if (options.has("--path")) return { paths: all(o) };
       if (options.has("--orphans") || options.has("--hubs") || options.has("--unresolved")) return { paths: first(o), missing: "cwd" };
@@ -78,7 +78,7 @@ export const commandTable: Record<string, CommandEntry> = {
     },
   },
   semsearch: {
-    values: ["-n", "--max", "--tag"],
+    values: ["-n", "--max", "--tag", "--without-tag", "--outside"],
     // Semsearch.cs: the last of several operands is the scope; the rest, unquoted, is the query.
     find: (o) => {
       if (o.length === 0) return { paths: [] };
@@ -87,6 +87,8 @@ export const commandTable: Record<string, CommandEntry> = {
       return o.length > 1 && looksLikePath(o[o.length - 1]) ? { paths: [o.length - 1] } : { paths: [], missing: "cwd" };
     },
   },
+  // Similar.cs: every operand is a path, the notes first, then an optional scope (every vault without one).
+  similar: { values: ["-n", "--max", "--outside", "--without-tag"], find: (o) => ({ paths: all(o) }) },
   tags: {
     values: [],
     find: (o) => {
