@@ -1,9 +1,9 @@
 # Keeps what the build pulls in up to date, each pinned where it is used: the actions to commit hashes in the
 # workflows, the base images to digests in the Dockerfiles, the NuGet packages to the versions in the project files
-# and packages.lock.json, the web app's and the PDF sidecar's npm packages to their pnpm-lock.yaml. And the images
-# the Compose files run, by their tags: Prometheus and Grafana in compose.monitoring.yaml, and the defaults of
-# KUMBU_MONGO_IMAGE and KUMBU_TRAEFIK_IMAGE (`${…:-image:tag}`), whose tags name a major or minor version only, so a
-# pull request there is a new major or minor version: review it.
+# and packages.lock.json, the npm packages of the workspace (web app, Eidolon core) and of the PDF sidecar to their
+# pnpm-lock.yaml. And the images the Compose files run, by their tags: Prometheus and Grafana in
+# compose.monitoring.yaml, and the defaults of KUMBU_MONGO_IMAGE and KUMBU_TRAEFIK_IMAGE (`${…:-image:tag}`), whose
+# tags name a major or minor version only, so a pull request there is a new major or minor version: review it.
 #
 # Node only on its LTS lines, the even majors: an odd major is never LTS and is out of support within months.
 # A new even major is due each April and becomes LTS in October; move to it then, so no LTS line is skipped.
@@ -44,11 +44,12 @@ updates:
       - dependency-name: System.Numerics.Tensors
         versions: ["11.x", "13.x", "15.x"]
 
-  # The web app has many packages: their minor and patch updates come as one pull request a week, a major one on its
-  # own. pdfjs-dist stays out of the group: people and the model see the same pages (docs/security-architecture.md),
-  # so it moves together with the sidecar's, in one pull request.
+  # The pnpm workspace at the root: the web app and the Eidolon core (packages/), one lockfile. The web app has many
+  # packages: their minor and patch updates come as one pull request a week, a major one on its own. pdfjs-dist stays
+  # out of the group: people and the model see the same pages (docs/security-architecture.md), so it moves together
+  # with the sidecar's, in one pull request.
   - package-ecosystem: npm
-    directory: /web
+    directory: /
     schedule:
       interval: weekly
     groups:
