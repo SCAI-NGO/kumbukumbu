@@ -21,7 +21,7 @@ function show(node: GNode, beside: boolean) {
   const onOpen = vi.fn();
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <NodeCard node={node} anchor={{ x: 40, y: 60 }} width={560} beside={beside} onOpen={onOpen} />
+      <NodeCard node={node} anchor={{ x: 40, y: 60 }} width={560} height={560} docked={false} beside={beside} onOpen={onOpen} />
     </QueryClientProvider>,
   );
   return { fetch, onOpen };

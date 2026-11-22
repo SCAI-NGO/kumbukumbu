@@ -249,7 +249,7 @@ describe("select mode", () => {
     expect(selected).toHaveAttribute("aria-pressed", "true");
     expect(selected.querySelector("[data-selected-ring]")).not.toBeNull();
     for (const name of ["Budget, 3 links in, 5 out", "Left, 1 link in, 1 out", "Anna, no note yet"]) {
-      expect(nodeButton(name)).not.toHaveAttribute("aria-pressed");
+      expect(nodeButton(name)).toHaveAttribute("aria-pressed", "false");
       expect(nodeButton(name).querySelector("[data-selected-ring]")).toBeNull();
     }
   });
@@ -335,6 +335,53 @@ describe("touch", () => {
     const before = viewBox();
     fireEvent.pointerMove(svg, { pointerId: 2, clientX: 520, clientY: 280 });
     expect(viewBox()[2]).toBeCloseTo(before[2] / 2);
+  });
+
+  it("a fingertip that moves a little while tapping still selects, on a node and on the background", () => {
+    const p = props({ select: true });
+    render(<GraphCanvas {...p} />);
+    const svg = screen.getByRole("group");
+    const button = nodeButton("Plan, 1 link in, 1 out");
+    const viewBefore = svg.getAttribute("viewBox");
+    fireEvent.pointerDown(button, { pointerId: 1, isPrimary: true, pointerType: "touch", clientX: 300, clientY: 280 });
+    fireEvent.pointerMove(svg, { pointerId: 1, pointerType: "touch", clientX: 306, clientY: 280 });
+    fireEvent.pointerUp(svg, { pointerId: 1, pointerType: "touch", clientX: 306, clientY: 280 });
+    fireEvent.click(button);
+    expect(layout.drag).not.toHaveBeenCalled();
+    expect(p.onSelect).toHaveBeenLastCalledWith(plan);
+
+    fireEvent.pointerDown(svg, { pointerId: 2, isPrimary: true, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(svg, { pointerId: 2, pointerType: "touch", clientX: 106, clientY: 100 });
+    fireEvent.pointerUp(svg, { pointerId: 2, pointerType: "touch", clientX: 106, clientY: 100 });
+    fireEvent.click(svg);
+    expect(svg.getAttribute("viewBox")).toBe(viewBefore);
+    expect(p.onSelect).toHaveBeenLastCalledWith(null);
+  });
+
+  it("a finger that moves past the touch slop drags a node or pans", () => {
+    const p = props({ select: true });
+    render(<GraphCanvas {...p} />);
+    const svg = screen.getByRole("group");
+    const button = nodeButton("Plan, 1 link in, 1 out");
+    fireEvent.pointerDown(button, { pointerId: 1, isPrimary: true, pointerType: "touch", clientX: 300, clientY: 280 });
+    fireEvent.pointerMove(svg, { pointerId: 1, pointerType: "touch", clientX: 312, clientY: 280 });
+    expect(layout.drag).toHaveBeenCalled();
+    fireEvent.pointerUp(svg, { pointerId: 1, pointerType: "touch", clientX: 312, clientY: 280 });
+    fireEvent.click(button);
+    expect(p.onSelect).not.toHaveBeenCalled();
+
+    const [x, y, w, h] = viewBox();
+    fireEvent.pointerDown(svg, { pointerId: 2, isPrimary: true, pointerType: "touch", clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(svg, { pointerId: 2, pointerType: "touch", clientX: 112, clientY: 100 });
+    expect(viewBox()).toEqual([x - (12 * w) / 560, y, w, h]);
+  });
+
+  it("a mouse moved past 3 px drags", () => {
+    render(<GraphCanvas {...props({ select: true })} />);
+    const svg = screen.getByRole("group");
+    fireEvent.pointerDown(nodeButton("Plan, 1 link in, 1 out"), { pointerId: 1, isPrimary: true, pointerType: "mouse", clientX: 300, clientY: 280 });
+    fireEvent.pointerMove(svg, { pointerId: 1, pointerType: "mouse", clientX: 306, clientY: 280 });
+    expect(layout.drag).toHaveBeenCalled();
   });
 
   it("a double tap on the background fits the view again", () => {

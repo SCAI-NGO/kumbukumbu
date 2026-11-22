@@ -6,9 +6,10 @@ import type { GNode } from "./model";
 const WIDTH = 256;
 const GAP = 12;
 
-/** Where a card goes for `anchor`, kept inside a body `width` wide. */
-export function cardPlace(anchor: { x: number; y: number }, width: number) {
-  return { left: Math.max(GAP, Math.min(anchor.x + GAP, width - WIDTH - GAP)), top: anchor.y + GAP, width: WIDTH };
+/** Where a card goes for `anchor`, kept inside a body `width` wide, and with `fit` one `fit.height` high for a card `fit.card` high. */
+export function cardPlace(anchor: { x: number; y: number }, width: number, fit?: { height: number; card: number }) {
+  const top = fit ? Math.max(GAP, Math.min(anchor.y + GAP, fit.height - fit.card - GAP)) : anchor.y + GAP;
+  return { left: Math.max(GAP, Math.min(anchor.x + GAP, width - WIDTH - GAP)), top, width: WIDTH };
 }
 
 /** A node's title, tags, first paragraph and when it changed, asked for while shown; a ghost's says "No note yet" and asks nothing. */

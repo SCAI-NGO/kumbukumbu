@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { useEditor } from "../state/editor";
@@ -8,14 +8,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json } from "../test/app";
 import type { LocalGraphView } from "./api";
 import type { GNode } from "./model";
+import { CARD_HEIGHT } from "./NodeCard";
 
 // The canvas has its own tests; here it is a button per node that selects it when `select` is set, else opens it, and
-// is pressed while selected.
+// is pressed while selected. A press on it goes no further, as on the canvas's nodes.
 vi.mock("./GraphCanvas", () => ({
   default: (props: { nodes: GNode[]; select?: boolean; selectedKey?: string | null; onOpen(n: GNode, beside: boolean): void; onSelect?(n: GNode | null): void }) => (
     <div data-testid="canvas">
       {props.nodes.map((n) => (
-        <button key={n.id} type="button" aria-pressed={(props.select && n.key === props.selectedKey) || undefined} onClick={() => (props.select ? props.onSelect?.(n) : props.onOpen(n, false))}>
+        <button
+          key={n.id}
+          type="button"
+          aria-pressed={props.select ? n.key === props.selectedKey : undefined}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => (props.select ? props.onSelect?.(n) : props.onOpen(n, false))}
+        >
           node {n.title}
         </button>
       ))}
@@ -187,6 +194,49 @@ describe("GraphView in the dialog", () => {
     } finally {
       document.removeEventListener("keydown", reached);
     }
+  });
+
+  // The body the cards are placed in, 600 by 400 at the window's corner.
+  const sized = async () => {
+    const canvas = await screen.findByTestId("canvas");
+    vi.spyOn(canvas.parentElement!, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 600, height: 400, right: 600, bottom: 400, x: 0, y: 0, toJSON: () => ({}) });
+  };
+
+  it("below sm the card sits at the body's foot, as wide as the body", async () => {
+    show();
+    await sized();
+    const plan = screen.getByRole("button", { name: "node Plan" });
+    fireEvent.pointerDown(plan, { clientX: 100, clientY: 50 });
+    fireEvent.click(plan);
+    const card = screen.getByRole("group", { name: "Plan" });
+    expect(card).toHaveClass("inset-x-3", "bottom-3");
+    expect(card.style.left).toBe("");
+    expect(card.style.top).toBe("");
+    expect(card.style.width).toBe("");
+  });
+
+  it("from sm the card sits at the node the tap was on", async () => {
+    fromSm = true;
+    show();
+    await sized();
+    const plan = screen.getByRole("button", { name: "node Plan" });
+    fireEvent.pointerDown(plan, { clientX: 100, clientY: 50 });
+    fireEvent.click(plan);
+    const card = screen.getByRole("group", { name: "Plan" });
+    expect(card.style.left).toBe("112px");
+    expect(card.style.top).toBe("62px");
+  });
+
+  it("from sm a node near the foot gives a card that stays inside the body", async () => {
+    fromSm = true;
+    show();
+    await sized();
+    const plan = screen.getByRole("button", { name: "node Plan" });
+    fireEvent.pointerDown(plan, { clientX: 100, clientY: 390 });
+    fireEvent.click(plan);
+    const top = parseFloat(screen.getByRole("group", { name: "Plan" }).style.top);
+    expect(top).toBeGreaterThanOrEqual(12);
+    expect(top + CARD_HEIGHT).toBeLessThanOrEqual(400 - 12);
   });
 
   it("gives the focus back to the selected node when Escape closes the card from inside", async () => {

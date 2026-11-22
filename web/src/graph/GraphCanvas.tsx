@@ -42,8 +42,9 @@ const SUGGESTION_RING = 140;
 const SUGGESTION_R = 5;
 /** Room below a node for its title. */
 const TITLE_BELOW = 14;
-/** How far the pointer moves before a press on a node is a drag rather than a click. */
+/** How far the pointer moves before a press is a drag or a pan rather than a click; a fingertip wanders more in a tap (as in the lightbox). */
 const DRAG_SLOP = 3;
+const TOUCH_SLOP = 10;
 /** The column's size until it has been measured (and in tests, where nothing is). */
 const FALLBACK_SIZE = { w: 560, h: 560 };
 /** A finger's least target, in screen pixels: 44 px across, where a node may be 4 px in radius. */
@@ -158,7 +159,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
 
   // A press on the background pans; a press on a node drags it once it has moved past the slop, and is no click then.
   // A second finger turns either into a pinch.
-  const press = useRef<{ id: string | null; clientX: number; clientY: number; view: View; moved: boolean } | null>(null);
+  const press = useRef<{ id: string | null; clientX: number; clientY: number; view: View; moved: boolean; slop: number } | null>(null);
   const justMoved = useRef(false);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   // The fingers' distance at the last step of a pinch, null without one.
@@ -174,7 +175,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
     if (e.isPrimary) pointers.current.clear();
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.current.size === 1) {
-      press.current = { id, clientX: e.clientX, clientY: e.clientY, view, moved: false };
+      press.current = { id, clientX: e.clientX, clientY: e.clientY, view, moved: false, slop: e.pointerType === "touch" ? TOUCH_SLOP : DRAG_SLOP };
       pinch.current = null;
       return;
     }
@@ -203,7 +204,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
     const p = press.current;
     if (!p) return;
     const [dx, dy] = [e.clientX - p.clientX, e.clientY - p.clientY];
-    if (!p.moved && Math.hypot(dx, dy) < DRAG_SLOP) return;
+    if (!p.moved && Math.hypot(dx, dy) < p.slop) return;
     // Captured only now: a capture from the press would send a plain click to the background instead of the node.
     if (!p.moved) svg.current?.setPointerCapture?.(e.pointerId);
     p.moved = true;
@@ -342,7 +343,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
             tabIndex={n.id === rovingId ? 0 : -1}
             aria-label={label(n)}
             aria-disabled={inert || undefined}
-            aria-pressed={selected || undefined}
+            aria-pressed={select ? selected : undefined}
             transform={`translate(${p.x} ${p.y})`}
             className={`focus-visible:outline-2 focus-visible:outline-accent ${inert ? "" : "cursor-pointer"}`}
             onPointerDown={(e) => {

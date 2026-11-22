@@ -49,7 +49,7 @@ function otherLine(other: GraphPathsView | "other-vault" | null | undefined): st
   return steps === 1 ? "Other pane: 1 step away" : `Other pane: ${steps} steps away`;
 }
 
-type Anchored = { node: GNode; anchor: { x: number; y: number }; width: number; on: string };
+type Anchored = { node: GNode; anchor: { x: number; y: number }; width: number; height: number; on: string };
 
 /**
  * The local graph of `path` (the focused pane's note) with its toolbar, the choices remembered per browser, and a foot
@@ -109,11 +109,11 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   // Where a card goes: beside the pointer, or the node that has the keyboard's focus, in the body's coordinates.
   const body = useRef<HTMLDivElement>(null);
   const spot = useRef({ x: 0, y: 0 });
-  const bodyWidth = useRef(0);
+  const bodySize = useRef({ width: 0, height: 0 });
   const at = (clientX: number, clientY: number) => {
     const box = body.current!.getBoundingClientRect();
     spot.current = { x: clientX - box.left, y: Math.min(clientY - box.top, box.height - 160) };
-    bodyWidth.current = box.width;
+    bodySize.current = { width: box.width, height: box.height };
   };
   const pointed = (e: PointerEvent) => at(e.clientX, e.clientY);
   const focused = (e: FocusEvent) => {
@@ -121,7 +121,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
     at(r.right, r.top + r.height / 2);
   };
   // Each kept with the note it was opened on, so neither outlives a new centre.
-  const anchored = (node: GNode): Anchored => ({ node, anchor: spot.current, width: bodyWidth.current, on: path });
+  const anchored = (node: GNode): Anchored => ({ node, anchor: spot.current, ...bodySize.current, on: path });
   const [hover, setHover] = useState<Anchored | null>(null);
   // With the preview off a hover only clears, so a card left over can't come back when it is switched on again.
   const hovered = (n: GNode | null) => setHover(n && prefs.preview ? anchored(n) : null);
@@ -202,7 +202,8 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
           {switches}
         </div>
       )}
-      <div ref={body} onPointerDown={pointed} onPointerMove={pointed} onFocus={focused} className="relative flex min-h-0 flex-1 flex-col">
+      {/* On the way down: a node keeps its press from the canvas's background, and would keep it from here too. */}
+      <div ref={body} onPointerDownCapture={pointed} onPointerMove={pointed} onFocus={focused} className="relative flex min-h-0 flex-1 flex-col">
         {local.isError && !model ? (
           <div className="m-auto flex flex-col items-center gap-3 px-6 text-center text-sm text-muted">
             <p>{local.error instanceof HttpError && local.error.message ? errorFor(local.error) : "Couldn't draw the graph."}</p>
@@ -237,7 +238,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
         )}
         {/* The selected node's card says all the hover card would. */}
         {model && prefs.preview && hover?.on === path && hover.node.key !== selected?.node.key && <NodePreview node={hover.node} anchor={hover.anchor} width={hover.width} />}
-        {model && selected && <NodeCard ref={card} node={selected.node} anchor={selected.anchor} width={selected.width} beside={smUp} onOpen={open} />}
+        {model && selected && <NodeCard ref={card} node={selected.node} anchor={selected.anchor} width={selected.width} height={selected.height} docked={!smUp} beside={smUp} onOpen={open} />}
         {model && suggestion?.on === path && <SuggestionCard suggestion={suggestion.s} onClose={closeSuggestion} />}
       </div>
       {prefs.list && model && (

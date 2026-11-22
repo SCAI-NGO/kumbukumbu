@@ -40,13 +40,34 @@ describe("SuggestionCard", () => {
   });
 
   it("keeps its Escape from the dialog it is in, so that one closes only the card", async () => {
-    const dialog = vi.fn();
-    document.addEventListener("keydown", dialog);
-    const onClose = show();
+    const onClose = vi.fn();
+    const closeDialog = vi.fn();
+    function Holder() {
+      const ref = useDialog<HTMLDivElement>(closeDialog);
+      return (
+        <div ref={ref} role="dialog" aria-label="Graph">
+          <SuggestionCard suggestion={suggestion} onClose={onClose} />
+        </div>
+      );
+    }
+    render(<Holder />);
     await userEvent.keyboard("{Escape}");
-    document.removeEventListener("keydown", dialog);
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(dialog).not.toHaveBeenCalled();
+    expect(closeDialog).not.toHaveBeenCalled();
+  });
+
+  it("with no dialog around it, closes on Escape and lets the Escape go on (to the editor's own)", async () => {
+    const reached = vi.fn();
+    document.addEventListener("keydown", reached);
+    try {
+      const onClose = show();
+      await userEvent.keyboard("{Escape}");
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(reached).toHaveBeenCalledTimes(1);
+      expect(reached.mock.calls[0][0].defaultPrevented).toBe(false);
+    } finally {
+      document.removeEventListener("keydown", reached);
+    }
   });
 
   it("leaves Escape to a dialog opened above it", async () => {

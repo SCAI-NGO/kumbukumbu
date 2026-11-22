@@ -23,7 +23,7 @@ vi.mock("../graph/GraphCanvas", () => ({
   }) => (
     <div>
       {props.nodes.map((n) => (
-        <button key={n.id} type="button" aria-pressed={(props.select && n.key === props.selectedKey) || undefined} onClick={() => (props.select ? props.onSelect?.(n) : props.onOpen(n, false))}>
+        <button key={n.id} type="button" aria-pressed={props.select ? n.key === props.selectedKey : undefined} onClick={() => (props.select ? props.onSelect?.(n) : props.onOpen(n, false))}>
           node {n.title}
         </button>
       ))}
@@ -166,6 +166,20 @@ describe("the graph in the shell, as a column or a dialog", () => {
     await userEvent.keyboard("{Escape}");
     expect(within(dialog).queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
     expect(dialog).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toggle()).toHaveFocus();
+  });
+
+  it("gives the focus to the button where it went while the dialog was open", async () => {
+    width = 90;
+    await open();
+    const before = toggle();
+    await userEvent.click(before);
+    expect(await screen.findByRole("dialog", { name: "a" })).toBeInTheDocument();
+    // Below 64rem the button sits beside the outline: another element.
+    resize(50);
+    expect(toggle()).not.toBe(before);
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(toggle()).toHaveFocus();

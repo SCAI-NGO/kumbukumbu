@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { useId } from "react";
 import { titleOf } from "../api/paths";
 import { useDialog } from "../hooks/useDialog";
+import { graphToggleId } from "../shell/TopBar";
 import GraphView from "./GraphView";
 
 /**
@@ -11,7 +12,8 @@ import GraphView from "./GraphView";
  */
 export default function GraphDialog({ path, otherPath, onClose }: { path: string; otherPath: string | null; onClose(): void }) {
   const id = useId();
-  const dialog = useDialog<HTMLDivElement>(onClose);
+  // The button that opened it is another one once the window crosses 64rem: the one in its new place takes the focus.
+  const dialog = useDialog<HTMLDivElement>(onClose, () => document.getElementById(graphToggleId));
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center sm:bg-black/55" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div
