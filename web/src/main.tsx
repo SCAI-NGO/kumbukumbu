@@ -5,11 +5,13 @@ import App from "./App";
 import "./index.css";
 import { initScheme } from "./theme/apply";
 import { registerShell } from "./update/serviceWorker";
+import { runEngines } from "./offline/engines";
 import { keepStrayDrops } from "./upload/strayDrops";
 
 initScheme();
 keepStrayDrops();
 void registerShell();
+runEngines();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

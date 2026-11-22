@@ -8,7 +8,7 @@ import type { Clock, ListedVault, LocalFiles, RemoteApi, SyncStatus } from "../e
 import { VaultHost, type MirrorEngine, type VaultRef } from "../host/vaults";
 import { evictions, forget, mirrors, wanted } from "./choice";
 import type { SealedMirror } from "./mirror";
-import type { VaultMirror } from "./vault";
+import { SMALL_ATTACHMENT_BYTES, type VaultMirror } from "./vault";
 
 export interface MirrorEnginesOptions {
   mirror: SealedMirror;
@@ -33,6 +33,8 @@ export class MirrorEngines {
   private readonly host: VaultHost;
   private readonly queue = new SerialQueue();
   private stopped = false;
+  /** This tab leads the copy: its engines run here. */
+  private leading = false;
 
   constructor(private readonly o: MirrorEnginesOptions) {
     const m = o.mirror;
@@ -59,6 +61,7 @@ export class MirrorEngines {
   async start(): Promise<void> {
     await this.o.mirror.lead();
     if (this.stopped) return;
+    this.leading = true;
     await this.refresh();
   }
 
@@ -68,7 +71,7 @@ export class MirrorEngines {
    * vault no longer chosen is dropped from the copy (Settings has said what that loses).
    */
   async refresh(recheck = false): Promise<void> {
-    if (this.stopped || this.o.mirror.locked) return;
+    if (!this.leading || this.stopped || this.o.mirror.locked) return;
     await this.host.refresh();
     const m = this.o.mirror;
     for (const vault of m.held()) if (!mirrors(m.choice, vault.id)) await m.purge(vault.id);
@@ -78,19 +81,21 @@ export class MirrorEngines {
 
   /** A "changed" hint, naming the vault as the caller sees it now. */
   hinted(vaultName: string): void {
-    if (!this.stopped) this.host.hinted(vaultName);
+    if (this.leading && !this.stopped) this.host.hinted(vaultName);
   }
 
   /**
    * An attachment opened online (design §6): kept on this device from now on, within the budget, which makes room by
-   * letting the least recently opened go. One larger than the whole budget isn't kept.
+   * letting the least recently opened go. One larger than the whole budget isn't kept. In a tab that doesn't lead,
+   * only the choice changes: the leading tab hears of it and fetches it.
    */
   async opened(vaultId: string, path: string): Promise<void> {
     const m = this.o.mirror;
     if (this.stopped || m.locked) return;
     const vault = m.vault(vaultId);
     const size = vault?.entry(path)?.remote?.size;
-    if (vault === undefined || size === undefined || size > m.choice.budget) return;
+    // A small one comes with the notes anyway.
+    if (vault === undefined || size === undefined || size <= SMALL_ATTACHMENT_BYTES || size > m.choice.budget) return;
     await m.choose((c) => ({ ...c, opened: { ...c.opened, [vaultId]: { ...c.opened[vaultId], [path]: this.o.clock.now() } } }));
     const engine = this.engines.get(vaultId);
     if (engine === undefined) return;

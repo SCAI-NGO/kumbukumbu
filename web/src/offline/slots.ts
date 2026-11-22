@@ -25,6 +25,28 @@ async function answer<T>(response: Response): Promise<T> {
   throw new RejectedError(error?.error ?? `Kumbu² answered ${response.status}.`, response.status);
 }
 
+/** A device with a copy, as Settings, Offline lists them (§4.6). `current`: this browser's. */
+export interface DeviceCopy { id: string; label: string; createdAt: string; contactAt: string | null; waiting: number; current: boolean; }
+
+async function send(method: "GET" | "DELETE", path: string): Promise<Response> {
+  try {
+    return await fetch(`${BASE}${path}`, { method, credentials: "same-origin" });
+  } catch {
+    throw new OfflineError("Kumbu² can't be reached.");
+  }
+}
+
+/** The devices with a copy of the user's notes. */
+export async function listDeviceCopies(): Promise<DeviceCopy[]> {
+  return answer<DeviceCopy[]>(await send("GET", ""));
+}
+
+/** Removes a device's copy: it goes when that device next comes online, with what it hadn't uploaded. */
+export async function removeDeviceCopy(id: string): Promise<void> {
+  const response = await send("DELETE", `/${encodeURIComponent(id)}`);
+  if (response.status !== 404 && !response.ok) await answer(response);
+}
+
 export const mirrorSlots: MirrorSlotsPort = {
   async create(label) {
     return answer<SlotAnswer & { token: string }>(await post("", { label }));

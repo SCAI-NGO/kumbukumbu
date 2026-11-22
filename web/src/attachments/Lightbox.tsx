@@ -17,6 +17,7 @@ import DeleteFileDialog from "./DeleteFileDialog";
 import { useZoomPan } from "./gestures";
 import PdfPages, { type PdfStatus } from "./PdfPages";
 import TextFile from "./TextFile";
+import { useOpenedOnline } from "../offline/useOpenedOnline";
 
 const HistorySheet = lazy(() => import("../note/HistorySheet"));
 
@@ -57,6 +58,8 @@ export default function Lightbox() {
   const checkpoint = search.get("checkpoint") ?? undefined;
   const source = useMemo<FileAt>(() => (checkpoint ? { checkpoint } : version ? { version } : {}), [checkpoint, version]);
   const readOnly = !!(checkpoint || version);
+  // Only the file as it is now: an older version or a checkpoint's is no copy to keep.
+  useOpenedOnline(vault, path, !readOnly);
   // Below `write` the file is looked at, linked to and its history read, never moved or deleted (collab design §12).
   const writes = useMayChange(path);
   const state = location.state as State | null;

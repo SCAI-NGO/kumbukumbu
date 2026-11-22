@@ -7,7 +7,7 @@ import { DEFAULT_CHOICE, evictions, forget, isKept, mirrors, wanted, type Offlin
 import { IDLE_MS, MirrorCopies, type SealedMirror } from "../src/store/mirror";
 import { SMALL_ATTACHMENT_BYTES, type VaultMirror } from "../src/store/vault";
 import { FakeServer } from "./fakes/fakeServer";
-import { delivered, FakeBrowser, realClock } from "./fakeStore";
+import { FakeBrowser, realClock } from "./fakeStore";
 
 const work = { id: "vault-1f3a", tag: "tag-a", canWrite: true, pending: false };
 const team = { id: "vault-77c2", tag: "tag-b", canWrite: true, pending: false };
@@ -64,8 +64,7 @@ describe("the choice", () => {
     const heard = vi.fn();
     other.onChoice = heard;
     await mirror.choose((c) => ({ ...c, all: false, vaults: [work.id], kept: { [work.id]: ["Secret scans"] } }));
-    await delivered();
-    expect(heard).toHaveBeenCalled();
+    await vi.waitFor(() => expect(heard).toHaveBeenCalled());
     expect(other.choice.kept).toEqual({ [work.id]: ["Secret scans"] });
     expect(browser.storage.dump()).not.toContain("Secret scans");
     expect(browser.storage.dump()).not.toContain(work.id);
