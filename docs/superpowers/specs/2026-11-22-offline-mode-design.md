@@ -1,6 +1,6 @@
 # Offline mode for the web app (0.7.0) — Design
 
-Date: 2026-11-22. Status: architecture approved by Chris on 2026-11-22; the UI of the mode (work package 0) gets its UX review before its part of the spec is written. Read against `master` of `kumbukumbu` (`7967a22`), `kumbu-obsidian` (`0b32b17`) and `kumbukumbu-security` (`584685f`).
+Date: 2026-11-22. Status: architecture approved by Chris on 2026-11-22; the UI of the mode (work package 0) reviewed and decided with Chris on 2026-11-22 (§3a). Read against `master` of `kumbukumbu` (`7967a22`), `kumbu-obsidian` (`0b32b17`) and `kumbukumbu-security` (`584685f`).
 
 **Decisions of 2026-11-22 (Chris):**
 - 0.7.0 is this one feature, offline reading and writing; besides it only fixes and small UX improvements. Graph view stays in preview until at least 0.8.0 and link prediction waits, unless either runs alongside without hurting the goal (§9). Why: offline is the feature many users wait for, and the gateway to Eidolon in Chatsundere.
@@ -106,6 +106,75 @@ Browser (one origin = one Kumbu² server)
 | Images and PDFs that are in the mirror | Attachments not fetched yet |
 
 Calendar and board read-only offline are possible later from the same local index; left out to keep 0.7.0 tight.
+
+## 3a. The mode in the UI (work package 0)
+
+UX review of 2026-11-22, its findings discussed with Chris one by one and each decided as below. **One rule over all of them (Chris): a unified UX.** Offline uses the screens, bars and habits people already know (the sign-in form, the update bar's line, the Write refusal's pattern, the search sheet's notice) rather than screens of its own. Why: nothing new to learn for a mode people meet rarely and under stress, and less UI to build and test.
+
+### Turning it on
+
+- **Off by default, per device; invited once.** On a device where the user ticked "Keep me signed in" or runs Kumbu² as an installed app, a bar in the shape of the install hint (`web/src/update/InstallHint.tsx`): "Keep your notes on this device for when you're offline?" with **Set up** (to Settings, Offline) and **Not now**, shown once per device, answered or not. Why: confidentiality first, a copy on a borrowed or shared computer must never come about unasked; then space and data; and changes made offline live only on the device until uploaded, which a person should have chosen knowingly. The two signals are the ones where the device plainly is the person's own.
+- **Easy to reach and change** (Chris): its own Settings entry (below), reachable offline too, and the offline bar and the sidebar's mark lead there in one tap.
+- **The first download shows size and progress, and is fault-tolerant.** Each vault shows its size before it is chosen, and its progress while it comes ("Work: 1,204 of 2,000 notes"). No separate warning about mobile data: the browser can't tell reliably, and the size is shown before choosing. **The inventory comes first:** a vault starts with the version list (`attachments=1`), every path with kind, size and version, sealed like the rest; then the note texts; then attachments under 1 MB. So the tree is complete at once, and an interrupted download is a normal state, never an error: what is there is usable, the rest says "Not on this device yet", and the download resumes where it stopped once online.
+
+### Unlocking
+
+- **The sign-in form opens the copy offline; there is no unlock screen.** After a reload offline, the usual username and password open the copy on this device, with one line above the form: "You're offline. Signing in opens the notes kept on this device." "Keep me signed in" is hidden offline (it does nothing there). Why: one habit, and password managers fill it as always; the username is needed anyway, since the mirror's header holds only the user id's hash, and it picks the right copy when two people share a browser. A wrong password costs the PBKDF2 second (§4.2), which is the throttle; no lockout counter.
+- **An offline unlock ends like a session.** The same idle limits as the session (`Accounts/Sessions.cs:36`): 30 minutes, or 7 days when "Keep me signed in" was chosen at the last sign-in on this device. Then unsaved editor text goes into the copy, the key leaves memory, and the sign-in form asks again; changes waiting stay sealed. Why: a key in memory without a limit would leave an unlocked tab open forever, the laptop left open on a train being exactly the case the sealing is for.
+
+### The bar and the mark
+
+One line in the page's flow under the top bar, styled like the update bar (`web/src/update/UpdateBar.tsx`), always there while offline and never dismissable; a mark beside the vault name in the sidebar. Both lead to Settings, Offline. The sentences speak of the person's notes, not of the engine:
+
+| State | Bar |
+|---|---|
+| Offline, nothing waiting | "You're offline. Your notes are here; what needs a connection is marked." |
+| Offline, changes waiting | "You're offline. 3 changes will upload when you're back." |
+| Offline, no copy on this device | "You're offline. This device keeps no copy of your notes." |
+| Back, uploading | "Back online. Uploading 3 changes…" (why the app is still in offline mode) |
+| Back, session ended | "Sign in to upload your 3 changes" with **Sign in** |
+| Done | "All changes uploaded", four seconds, like "Updated to …" |
+| Done, with conflicts | "Uploaded 4 changes. One note was also changed elsewhere: your version is kept beside it." with **Open**; several: "3 notes were also changed elsewhere", **Open** leads to the list. Stays until opened or dismissed. |
+
+- **No flicker: at least 15 seconds per mode.** Offline only after a failed request with the socket down (`navigator.onLine` only as a hint); online only once the socket is back and every queue is empty (§3). A mode, once entered, holds at least 15 seconds. Why (Chris): a connection that switches more often is broken anyway, and the bar should not mirror its noise. The 15 seconds hold the mode, not the text: the count updates at once, and "All changes uploaded" keeps its four seconds.
+- **Conflicts stay visible until seen**, unlike the done line. Why: they ask the person to look, and the conflict copy (as in Obsidian, with its callout) leaves them the most agency; power users report conflicts as rare, so the notice is no nuisance.
+- **Every tab shows the same.** Each tab unlocks for itself (the key is per tab; online the slot answers without asking), but the mode and the number of changes waiting are the same in every tab, never two different numbers; one engine per vault across tabs (WP4, WP8).
+
+### "Needs a connection"
+
+- **Dimmed, not hidden, with the reason.** What doesn't work offline (§3's table) stays where it is, disabled, with "Needs a connection" as its title, and in menus (Move, Rename, Share, Publish, History …) as the item's second line: the pattern of the Write refusal in the top bar (`web/src/shell/TopBar.tsx`, `refusal`). Why: people find things in the same place when they're back, and whole parts of the screen don't vanish and reappear.
+- **A page reached by address or left open** (console, history, blame, graph, calendar, board, every Settings page but Offline) shows one calm sentence in its pane: "The console needs a connection. It's back when you are."
+- **Search says what it searches.** Online the server already says when meaning isn't available, in the search sheet's notice line (`src/Kumbu.Server/Api/NoteApi.cs:1064`). Offline the same line, place and style: "You're offline: search finds words only. Search by meaning is back when you are." The chips Hybrid and Meaning are dimmed with "Needs a connection"; every offline search runs by words; the chosen mode is kept and applies again online. Below the results: "Not searched: Archive (not kept on this device)".
+- **What isn't on this device says so.** A vault not kept: in the vault switcher, dimmed, "Not kept on this device". An attachment not fetched: its place in the note shows name, size and "Opens when you're online"; online, opening it fetches it and keeps it within the budget.
+
+### Settings, Offline
+
+A Settings entry **Offline**, after Vaults, reachable offline. Top to bottom:
+
+1. The switch **Keep my notes on this device**, with two sentences: the copy is sealed with your password; someone who finds the device can only try to guess it.
+2. **All my vaults**, and below it each vault with its size and, while it downloads, its progress. New and newly shared vaults follow "All my vaults". Discreet vaults never appear (§4.3).
+3. **Attachments:** space used and the budget, 250 MB, 500 MB (default), 1 GB or 2 GB.
+4. **Kept offline:** the folders and vaults marked Keep offline, each with Remove. Keep offline itself is set where the folder is: an item **Keep offline** in the folder and vault menus of the tree. Why: the choice belongs beside what it is about; Settings gives the overview.
+5. **Storage:** "Uses 312 MB of about 4 GB this browser allows", and whether the browser protects the copy from clean-up (`navigator.storage.persisted()`). On Safari outside the Home Screen: "Safari removes the copy after 7 days without a visit. Add Kumbu² to your Home Screen to keep it." with a link to the install steps (Appearance); the install hint gains the same sentence where offline is on.
+6. **Devices with a copy:** each mirror slot (§4.6, work package 3) as "Firefox on Linux · last online 3 days ago · had 2 changes waiting", this browser marked "This device", each with **Remove offline copy** and a confirmation that names the waiting changes ("2 changes on that device haven't uploaded and will be lost") and says the copy goes when that device next comes online. The label is made from browser and system when the copy is turned on; renaming waits for 0.8.0 (backlog).
+7. **Remove the copy from this device**, with the waiting changes named first.
+
+**Security's texts say what happens to copies:** "Sign out other sessions" adds "…and removes the offline copies on those devices, with any changes they haven't uploaded."; "Re-encrypt my vaults" and the recovery key add "Offline copies are downloaded again, on this device too." (both delete every slot, §4.6).
+
+### Sign in again, sign out
+
+- **Sign in again is a dialog over the app.** When the session ended while changes wait, the bar's **Sign in** opens a password dialog over the app, the username shown and known; the note, the place and the unlocked copy stay. After signing in the upload starts at once. The dialog uses the sign-in page's password field (`autocomplete="current-password"`, the username as a hidden field) so password managers fill it. Online with nothing waiting, a 401 goes to the sign-in page as today. Why: the sign-in page resets the editor and the cache (`web/src/routes/SignIn.tsx`), losing the place the person came back to.
+- **Sign-out with changes waiting.** Online: they upload first, as the editor saves first today (`web/src/shell/TreeDrawer.tsx:442`). Offline: a dialog "3 changes haven't uploaded yet. They stay on this device, sealed, and upload the next time you sign in here." with **Sign out** and **Stay**, and a quieter **Sign out and remove the copy**, which says the 3 changes are then lost.
+- **A sign-out offline is pending until online.** The server can't be told, and JavaScript can't delete the `HttpOnly` cookie: the app keeps a mark (a flag in local storage, no secret, so unsealed) and sends `DELETE /api/session` before anything else on its next start online, and says so: "Your session ends on the server when this device is back online." Why (Chris: it gives the person agency on a borrowed device): without it a remembered session cookie would live on unnoticed.
+
+### Purges and discreet vaults
+
+- **A purge names no vault: purge is purge.** The browser can't tell why a vault left the contact answer (access lost, deleted or marked discreet are alike by design, §4.6), so naming it would put a just-hidden discreet vault's name on screen. The notice: "A vault's copy was removed from this device: it's no longer available here.", adding ", with 2 changes that hadn't uploaded." when that is so. No download of lost changes first: it would keep what the server wants gone, and leave a trace in the discreet case. A whole wipe (`mirror-wipe`) leads to the sign-in page with "The offline copy on this device was removed."
+- **A discreet note open when the connection drops** stays readable while open; Write is off with "Discreet vaults aren't kept offline: changes are saved when you're back", adding "; reloading now loses them" while unsaved text is held. That text stays in memory only, never in IndexedDB, and is saved once online. The discreet vault leaves the tree and the switcher while offline, as when hidden: a "Not kept on this device" label would give it away. The open note closes on leaving it.
+
+### To verify
+
+- Safari's 7-day eviction on current iOS and macOS: until a test iPhone is at hand, the sentence rests on WebKit's published storage policy, checked again before the release; the hand-test item waits for the device, and power users on Safari are asked.
 
 ## 4. Security
 
