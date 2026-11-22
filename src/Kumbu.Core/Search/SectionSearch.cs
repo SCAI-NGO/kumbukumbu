@@ -58,7 +58,7 @@ public static class SectionSearch
     /// with <paramref name="archive"/> or a scope inside it; leaving archived notes out is the caller's.</summary>
     public static async Task<SectionSearchResult> RankAsync(
         IReadOnlyList<Note> notes, VaultPath scope, string query, SearchMode mode, int max, ISearchIndex index, CancellationToken ct, bool pages = false,
-        bool archive = false)
+        bool archive = false, Func<VaultPath, bool>? leftOut = null)
     {
         // The same bound as the stored chunks, so that the boundaries match theirs.
         var bound = index.Bound;
@@ -83,7 +83,7 @@ public static class SectionSearch
                     ? (chunks, [])
                     : (chunks.Where(c => !ByWords(c)).ToList(), chunks.Where(ByWords).ToList());
                 ranked = RankByMeaning(byMeaning, semantic, query, mode == SearchMode.Meaning);
-                if (pages) ranked = WithPages(ranked, semantic, pageChunks, ArchiveFolder.Shown(scope, archive));
+                if (pages) ranked = WithPages(ranked, semantic, pageChunks, ArchiveFolder.Shown(scope, archive), leftOut);
 
                 // Right after a model switch or on first indexing nothing has a cosine yet; the words still find something.
                 if (ranked.Count == 0 && semantic.Pending > 0 && mode != SearchMode.Meaning)
@@ -203,14 +203,15 @@ public static class SectionSearch
 
     /// <summary>The pages of PDFs among the hits, one per page with the cosine and part of its best chunk, merged
     /// into <paramref name="ranked"/> by score; a section goes first on a tie, and of a page's parts on a tie, the
-    /// first hit. Those in a vault's archive only if <paramref name="archived"/>.</summary>
+    /// first hit. Those in a vault's archive only if <paramref name="archived"/>; none of a PDF <paramref name="leftOut"/> leaves out.</summary>
     private static List<(Chunk, double?)> WithPages(
-        List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, (int Page, int Part)> pageChunks, bool archived)
+        List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, (int Page, int Part)> pageChunks, bool archived,
+        Func<VaultPath, bool>? leftOut)
     {
         var best = new Dictionary<(VaultPath, int), (double Score, int Part)>();
         foreach (var hit in semantic.Hits)
         {
-            if (!AttachmentFormat.IsPdf(hit.Path) || (!archived && ArchiveFolder.Contains(hit.Path))) continue;
+            if (!AttachmentFormat.IsPdf(hit.Path) || (!archived && ArchiveFolder.Contains(hit.Path)) || leftOut?.Invoke(hit.Path) == true) continue;
             if (!best.TryGetValue((hit.Path, hit.StartLine), out var known) || hit.Score > known.Score) best[(hit.Path, hit.StartLine)] = (hit.Score, hit.Part);
         }
 
@@ -238,7 +239,7 @@ public static class SectionSearch
             .Select(r => r.Hit)];
     }
 
-    private static bool IsHeadingOnly(Chunk chunk)
+    internal static bool IsHeadingOnly(Chunk chunk)
     {
         return chunk.Text.Trim().Length > 0 && !Body(chunk).Any();
     }
