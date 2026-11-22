@@ -119,6 +119,7 @@ builder.Services.AddSingleton<DiscreetVaults>();
 builder.Services.AddSingleton<EmbeddingsKeys>();
 builder.Services.AddSingleton<CalendarSettings>();
 builder.Services.AddSingleton<Favourites>();
+builder.Services.AddSingleton<MirrorSlots>();
 // The server's zone for a caller without one of her own; tests replace it.
 builder.Services.AddSingleton(ServerZone.Instance);
 builder.Services.AddSingleton<UserKeyRotation>();
@@ -341,6 +342,7 @@ app.MapBoardApi();
 app.MapCalendarApi();
 app.MapEmbeddingsKeyApi();
 app.MapFavouritesApi();
+app.MapMirrorSlotsApi();
 app.MapFlagApi();
 app.MapRecentApi();
 app.MapTagApi();

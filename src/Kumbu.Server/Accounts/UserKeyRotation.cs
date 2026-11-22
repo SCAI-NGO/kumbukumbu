@@ -441,6 +441,9 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         }
 
         await UserSlots.DeleteManyAsync(session, sessions, cancellationToken: ct);
+        // The browsers' offline copies are sealed under the old key: each purges and syncs again under a new mirror key
+        // (offline mode design §4.4), the kept session's too.
+        await MirrorSlots.DeleteAllAsync(db, session, userId, ct);
     }
 
     private async Task ApplyVaultSlotsAsync(IClientSessionHandle session, PreparedRotation rotation, CancellationToken ct)

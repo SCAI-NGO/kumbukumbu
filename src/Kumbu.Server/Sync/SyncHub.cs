@@ -68,6 +68,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
     private static readonly string RevealedFrame = JsonSerializer.Serialize(new { type = "revealed" });
 
+    /// <summary>"Make contact with your mirror slot now" (offline mode design §4.4): a vault left the session's socket, or
+    /// a slot of the user was removed. Never for a discreet mark, which nothing on a socket may name. Only a nudge, as a hint is: what to purge, the contact says.</summary>
+    internal static readonly string MirrorFrame = JsonSerializer.Serialize(new { type = "mirror" });
+
     /// <summary>Connections per subject: a person with several tabs has four in one session.</summary>
     public const int MaxPerKey = 4;
 
@@ -296,6 +300,17 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         await RefreshAsync(c => vaultIds.Any(c.Has), ct);
     }
 
+    /// <summary>A mirror slot of the user was removed: every socket of her sessions is told <see cref="MirrorFrame"/>, so the
+    /// browser whose copy it was purges it at once.</summary>
+    public async Task MirrorChangedAsync(string userId, CancellationToken ct)
+    {
+        if (BeforeAccessChange is { } before) await before();
+        foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.Kind == SubjectKind.Session && c.Grant.Subject.User == userId))
+        {
+            connection.Notify(MirrorFrame);
+        }
+    }
+
     /// <summary>The session <paramref name="subject"/> (<see cref="Sessions.SubjectOf"/>) hid its discreet vaults again
     /// (discreet vaults design, Decision 8): each of its sockets is told, and those whose ticket was asked while they
     /// were shown close with <see cref="Hidden"/>.</summary>
@@ -336,6 +351,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         PruneMarks();
         _marks[userId] = time.GetUtcNow().UtcDateTime;
         if (BeforeAccessChange is { } before) await before();
+        // No mirror frame: like the close's reason, nothing on the socket may name the mark. A socket closed here connects
+        // again, and its tab makes contact with its mirror slot then, which leaves the vault out (offline mode design §4.3).
         var picked = _connections.Keys.Where(c => c.Grant.Subject.Kind == SubjectKind.Session && c.Grant.Subject.User == userId && c.Has(vaultId)).ToList();
         var closed = 0;
         await Task.WhenAll(picked.Select(async connection =>
@@ -503,7 +520,17 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         }
 
         // Under the connection's gate, as an incoming frame's check and its entry are: no entry set on a level just lowered survives.
-        if (!connection.TryApply(generation, after, () => ClearPresence(connection, v => !connection.CanEdit(v)))) return !connection.IsClosed;
+        // What it held when applied, not when read: of two recomputations that overlap, only the one that drops a vault tells.
+        var lost = false;
+        if (!connection.TryApply(generation, after, held =>
+            {
+                lost = held.Keys.Any(v => !after.ContainsKey(v));
+                ClearPresence(connection, v => !connection.CanEdit(v));
+            }))
+        {
+            return !connection.IsClosed;
+        }
+
         if (before.Count > 0 && after.Count == 0)
         {
             ClearPresence(connection, null);
@@ -511,6 +538,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             return false;
         }
 
+        // A session that lost a vault purges its mirror of it (offline mode design §4.4).
+        if (subject.Kind == SubjectKind.Session && lost) connection.Notify(MirrorFrame);
         return true;
     }
 
@@ -801,10 +830,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
         /// <summary>
         /// The vaults recomputation <paramref name="generation"/> worked out, unless a later one applied already or the
-        /// connection was closed; <paramref name="then"/> runs under the same gate. A name renamed meanwhile is kept.
+        /// connection was closed; <paramref name="then"/> runs under the same gate, given the vaults held until then. A name renamed meanwhile is kept.
         /// Presence waiting for a vault no longer held goes with it (the send loop checks again).
         /// </summary>
-        public bool TryApply(long generation, IReadOnlyDictionary<string, VaultState> vaults, Action then)
+        public bool TryApply(long generation, IReadOnlyDictionary<string, VaultState> vaults, Action<IReadOnlyDictionary<string, VaultState>> then)
         {
             lock (_gate)
             {
@@ -816,7 +845,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                     v => now.TryGetValue(v.Key, out var current) && current.Membership == v.Value.Membership ? v.Value with { Name = current.Name } : v.Value,
                     StringComparer.Ordinal);
                 foreach (var key in _presence.Keys.Where(k => !vaults.ContainsKey(k.Vault))) _presence.TryRemove(key, out _);
-                then();
+                then(now);
                 return true;
             }
         }

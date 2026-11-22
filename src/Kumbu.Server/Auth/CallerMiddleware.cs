@@ -2,6 +2,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Authorization;
@@ -38,7 +39,7 @@ public sealed class BackgroundMetadata
 public sealed class CallerMiddleware(
     RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
     Connections connections, OAuthTokens tokens, Rekeying rekeying, DavShares davShares, Api.UploadTickets uploads, IHostEnvironment environment,
-    ILogger<CallerMiddleware> log)
+    MirrorSlots mirrors, ILogger<CallerMiddleware> log)
 {
     public const string SessionCookie = "kumbu_session";
 
@@ -151,12 +152,33 @@ public sealed class CallerMiddleware(
 
         if (caller is null)
         {
+            if (await MirrorGoneAsync(context))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                var gone = ApiErrors.MirrorGone(StatusCodes.Status401Unauthorized);
+                await context.Response.WriteAsJsonAsync(new ApiError(gone.Message, Code: gone.Code));
+                return;
+            }
+
             await UnauthorisedAsync(context);
             return;
         }
 
         context.Features.Set(caller);
         await next(context);
+    }
+
+    /// <summary>
+    /// Whether a request without a caller hands in, in <see cref="ApiErrors.MirrorHeader"/>, the token of a mirror slot
+    /// that no longer exists (removed, the account deleted, its key rotated): its 401 then tells the browser to purge its
+    /// offline copy (offline mode design §4.4), where a session that merely ended keeps it until the next sign-in. Only
+    /// on <c>/api</c> without a bearer key, and a malformed token is no signal.
+    /// </summary>
+    private async Task<bool> MirrorGoneAsync(HttpContext context)
+    {
+        if (!IsUnder(context, "/api") || context.Request.Headers.Authorization.Count > 0) return false;
+        var header = context.Request.Headers[ApiErrors.MirrorHeader];
+        return header.Count == 1 && MirrorSlots.DecodeToken(header[0]) is { } token && !await mirrors.ExistsAsync(token, context.RequestAborted);
     }
 
     /// <summary>
