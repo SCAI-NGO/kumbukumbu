@@ -1,6 +1,6 @@
 # Knowledge synthesis (`similar`, `synthesize-knowledge`) — design
 
-Date: 2026-11-22. Status: draft for Chris's review; every decision in §3 is *(Claude's call)*, made overnight on the basis of the pre-analysis, and open to change. Size: M (an index method, one new `sh` command, three filters, a system skill). Release: open; 0.7.0 is otherwise scoped to offline mode, and none of this touches offline code.
+Date: 2026-11-22. Status: draft for Chris's review; every decision in §3 is *(Claude's call)*, made overnight on the basis of the pre-analysis, and open to change. Size: M (an index method, one new `sh` command, three filters, a system skill). Release: 0.7.0, beside offline mode (Chris, 2026-11-22); none of this touches offline code.
 
 Sources:
 - the pre-analysis "Operation Fish Oil" (2026-11-22, `/SWE/Kumbu/Ideas/`): Swanson's ABC model mapped to the commands, the gaps, a draft of the skill;
