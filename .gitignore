@@ -503,4 +503,6 @@ src/Kumbu.Server/models/
 web/e2e/.auth/
 web/e2e/.results/
 web/e2e/diagrams/.results/
+web/e2e/shell/.results/
+web/e2e/shell/.builds/
 web/playwright-report/

@@ -98,6 +98,8 @@ jobs:
       # Diagrams drawn by the real Mermaid in Chromium, which the unit tests (jsdom) can't do.
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:diagrams
+      # The app shell's service worker in Chromium: offline after one visit, and following a new release.
+      - run: pnpm test:shell
 
   # The litmus WebDAV compliance suites against a running server (WebDAV design §7), in a dot-folder of a vault, so
   # through the parking area; tools/litmus/expected-failures.txt lists the deliberate deviations.

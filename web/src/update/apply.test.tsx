@@ -9,6 +9,7 @@ import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import { holdUpdates, page, registerScrollTop, tryReload } from "./apply";
 import { useUpdate } from "./store";
+import { refreshShell } from "./serviceWorker";
 import UpdateBar from "./UpdateBar";
 
 const v = vi.hoisted(() => ({ app: "0.1.0-pre.41+aaaaaaa" }));
@@ -21,6 +22,8 @@ vi.mock("./version", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("./serviceWorker", () => ({ refreshShell: vi.fn(async () => undefined) }));
 
 const NEWER = "0.2.0+a6362ec";
 const initialUpdate = useUpdate.getState();
@@ -81,6 +84,18 @@ function becomeVisible() {
 
 
 describe("applying an update", () => {
+  it("fetches the new build's app shell worker as soon as the server runs it, before any reload", async () => {
+    serverAt(NEWER);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Some text.");
+    vi.mocked(refreshShell).mockClear();
+
+    act(() => useUpdate.getState().report(NEWER));
+
+    await waitFor(() => expect(refreshShell).toHaveBeenCalledTimes(1));
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it("reloads at the next navigation when nothing is unsaved", async () => {
     serverAt(NEWER);
     const router = renderApp("/notes/Work/plan.md");
