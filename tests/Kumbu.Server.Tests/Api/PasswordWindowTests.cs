@@ -227,6 +227,10 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["POST /api/skills/updates/take"] = "a content write from her copy's own sealed source into a vault she already writes to: it grants and exports nothing (skills spec §3.10)",
         ["POST /api/skills/updates/skip"] = "remembering a version she doesn't want: it changes no content and grants nothing (skills spec §3.10)",
         ["POST /api/skills/install"] = "a content write from a public repository into a vault the caller already writes to: it grants and exports nothing (skills spec §3.9)",
+        ["GET /api/account/mirror-slots/"] = "reading: the device list's labels and times, never a key or token",
+        ["POST /api/account/mirror-slots/"] = "a key for the browser's own copy, no credential: its token opens nothing without a session, and the copy syncs through the routes the session already uses (offline mode design §4.6)",
+        ["POST /api/account/mirror-slots/contact"] = "answers the key of a slot the browser made, to a session of its user: it grants nothing (offline mode design §4.6)",
+        ["DELETE /api/account/mirror-slots/{id}"] = "removing an offline copy reduces what is out",
     };
 
     [Fact]

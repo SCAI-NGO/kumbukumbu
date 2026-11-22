@@ -520,7 +520,17 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         }
 
         // Under the connection's gate, as an incoming frame's check and its entry are: no entry set on a level just lowered survives.
-        if (!connection.TryApply(generation, after, () => ClearPresence(connection, v => !connection.CanEdit(v)))) return !connection.IsClosed;
+        // What it held when applied, not when read: of two recomputations that overlap, only the one that drops a vault tells.
+        var lost = false;
+        if (!connection.TryApply(generation, after, held =>
+            {
+                lost = held.Keys.Any(v => !after.ContainsKey(v));
+                ClearPresence(connection, v => !connection.CanEdit(v));
+            }))
+        {
+            return !connection.IsClosed;
+        }
+
         if (before.Count > 0 && after.Count == 0)
         {
             ClearPresence(connection, null);
@@ -529,7 +539,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         }
 
         // A session that lost a vault purges its mirror of it (offline mode design §4.4).
-        if (subject.Kind == SubjectKind.Session && before.Keys.Any(v => !after.ContainsKey(v))) connection.Notify(MirrorFrame);
+        if (subject.Kind == SubjectKind.Session && lost) connection.Notify(MirrorFrame);
         return true;
     }
 
@@ -820,10 +830,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
         /// <summary>
         /// The vaults recomputation <paramref name="generation"/> worked out, unless a later one applied already or the
-        /// connection was closed; <paramref name="then"/> runs under the same gate. A name renamed meanwhile is kept.
+        /// connection was closed; <paramref name="then"/> runs under the same gate, given the vaults held until then. A name renamed meanwhile is kept.
         /// Presence waiting for a vault no longer held goes with it (the send loop checks again).
         /// </summary>
-        public bool TryApply(long generation, IReadOnlyDictionary<string, VaultState> vaults, Action then)
+        public bool TryApply(long generation, IReadOnlyDictionary<string, VaultState> vaults, Action<IReadOnlyDictionary<string, VaultState>> then)
         {
             lock (_gate)
             {
@@ -835,7 +845,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                     v => now.TryGetValue(v.Key, out var current) && current.Membership == v.Value.Membership ? v.Value with { Name = current.Name } : v.Value,
                     StringComparer.Ordinal);
                 foreach (var key in _presence.Keys.Where(k => !vaults.ContainsKey(k.Vault))) _presence.TryRemove(key, out _);
-                then();
+                then(now);
                 return true;
             }
         }
