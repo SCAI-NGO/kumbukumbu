@@ -19,6 +19,8 @@ Your Kumbu² address is {{server}}: the address you open Kumbu² at (in a browse
 
 A connector added on claude.ai also works in Claude Desktop and in the mobile apps.
 
+**Your memory from the first answer on.** With several connectors on, claude.ai may load Kumbu²'s tools, and with them Kumbu²'s instructions, only once it needs them, so a chat can begin without reading your memory. To be sure, add one line to your personal preferences in claude.ai's settings, or to a project's instructions: *At the start of every chat, read my Kumbu² skill project-memory and follow it.*
+
 *Tested.*
 
 ## This is how you connect ChatGPT
