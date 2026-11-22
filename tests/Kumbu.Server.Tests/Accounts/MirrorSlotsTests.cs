@@ -188,6 +188,7 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
     [InlineData("POST", Url)]
     [InlineData("POST", Contact)]
     [InlineData("DELETE", Url + "/000000000000000000000000")]
+    [InlineData("PUT", Url + "/000000000000000000000000/label")]
     public async Task Api_keys_are_refused(string method, string path)
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");
@@ -205,6 +206,8 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
     [InlineData("POST", Contact, "https://evil.example")]
     [InlineData("DELETE", "{slot}", null)]
     [InlineData("DELETE", "{slot}", "https://evil.example")]
+    [InlineData("PUT", "{slot}/label", null)]
+    [InlineData("PUT", "{slot}/label", "https://evil.example")]
     public async Task Changes_need_our_own_origin(string method, string path, string? origin)
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");
@@ -217,6 +220,7 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         var entry = Assert.Single(await ListAsync(alice))!;
         Assert.Equal(0, entry["waiting"]!.GetValue<int>());
+        Assert.Equal("Firefox on Linux", entry["label"]!.GetValue<string>());
     }
 
     [Fact]
@@ -389,6 +393,56 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
         Assert.Equal(0, await db.GetCollection<BsonDocument>("mirror_slots").CountDocumentsAsync(d => d["user"] == alice.User.Id, cancellationToken: Ct));
         using var wipe = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, alice.Session, slot.Token);
         await AssertWipeAsync(wipe, HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task A_slot_is_renamed_and_keeps_its_key()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var slot = await CreateAsync(alice);
+
+        using (var renamed = await alice.SendAsync(HttpMethod.Put, $"{Url}/{slot.Id}/label", new { label = "  Work laptop  " }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        Assert.Equal("Work laptop", Assert.Single(await ListAsync(alice))!["label"]!.GetValue<string>());
+        Assert.Equal(slot.Key, (await ContactedAsync(alice, slot.Token))["key"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_session_of_one_user_never_renames_another_users_slot()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var bob = await NewAsync(app.PublicApi, vault: "Garden");
+        var slot = await CreateAsync(alice);
+
+        using (var renamed = await bob.SendAsync(HttpMethod.Put, $"{Url}/{slot.Id}/label", new { label = "Mine now" }))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, renamed.StatusCode);
+        }
+        using (var nothing = await alice.SendAsync(HttpMethod.Put, $"{Url}/not-an-id/label", new { label = "Nothing" }))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, nothing.StatusCode);
+        }
+
+        Assert.Equal("Firefox on Linux", Assert.Single(await ListAsync(alice))!["label"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("line\nbreak")]
+    [InlineData("a label of more than sixty-four characters, which is longer than any browser's")]
+    public async Task A_new_label_is_a_short_line(string label)
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var slot = await CreateAsync(alice);
+
+        using var response = await alice.SendAsync(HttpMethod.Put, $"{Url}/{slot.Id}/label", new { label });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("Firefox on Linux", Assert.Single(await ListAsync(alice))!["label"]!.GetValue<string>());
     }
 
     [Fact]
