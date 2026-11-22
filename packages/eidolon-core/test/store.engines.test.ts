@@ -99,3 +99,55 @@ describe("the engines of a copy", () => {
     await engines.stop();
   });
 });
+
+describe("a vault leaving the copy while its engine runs", () => {
+  /** Notes and an attachment in Work, all of them here, the engine running. */
+  async function synced() {
+    const s = await setup([work]);
+    const server = s.servers.get("Work")!;
+    for (const n of [1, 2, 3]) await server.seed(`n${n}.md`, `note ${n}`);
+    await server.seedFile("a.png", png(100));
+    await s.engines.start();
+    await vi.waitFor(() => expect(held(s.mirror, work.id)).toEqual(["a.png", "n1.md", "n2.md", "n3.md"]));
+    return { ...s, server };
+  }
+
+  test("re-keyed: nothing in Kumbu² goes to the trash, and the vault comes again under its new tag", async () => {
+    const { browser, mirror, engines, server } = await synced();
+    browser.slots.vaults = [{ ...work, tag: "tag-new" }];
+    expect(await mirror.contact()).toEqual({ vaults: 1, lost: 0 });
+    await engines.refresh(true);
+    await vi.waitFor(() => expect(held(mirror, work.id)).toEqual(["a.png", "n1.md", "n2.md", "n3.md"]));
+    expect(mirror.vault(work.id)!.tag).toBe("tag-new");
+    expect(server.count("remove")).toBe(0);
+    expect(server.count("removeFile")).toBe(0);
+    expect([...server.notes.keys()].sort()).toEqual(["n1.md", "n2.md", "n3.md"]);
+    await engines.stop();
+  });
+
+  test("purged in another tab: this tab's engine stops before it can read the emptied copy", async () => {
+    const { browser, copies, mirror, engines, server } = await synced();
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    await other.purge(work.id);
+    await delivered();
+    await server.seed("n4.md", "note 4");
+    engines.hinted("Work");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(server.count("remove")).toBe(0);
+    expect(server.count("removeFile")).toBe(0);
+    expect(mirror.vault(work.id)).toBeUndefined();
+    await engines.stop();
+  });
+
+  test("a check already under way when the vault is purged fails, rather than deciding on what isn't there", async () => {
+    const { mirror, engines, server } = await synced();
+    const vault = mirror.vault(work.id)!;
+    const files = vault.files();
+    await mirror.purge(work.id);
+    await expect(files.list()).rejects.toThrow();
+    await expect(files.read("n1.md")).rejects.toThrow();
+    await expect(vault.stateStore().load()).rejects.toThrow();
+    expect(server.count("remove")).toBe(0);
+    await engines.stop();
+  });
+});

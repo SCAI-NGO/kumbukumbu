@@ -117,6 +117,8 @@ export class VaultMirror {
   private state: SyncState = emptyState();
   private lastMtime = 0;
   private onNotesDone: (() => void) | null = null;
+  /** Purged, or its copy locked: nothing reads or writes through it any more. */
+  private dropped = false;
 
   private constructor(private readonly r: Records, private meta: VaultMeta, private readonly keys: { meta: string; data: string }) {}
 
@@ -130,6 +132,19 @@ export class VaultMirror {
     }
     v.state = (await r.openJson<SyncState>(v.stateKey, await r.p.storage.get(v.stateKey))) ?? emptyState();
     return v;
+  }
+
+  /**
+   * The vault leaves the copy (purged, or the copy locked). From now on every port throws: an engine still running
+   * on it fails its check rather than read an emptied mirror as files deleted here, and trash them in Kumbu².
+   */
+  drop(): void {
+    this.dropped = true;
+    this.entries.clear();
+  }
+
+  assertHeld(): void {
+    if (this.dropped) throw new MirrorLockedError();
   }
 
   get id(): string { return this.meta.id; }
@@ -160,6 +175,7 @@ export class VaultMirror {
 
   /** The bytes this device holds for a path, null if none (yet). */
   async bytes(path: string): Promise<Bytes | null> {
+    this.assertHeld();
     if (this.entries.get(path)?.local === undefined) return null;
     const body = await this.bodyKey(path);
     return this.r.open(body, await this.r.p.storage.get(body));
@@ -188,8 +204,12 @@ export class VaultMirror {
 
   stateStore(): StateStore {
     return {
-      load: () => Promise.resolve(clone(this.state)),
+      load: async () => {
+        this.assertHeld();
+        return clone(this.state);
+      },
       save: async (state) => {
+        this.assertHeld();
         this.state = clone(state);
         const put = [await this.r.sealJson(this.stateKey, state)];
         // A check that went through to the end has every note's text here: the small attachments' turn (design §3a).
@@ -277,7 +297,9 @@ export class VaultMirror {
     paths: readonly string[],
     decide: (path: string, entry: Entry | undefined) => Promise<{ entry: Entry | null; body?: Bytes | null } | false>,
   ): Promise<boolean[]> {
+    this.assertHeld();
     return this.r.p.locks.run(this.r.lockName, async () => {
+      this.assertHeld();
       const put: [string, Bytes][] = [];
       const remove: string[] = [];
       const done: boolean[] = [];
@@ -342,28 +364,33 @@ class MirrorFiles implements LocalFiles {
   constructor(private readonly v: VaultMirror, private readonly drafts?: Drafts) {}
 
   /** As Obsidian's index: nothing with a dot segment, so no folder marker. */
-  list(): Promise<string[]> {
-    return Promise.resolve(this.held().filter((p) => !p.split("/").some((s) => s.startsWith("."))));
+  async list(): Promise<string[]> {
+    this.v.assertHeld();
+    return this.held().filter((p) => !p.split("/").some((s) => s.startsWith(".")));
   }
 
-  listMarkers(): Promise<string[]> {
-    return Promise.resolve(this.held().filter((p) => isMarker(p) && eligibility(p, true) === "sync"));
+  async listMarkers(): Promise<string[]> {
+    this.v.assertHeld();
+    return this.held().filter((p) => isMarker(p) && eligibility(p, true) === "sync");
   }
 
   async read(path: string): Promise<string | null> {
+    this.v.assertHeld();
     const draft = this.drafts?.text(path) ?? null;
     if (draft !== null && this.v.entry(path)?.local !== undefined) return draft;
     const bytes = await this.v.bytes(path);
     return bytes === null ? null : decoder.decode(bytes);
   }
 
-  size(path: string): Promise<number | null> {
-    return Promise.resolve(this.v.entry(path)?.local?.size ?? null);
+  async size(path: string): Promise<number | null> {
+    this.v.assertHeld();
+    return this.v.entry(path)?.local?.size ?? null;
   }
 
-  stat(path: string): Promise<FileStat | null> {
+  async stat(path: string): Promise<FileStat | null> {
+    this.v.assertHeld();
     const local = this.v.entry(path)?.local;
-    return Promise.resolve(local === undefined ? null : { size: local.size, mtime: local.mtime });
+    return local === undefined ? null : { size: local.size, mtime: local.mtime };
   }
 
   readBinary(path: string): Promise<ArrayBuffer | null> {

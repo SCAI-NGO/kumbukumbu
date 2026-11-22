@@ -145,6 +145,11 @@ export class SealedMirror {
   /** Another tab changed paths of a vault, or purged one (vault null: the whole copy). */
   onChanged: ((vault: string, paths: string[]) => void) | null = null;
   onPurged: ((vault: string | null) => void) | null = null;
+  /**
+   * A vault's mirror is going (purged here or in another tab): the host stops what runs on it. Awaited before the
+   * records go when the purge is this tab's.
+   */
+  onDrop: ((vault: string) => Promise<void>) | null = null;
   /** Another tab changed what this device keeps offline. */
   onChoice: (() => void) | null = null;
 
@@ -240,8 +245,10 @@ export class SealedMirror {
     const vault = this.vaults.get(id);
     if (vault === undefined) return 0;
     const lost = vault.waiting();
-    await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ remove: [vault.metaKey], removePrefix: [vault.dataPrefix] }));
+    vault.drop();
     this.vaults.delete(id);
+    await this.onDrop?.(id);
+    await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ remove: [vault.metaKey], removePrefix: [vault.dataPrefix] }));
     this.r.channel.post({ type: "purged", vault: id });
     return lost;
   }
@@ -274,6 +281,7 @@ export class SealedMirror {
     this.stopListening = null;
     this.engines?.release();
     this.engines = null;
+    for (const vault of this.vaults.values()) vault.drop();
     this.vaults.clear();
     this.r.lock();
   }
@@ -305,7 +313,11 @@ export class SealedMirror {
     }
     if (m.type === "purged") {
       if (m.vault === null) this.lock();
-      else this.vaults.delete(m.vault);
+      else {
+        this.vaults.get(m.vault)?.drop();
+        this.vaults.delete(m.vault);
+        await this.onDrop?.(m.vault);
+      }
       this.onPurged?.(m.vault);
       return;
     }

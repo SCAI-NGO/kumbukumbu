@@ -261,6 +261,7 @@ Decisions of 2026-11-22 while building it, each with its reason; to be confirmed
 - **A vault's size before it is chosen is its note count** from the vault list; while it comes, "1,204 of 2,000 notes"; then its notes and the size of its attachments here. Why: no new server field, and note texts are small; the attachments that weigh are the budgeted ones.
 - **Unticking All my vaults keeps today's vaults chosen** one by one; unticking a vault removes its copy, asking first when changes in it haven't uploaded.
 - **Removing the copy here also removes its place in the device list**; offline, the list keeps it until it is removed there.
+- **A vault leaving the copy stops its engine first** (purged on a contact, a re-key among them, in another tab, or unticked in Settings): the vault's mirror is dropped, so every port of it throws from then on, and its engine is stopped before the records go; the next refresh adopts it afresh, with no bases, so it downloads rather than deletes. Why (found in the 0.7.0 audit): an engine left running read the emptied mirror as every file deleted on this device, and trashed the vault's notes and attachments in Kumbu², for every member of a shared vault.
 - **The engines run in the one tab that leads the copy** (§4.7), hosted in the core (`MirrorEngines`). Another tab's choice and writes reach them through the copy's channel.
 
 ## 5. Browser storage

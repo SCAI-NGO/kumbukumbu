@@ -55,6 +55,11 @@ export class MirrorEngines {
       }
     };
     m.onChoice = () => void this.refresh(true);
+    // Before the records go: an engine left running would read the emptied mirror as every file deleted here.
+    m.onDrop = async (id) => {
+      this.engines.delete(id);
+      await this.host.drop(id);
+    };
   }
 
   /** Waits to lead the copy, then starts the engines. Resolves only in the tab that leads. */
