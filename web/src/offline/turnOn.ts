@@ -51,10 +51,15 @@ export async function turnOn(user: { id: string; username: string }, password: s
 
 /** The copy of this user on this device, opened with the slot's key while signed in; null without one. */
 export async function openCopy(userId: string): Promise<void> {
-  const state = useOfflineCopy.getState();
-  if (state.mirror !== null && !state.mirror.locked) return;
   const copies = new MirrorCopies(await storePorts());
   const header = await copies.forUser(userId);
+  const state = useOfflineCopy.getState();
+  if (state.mirror !== null && !state.mirror.locked && header !== null && state.header?.copy === header.copy) return;
+  // Another user's copy held by this tab (someone else signed in here): it closes before anything of this one opens.
+  if (state.header !== null && state.header.copy !== header?.copy) {
+    state.mirror?.lock();
+    useOfflineCopy.getState().clear();
+  }
   if (header === null) return;
   const opened = await copies.unlockOnline(header);
   if (opened === "wiped") useOfflineCopy.getState().clear();
