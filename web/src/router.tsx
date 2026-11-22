@@ -10,6 +10,7 @@ import PasswordPrompt from "./components/PasswordPrompt";
 import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hideAgain";
 import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
 import { followVaults } from "./discreet/state";
+import { useOfflineCopy } from "./offline/copy";
 import { openCopy, useOfflineMode } from "./offline/mode";
 import ForgotPassword from "./routes/ForgotPassword";
 import { Moved, SettingsMoved } from "./routes/settings/redirects";
@@ -62,6 +63,8 @@ function RequireSession({ children }: { children?: ReactNode }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useLatestPathname();
+  const offline = useOfflineMode((s) => s.offline);
+  const copyOpen = useOfflineCopy((s) => s.mirror !== null);
   useDiscreetMode();
   // Here, not in the shell: a deep link to the calendar presets the zone too.
   useZonePreset();
@@ -82,6 +85,11 @@ function RequireSession({ children }: { children?: ReactNode }) {
   }, [session.data, session.dataUpdatedAt, queryClient, navigate, pathname]);
 
   if (session.isPending) return null;
+  if (session.isError && !session.data && offline) {
+    // Offline, the copy on this device stands in for the session; without it unlocked, the sign-in form opens it (§3a).
+    if (copyOpen) return children ?? <Outlet />;
+    return <Navigate to={`/signin?next=${encodeURIComponent(pathname())}`} replace />;
+  }
   // A 401 has already sent the app to sign-in; anything else is shown.
   if (session.isError) return <p className="p-4 text-text">{errorText(session.error)}</p>;
   return children ?? <Outlet />;

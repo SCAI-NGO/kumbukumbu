@@ -94,6 +94,20 @@ if (typeof window !== "undefined") {
   window.addEventListener("pagehide", () => shared?.stop());
 }
 
+/** Resolves once nothing waits to upload, or after `ms`, whichever comes first. */
+export function uploaded(ms: number): Promise<void> {
+  if (useOfflineMode.getState().waiting === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    const stop = useOfflineMode.subscribe((s) => s.waiting === 0 && done());
+    function done() {
+      clearTimeout(timer);
+      stop();
+      resolve();
+    }
+  });
+}
+
 const contactedListeners = new Set<(mirror: SealedMirror) => void>();
 
 /** Told after every contact that went through, with the copy it unlocked or kept in line. */
@@ -103,7 +117,7 @@ export function onContacted(fn: (mirror: SealedMirror) => void): () => void {
 }
 
 let copies: Promise<MirrorCopies> | null = null;
-const mirrorCopies = () => (copies ??= browserPorts().then((p) => new MirrorCopies(p)));
+export const mirrorCopies = () => (copies ??= browserPorts().then((p) => new MirrorCopies(p)));
 
 /** The copy went: this tab forgets it, and the sign-in page says so. */
 function wiped() {
@@ -117,6 +131,16 @@ function contacted(mirror: SealedMirror) {
 }
 
 let opening: Promise<void> | null = null;
+
+/** Holds an unlocked copy in this tab, following what other tabs do to it. */
+export function keep(opened: SealedMirror) {
+  opened.onPurged = (vault) => {
+    if (vault === null) wiped();
+    else useOfflineMode.getState().waitingChanged();
+  };
+  opened.onChanged = () => useOfflineMode.getState().waitingChanged();
+  useOfflineCopy.getState().set(opened.header, opened);
+}
 
 /**
  * Opens this user's copy with the slot's key, which is the contact at sign-in: on a page load signed in, and after
@@ -135,12 +159,7 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
         username: signIn.username, password: signIn.password, idleMs: signIn.remember ? REMEMBERED_IDLE_MS : IDLE_MS,
       });
       if (opened === "wiped") return wiped();
-      opened.onPurged = (vault) => {
-        if (vault === null) wiped();
-        else useOfflineMode.getState().waitingChanged();
-      };
-      opened.onChanged = () => useOfflineMode.getState().waitingChanged();
-      useOfflineCopy.getState().set(opened.header, opened);
+      keep(opened);
       contacted(opened);
     } catch (e) {
       // Offline or signed out meanwhile: the next sign-in or reconnect opens it.

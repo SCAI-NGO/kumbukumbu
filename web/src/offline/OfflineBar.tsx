@@ -13,6 +13,7 @@ import { useSession } from "../state/session";
 import { useShellNavigate } from "../windows/context";
 import { useOfflineCopy } from "./copy";
 import { contact, useOfflineMode } from "./mode";
+import { endPendingSignOut } from "./unlock";
 
 export const OFFLINE_SETTINGS = "/settings/offline";
 
@@ -146,6 +147,7 @@ function SignInAgain({ onClose }: { onClose(): void }) {
         setPending(true);
         setError(null);
         try {
+          await endPendingSignOut();
           const view = await call(api.POST("/api/session", { body: { username, password, remember: false } }));
           queryClient.setQueryData(["session"], view);
           useSession.getState().signedIn(view);
