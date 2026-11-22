@@ -1,0 +1,20 @@
+{
+  "name": "eidolon-core",
+  "private": true,
+  "version": "0.0.0",
+  "description": "The client-side data layer of Kumbu²: sync and the sealed store, and later the local index and the tools.",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit && tsc --noEmit -p test",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}

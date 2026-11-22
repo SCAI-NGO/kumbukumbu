@@ -3,9 +3,13 @@
 # node:26-slim
 FROM node:26-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS web
 WORKDIR /src
-COPY web/package.json web/pnpm-lock.yaml web/
-# Node 25+ ships no corepack, so pnpm comes from npm, at the version web/package.json's packageManager names.
-RUN npm install -g pnpm@10.32.1 && pnpm -C web install --frozen-lockfile
+# The pnpm workspace (pnpm-workspace.yaml): the web app and the Eidolon core it builds on, with one lockfile.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY web/package.json web/
+COPY packages/eidolon-core/package.json packages/eidolon-core/
+# Node 25+ ships no corepack, so pnpm comes from npm, at the version package.json's packageManager names.
+RUN npm install -g pnpm@10.32.1 && pnpm install --frozen-lockfile
+COPY packages packages
 COPY web web
 # One version for the app and the server (set by the release workflow, .github/workflows/docker.yml): the web app
 # compares its own with the server's X-Kumbu-Version and reloads into a newer one. 0.0.0-dev turns that off.

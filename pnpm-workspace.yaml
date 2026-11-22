@@ -1,0 +1,8 @@
+# The web app and the Eidolon core, the client-side data layer it builds on (offline mode design §2a).
+# pdf/ keeps its own lockfile: the PDF sidecar is built and shipped on its own.
+packages:
+  - web
+  - packages/*
+
+overrides:
+  '@napi-rs/canvas': '-'

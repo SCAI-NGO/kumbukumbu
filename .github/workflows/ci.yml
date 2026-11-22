@@ -74,7 +74,8 @@ jobs:
           node-version: 26
       # pnpm at the version pdf/package.json's packageManager names, as the image build takes it.
       - run: npm install -g pnpm@10.32.1
-      - run: pnpm install --frozen-lockfile
+      # Its own lockfile: without the flag, pnpm would install the root workspace (web/, packages/) instead.
+      - run: pnpm install --frozen-lockfile --ignore-workspace
       - run: pnpm test
       - run: pnpm build
 
@@ -90,14 +91,19 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
-      # pnpm at the version web/package.json's packageManager names, as the image build takes it.
+      # pnpm at the version the root package.json's packageManager names, as the image build takes it.
       - run: npm install -g pnpm@10.32.1
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
+      # The Eidolon core, the client-side data layer, with its boundary check (offline mode design §2a).
+      - run: pnpm -C ../packages/eidolon-core test
+      - run: pnpm -C ../packages/eidolon-core build
       # Diagrams drawn by the real Mermaid in Chromium, which the unit tests (jsdom) can't do.
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:diagrams
+      # The app shell's service worker in Chromium: offline after one visit, and following a new release.
+      - run: pnpm test:shell
 
   # The litmus WebDAV compliance suites against a running server (WebDAV design §7), in a dot-folder of a vault, so
   # through the parking area; tools/litmus/expected-failures.txt lists the deliberate deviations.

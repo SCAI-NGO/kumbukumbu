@@ -60,8 +60,9 @@ public sealed class SyncHubReviewTests(KumbuAppFactory app) : IAsyncDisposable
 
         using var bobs = await ConnectAsync(Api, ticket);
         await alice.CreateAsync("plan.md", "x\n");
-        // His own vault stays, so the socket does: neither Carol's presence nor the write reaches it.
-        Assert.Empty(await DrainAsync(bobs, TimeSpan.FromSeconds(1.5)));
+        // His own vault stays, so the socket does: neither Carol's presence nor the write reaches it, only the nudge to
+        // purge an offline copy of the vault (offline mode design §4.4).
+        Assert.Equal(["""{"type":"mirror"}"""], await DrainAsync(bobs, TimeSpan.FromSeconds(1.5)));
     }
 
     [Fact]
@@ -98,7 +99,8 @@ public sealed class SyncHubReviewTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.DoesNotContain(Hub.Held, h => h.Subject.User == bob.User.Id && h.VaultId == vaultId);
         await EditingAsync(carols, "beete", "plan.md", on: true);
         await alice.CreateAsync("plan.md", "x\n");
-        Assert.Empty(await DrainAsync(bobs, TimeSpan.FromSeconds(1.5)));
+        // Only the revoke's nudge to purge an offline copy of the vault (offline mode design §4.4).
+        Assert.Equal(["""{"type":"mirror"}"""], await DrainAsync(bobs, TimeSpan.FromSeconds(1.5)));
 
         async Task HoldAsync()
         {

@@ -288,6 +288,7 @@ public sealed class Deletion(
                 {
                     if ((await Users.DeleteOneAsync(s, stillDeletable, cancellationToken: token)).DeletedCount == 0) throw new UserChangedException();
                     await UserSlots.DeleteManyAsync(s, u => u.User == userId, cancellationToken: token);
+                    await MirrorSlots.DeleteAllAsync(db, s, userId, token);
                     // The keys' slots are all on the user's own vaults, deleted above; any left over go by key id.
                     var keyIds = await Keys.Find(s, k => k.User == userId).Project(k => k.Id).ToListAsync(token);
                     foreach (var id in keyIds) await catalog.DeleteApiKeySlotsAsync(s, id, token);

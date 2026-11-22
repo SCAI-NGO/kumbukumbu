@@ -115,6 +115,11 @@ public sealed class UserDocument
     [BsonElement("sessionsStarted")]
     public long SessionsStarted { get; set; }
 
+    /// <summary>When a mirror slot was last made (<see cref="MirrorSlots"/>): written in its transaction, so that two made at
+    /// once, or one made while the account is deleted or its key rotated, conflict.</summary>
+    [BsonElement("mirrorSlotsAt"), BsonIgnoreIfNull]
+    public DateTime? MirrorSlotsAt { get; set; }
+
     /// <summary>The ids of the user's vaults still to be re-keyed (stage 2) after their user key was rotated
     /// (<see cref="UserKeyRotation"/>), which records every vault of the user here.</summary>
     [BsonElement("rekeyPending"), BsonIgnoreIfNull]

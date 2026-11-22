@@ -389,7 +389,7 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
             .Order(StringComparer.Ordinal);
 
         Assert.Equal(
-            ["/api/calendar/whats-on", "/api/vaults/{vault}/board/", "/api/vaults/{vault}/calendar/", "/api/vaults/{vault}/calendar/entry",
+            ["/api/account/mirror-slots/contact", "/api/calendar/whats-on", "/api/vaults/{vault}/board/", "/api/vaults/{vault}/calendar/", "/api/vaults/{vault}/calendar/entry",
                 "/api/vaults/{vault}/flag", "/api/version/{vault}/{**path}", "/api/ws-ticket"],
             endpoints);
     }

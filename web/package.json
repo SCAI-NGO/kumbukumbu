@@ -7,10 +7,11 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && tsc --noEmit -p e2e && vite build",
+    "build": "tsc --noEmit && tsc --noEmit -p e2e && tsc --noEmit -p sw && vite build",
     "test": "NODE_OPTIONS=--no-experimental-webstorage vitest run",
     "preview": "vite preview",
     "test:diagrams": "playwright test -c e2e/diagrams/playwright.config.ts",
+    "test:shell": "playwright test -c e2e/shell/playwright.config.ts",
     "e2e": "e2e/stack/run.sh",
     "e2e:0.5.0": "e2e/stack/run.sh --grep \"@smoke|@calendar|@flags|@explorer|@recent|@mermaid|@embeds|@aliases|@ailink|@blockrefs|@mentions|@photo|@properties\"",
     "e2e:0.6.0": "e2e/stack/run.sh --grep \"@smoke|@memory|@graph|@svg|@deeplinks|@upload|@publish|@blame|@files|@readers|@shell|@palette|@windows|@filters|@console|@workspace|@calendar\"",
@@ -22,6 +23,7 @@
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "@tanstack/react-query": "^5.106.1",
     "d3-force": "^3.0.1",
+    "eidolon-core": "workspace:*",
     "fflate": "0.8.3",
     "katex": "^0.19.1",
     "lucide-react": "^1.70.0",
@@ -51,16 +53,12 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "fake-indexeddb": "^6.2.8",
     "jsdom": "^30.1.3",
     "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4.3.5",
     "typescript": "^5.9.3",
     "vite": "^8.3.8",
     "vitest": "^5.1.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "@napi-rs/canvas": "-"
-    }
   }
 }
