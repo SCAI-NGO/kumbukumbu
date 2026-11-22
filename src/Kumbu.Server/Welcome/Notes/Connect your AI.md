@@ -64,5 +64,6 @@ with your key in place of `kumbu_…`.
 
 - The plain address `{{server}}/mcp` takes API keys only; a connection's own address takes no key.
 - A key or a connection is revoked on the Access page, and stops working at once.
+- If your AI doesn't read your memory by itself at the start of a chat, add one line to its own instructions (its personal preferences or a project's instructions): *At the start of every chat, read my Kumbu² skill project-memory and follow it.*
 
 Back to [[Start here]].
