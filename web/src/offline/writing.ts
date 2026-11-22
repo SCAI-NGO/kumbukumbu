@@ -24,6 +24,8 @@ export interface OfflineWrites {
 let current: OfflineWrites | null = null;
 const listeners = new Set<() => void>();
 const switched = new Set<() => void>();
+/** The open editors' saves of what they hold unsaved, for the copy's lock. */
+const flushes = new Set<() => Promise<unknown>>();
 const writers = new WeakMap<VaultMirror, NoteWriter>();
 const drafts = new Map<string, EditorDrafts>();
 
@@ -140,13 +142,27 @@ function notesIn(mirror: VaultMirror, folder: string): string[] {
  * text the user sees, so a download meanwhile (uploading, back online) never replaces unsaved typing. Not online: the
  * editor saves to the server then, and the engine reading unsaved text would upload it beside the editor's own save.
  */
-export function useOfflineDraft(path: string, editor: OpenEditor): void {
+export function useOfflineDraft(path: string, editor: OpenEditor & { flush(): Promise<unknown> }): void {
   const on = useSyncExternalStore((fn) => (switched.add(fn), () => switched.delete(fn)), offlineWrites);
   const latest = useRef(editor);
   latest.current = editor;
   useEffect(() => {
     const found = on?.vaultFor(path) ?? null;
     if (found === null) return;
-    return draftsFor(found.mirror.id).open(found.inVault, { text: () => latest.current.text(), replaced: (c) => latest.current.replaced(c) });
+    const flush = () => latest.current.flush();
+    flushes.add(flush);
+    const close = draftsFor(found.mirror.id).open(found.inVault, { text: () => latest.current.text(), replaced: (c) => latest.current.replaced(c) });
+    return () => {
+      flushes.delete(flush);
+      close();
+    };
   }, [on, path]);
+}
+
+/**
+ * Saves what the open editors hold unsaved into the copy: before it locks (idle, signing out), which ends an offline
+ * unlock like a session (§3a). A save that fails or meets a conflict leaves the text in its editor.
+ */
+export async function flushOfflineEditors(): Promise<void> {
+  await Promise.allSettled([...flushes].map((flush) => flush()));
 }

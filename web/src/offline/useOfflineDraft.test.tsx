@@ -4,20 +4,25 @@ import "fake-indexeddb/auto";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { offlineCopy } from "./testCopy";
-import { draftsFor, setOfflineWrites, useOfflineDraft } from "./writing";
+import { draftsFor, flushOfflineEditors, setOfflineWrites, useOfflineDraft } from "./writing";
 
 afterEach(() => setOfflineWrites(null));
 
 it("registers while offline writes are on, and leaves when they go off or the editor closes", async () => {
   const { on } = await offlineCopy();
   setOfflineWrites(null);
-  const editor = { text: () => "typing", replaced: () => {} };
+  let flushed = 0;
+  const editor = { text: () => "typing", replaced: () => {}, flush: () => Promise.resolve(flushed++) };
   const { unmount } = renderHook(() => useOfflineDraft("/Work/plan.md", editor));
   const drafts = draftsFor("v-work");
   expect(drafts.text("plan.md")).toBeNull();
   act(on);
   expect(drafts.text("plan.md")).toBe("typing");
+  await flushOfflineEditors();
+  expect(flushed).toBe(1);
   act(() => setOfflineWrites(null));
+  await flushOfflineEditors();
+  expect(flushed).toBe(1);
   expect(drafts.text("plan.md")).toBeNull();
   act(on);
   unmount();

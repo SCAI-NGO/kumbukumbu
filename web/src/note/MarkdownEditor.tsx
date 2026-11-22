@@ -115,6 +115,7 @@ export default function MarkdownEditor({
   // Offline, the engine reads the unsaved text; a download that replaced the note under it is offered as online.
   useOfflineDraft(path, {
     text: () => unsaved()?.text ?? null,
+    flush,
     replaced: (content) => {
       if (content === null) void queryClient.invalidateQueries({ queryKey: ["note", path], exact: true });
       else void versionOf(content).then((version) => offer({ content, version }) && setDiff(true));

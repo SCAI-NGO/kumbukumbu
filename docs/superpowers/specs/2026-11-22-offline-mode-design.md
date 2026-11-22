@@ -260,7 +260,7 @@ Decisions of 2026-11-22 while building it, each with its reason; to be confirmed
 - **Trashing removes the note from the copy;** the engine's upload trashes it in Kumbu², which keeps the trash (§4.7). A note listed but not here can't be trashed offline: the engine has no base to delete it on.
 - **Each write tells the vault's engine (`localChanged`) and the offline mode**, which counts the changes waiting again. Why: a tab's own writes don't come back to it over the copy's channel, which reaches the other tabs only.
 - **Saving a conflict's text as a new note works offline** (into the copy, as a new note). **Duplicating a note stays "needs a connection"** in 0.7.0: it reads the server's text and leaves out keys a copy doesn't take, which is the server's to say.
-- **Wiring left to the second of the parallel packages to land:** the offline mode (WP8) sets and clears `setOfflineWrites` with the offline source's `vaultFor` (WP5) and the engines' `localChanged` (WP9), passes `draftsFor(vault.id)` to `vault.files()`, and subscribes `onOfflineWrite` to recount the changes waiting.
+- **Wiring left to the second of the parallel packages to land:** the offline mode (WP8) sets and clears `setOfflineWrites` with the offline source's `vaultFor` (WP5) and the engines' `localChanged` (WP9), passes `draftsFor(vault.id)` to `vault.files()`, and subscribes `onOfflineWrite` to recount the changes waiting. Before the copy locks (idle, sign-out), `flushOfflineEditors()` saves the open editors' unsaved text into it (§3a, "An offline unlock ends like a session"); a save that meets a conflict leaves the text in its editor.
 
 ## 5. Browser storage
 
