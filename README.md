@@ -722,7 +722,7 @@ The web build takes its version from `KUMBU_VERSION` and `KUMBU_GIT_SHA` (`KUMBU
 Node 22.13+ and pnpm, in `pdf/`; the server's tests replace it with a fake.
 
 ```sh
-pnpm -C pdf install
+pnpm -C pdf install --ignore-workspace   # its own lockfile, not the root workspace's
 pnpm -C pdf test      # type check and Vitest, on PDFs and images the tests generate
 pnpm -C pdf build     # into pdf/dist
 pnpm -C pdf start     # on port 8090 (PORT), for a server run with Kumbu__Pdf__Url=http://localhost:8090
