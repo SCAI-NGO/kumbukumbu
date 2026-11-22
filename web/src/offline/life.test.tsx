@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The copy's life in a tab follows the session's (offline mode design §3a, §4.11; the 0.7.0 offline audit's S7-02,
-// S7-03, S7-05 and L7-02, turned round): every unlocked copy locks when idle, a session's end locks it, the next user
-// never gets it, a sign-out locks every tab, and the sign-in page learns of removed copies.
+// The copy's life in a tab follows the session's (offline mode design §3a, §4.11): every unlocked copy locks when
+// idle, a session's end locks it, the next user never gets it, a sign-out locks every tab, and the sign-in page learns
+// of removed copies.
 import "fake-indexeddb/auto";
 import { MirrorCopies } from "eidolon-core/store/mirror";
 import { afterEach, describe, expect, test, vi } from "vitest";

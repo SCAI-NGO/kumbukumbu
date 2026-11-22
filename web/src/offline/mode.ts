@@ -130,7 +130,7 @@ function wiped() {
 }
 
 const beforeLock = new Set<() => void | Promise<void>>();
-/** How long the hooks before a lock may take: a save that hangs mustn't keep the copy open (audit L7-09). */
+/** How long the hooks before a lock may take: a save that hangs mustn't keep the copy open. */
 const BEFORE_LOCK_MS = 3_000;
 
 /** Runs before the copy locks: the editor writes its unsaved text into the copy then. */
@@ -153,14 +153,14 @@ export async function lockCopy(everywhere = false): Promise<void> {
   if (useOfflineCopy.getState().mirror === mirror) useOfflineCopy.getState().set(header, null);
 }
 
-/** Locks the copy in every tab that has it open: a sign-out in one tab ends what the others show too (audit S7-03 d). */
+/** Locks the copy in every tab that has it open: a sign-out in one tab ends what the others show too. */
 export const lockEverywhere = () => lockCopy(true);
 
 let idle: IdleLock | null = null;
 const clock = { now: () => Date.now(), setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (h: unknown) => clearTimeout(h as number) };
 
 /**
- * Every unlocked copy ends like a session (§3a, audit S7-02). Due, it starts again only while the server vouches
+ * Every unlocked copy ends like a session (§3a). Due, it starts again only while the server vouches
  * for the session (online, signed in, nothing lost: the server's own idle limit governs then, and the slot would open
  * the copy again anyway); otherwise the copy locks and the sign-in form asks.
  */
@@ -215,7 +215,7 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
       const held = useOfflineCopy.getState().mirror;
       // This user's copy is open already; a sign-in still wraps it again under the password and renews its limit.
       if (held !== null && held.header.copy === header?.copy && signIn === undefined) return;
-      // Someone else's copy, or this one about to open afresh: it never serves another session (audit S7-03 b).
+      // Someone else's copy, or this one about to open afresh: it never serves another session.
       if (held !== null) await lockCopy();
       if (header === null) return useOfflineCopy.getState().clear();
       const opened = await all.unlockOnline(header, signIn && {

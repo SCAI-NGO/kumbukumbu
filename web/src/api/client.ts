@@ -63,7 +63,7 @@ async function endOnLostSession(key: string, response: Response) {
   // itself. Asking for the session is the way back in, and still leads to sign-in.
   if (useSession.getState().signedOut && key !== "GET /api/session") return;
   // The copy's life in the tab follows the session's: no way back past the sign-in page without the password, and
-  // the next user never inherits it (audit S7-03).
+  // the next user never inherits it.
   void lockCopy();
   useSession.getState().end();
 }
@@ -88,7 +88,7 @@ const reachWatch: Middleware = {
   onResponse({ response }) {
     if (unreachable.has(response.status)) return void useOfflineMode.getState().failed();
     useOfflineMode.getState().reached();
-    // Kumbu² answers again: a sign-out made while away reaches it now, not only at the next start (audit L7-02).
+    // Kumbu² answers again: a sign-out made while away reaches it now, not only at the next start.
     if (signOutPending()) void endPendingSignOut();
   },
   onError({ error }) {

@@ -274,7 +274,7 @@ export class SealedMirror {
     return purged;
   }
 
-  /** Locks the copy in every tab that has it open: a sign-out, made in one tab, ends it in all (audit S7-03 d). */
+  /** Locks the copy in every tab that has it open: a sign-out, made in one tab, ends it in all. */
   lockEverywhere(): void {
     if (!this.locked) this.r.channel.post({ type: "locked" });
     this.lock();

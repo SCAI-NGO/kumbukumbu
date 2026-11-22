@@ -48,7 +48,7 @@ export async function signOutOffline(remove: boolean): Promise<boolean> {
     marked = false;
   }
   const mirror: SealedMirror | null = useOfflineCopy.getState().mirror;
-  // Every tab: a forgotten second one on a borrowed device is the risk (audit S7-03 d). A removal locks them anyway.
+  // Every tab: a forgotten second one on a borrowed device is the risk. A removal locks them anyway.
   if (remove && mirror !== null) await mirror.remove();
   else await lockEverywhere();
   useOfflineCopy.getState().clear();
@@ -88,7 +88,7 @@ export function endPendingSignOut(): Promise<void> {
 
 /**
  * At the sign-in page, online: asks once per copy kept here, with its slot's token, whether the slot still exists,
- * and removes the copies that are answered `mirror-wipe` (design §4.6, audit S7-05). Without it, a copy removed in
+ * and removes the copies that are answered `mirror-wipe` (design §4.6). Without it, a copy removed in
  * the device list, or an account deleted, would stay until its owner signed in here again.
  */
 export async function sweepRemovedCopies(): Promise<void> {
