@@ -36,6 +36,12 @@ function useEverySecond(on: boolean) {
   }, [on]);
 }
 
+/** Changes the choice and shows it at once, rather than at the next second. */
+function useChoose(mirror: SealedMirror) {
+  const [, shown] = useReducer((n: number) => n + 1, 0);
+  return (change: Parameters<typeof chooseOffline>[1]) => chooseOffline(mirror, change).finally(shown);
+}
+
 export default function Offline() {
   const user = useSession((s) => s.user);
   const header = useOfflineCopy((s) => s.header);
@@ -156,7 +162,8 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
   const [error, setError] = useState<string | null>(null);
   // Never a discreet vault, shown or not (§4.3); nor one still being set up.
   const listed = vaults.data?.filter((v) => !v.discreet && !v.pending) ?? [];
-  const choose = (change: Parameters<typeof chooseOffline>[1]) => chooseOffline(mirror, change).catch((e: unknown) => setError(errorText(e)));
+  const chosen = useChoose(mirror);
+  const choose = (change: Parameters<typeof chooseOffline>[1]) => chosen(change).catch((e: unknown) => setError(errorText(e)));
   const set = (vault: VaultView, keep: boolean) => {
     const waiting = mirror.vault(vault.id)?.waiting() ?? 0;
     if (!keep && waiting > 0 && dropping === null) return setDropping({ vault, waiting });
@@ -174,7 +181,10 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
           type="checkbox"
           checked={choice.all}
           // Off, the vaults kept now stay chosen one by one: nothing goes until a vault is unticked.
-          onChange={(e) => void choose((c) => ({ ...c, all: e.target.checked, vaults: e.target.checked ? [] : listed.map((v) => v.id) }))}
+          onChange={(e) => {
+            const all = e.target.checked;
+            void choose((c) => ({ ...c, all, vaults: all ? [] : listed.map((v) => v.id) }));
+          }}
           className="size-5 shrink-0 accent-accent"
         />
       </label>
@@ -218,6 +228,7 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
 function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
   const id = useId();
   const choice = mirror.choice;
+  const choose = useChoose(mirror);
   return (
     <Section title="Attachments">
       <p className="text-text-body">
@@ -232,7 +243,11 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
         <select
           id={id}
           value={choice.budget}
-          onChange={(e) => void chooseOffline(mirror, (c) => ({ ...c, budget: Number(e.target.value) }))}
+          onChange={(e) => {
+            // Read now: the change runs later, once the copy's lock is held.
+            const budget = Number(e.target.value);
+            void choose((c) => ({ ...c, budget }));
+          }}
           className={inputClass}
         >
           {BUDGETS.map((b) => (
@@ -248,6 +263,7 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
 
 function KeptSection({ mirror }: { mirror: SealedMirror }) {
   const vaults = useVaults();
+  const choose = useChoose(mirror);
   const kept = Object.entries(mirror.choice.kept).flatMap(([vault, folders]) => folders.map((folder) => ({ vault, folder })));
   const name = (id: string) => vaults.data?.find((v) => v.id === id)?.name ?? "A vault";
   return (
@@ -262,7 +278,7 @@ function KeptSection({ mirror }: { mirror: SealedMirror }) {
               <button
                 type="button"
                 onClick={() =>
-                  void chooseOffline(mirror, (c) => ({ ...c, kept: { ...c.kept, [vault]: (c.kept[vault] ?? []).filter((f) => f !== folder) } }))
+                  void choose((c) => ({ ...c, kept: { ...c.kept, [vault]: (c.kept[vault] ?? []).filter((f) => f !== folder) } }))
                 }
                 className={secondaryButtonClass}
               >

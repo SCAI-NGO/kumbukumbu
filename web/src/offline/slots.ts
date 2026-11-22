@@ -30,7 +30,7 @@ export interface DeviceCopy { id: string; label: string; createdAt: string; cont
 
 async function send(method: "GET" | "DELETE", path: string): Promise<Response> {
   try {
-    return await fetch(`${BASE}${path}`, { method, credentials: "same-origin" });
+    return await fetch(new Request(new URL(`${BASE}${path}`, window.location.origin), { method, credentials: "same-origin" }));
   } catch {
     throw new OfflineError("Kumbu² can't be reached.");
   }

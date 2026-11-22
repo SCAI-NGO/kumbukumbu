@@ -247,6 +247,22 @@ Decisions of 2026-11-22 while building it, each with its reason; to be confirmed
 - **A wipe locks every tab of the copy**, and a purge of one vault drops it in every tab. Why: a tab must not go on showing what the server wants gone.
 - **What waits for the next packages:** the switch that turns the copy on and the vault choice (WP9), the editor's drafts as the copy's `Drafts` port (WP7: unsaved discreet text never reaches it, as the copy never holds a discreet vault), the `Kumbu-Mirror` header and the contacts on sign-in, reconnect and `mirror` frame (WP8, with the mode), the tree and reading from the copy (WP5).
 
+### 4.8 Attachments, Keep offline and the vault choice (work package 9, built)
+
+Decisions of 2026-11-22 while building it, each with its reason; to be confirmed in review. The code is `packages/eidolon-core/src/store/choice.ts` and `engines.ts`, the browser's side `web/src/offline/` (`engines.ts`, `turnOn.ts`, `keepOffline.ts`, `OfflineInvite.tsx`) and `web/src/routes/settings/Offline.tsx`.
+
+- **The choice is one sealed record of the copy**: All my vaults, the vaults chosen, the budget, the folders kept offline, and when each larger attachment was last opened. Why: folder and file paths name things (§4.1), and one record changed under the copy's lock is all the tabs need to agree.
+- **Turning on checks the password first** (`POST /api/session/confirm`), then makes the slot. Why: the offline wrap is made from it, and a mistyped password would leave a copy that never opens offline.
+- **"Keep me signed in" is remembered as a flag in local storage** at each sign-in, no secret. Why: the invitation needs it (§3a), and the new copy's idle limit follows it.
+- **Opening an attachment online keeps it.** The viewer reads from the server as today; it marks the file as opened, and the engines fetch it in the background with a full check. Why: no second read path online, and the engine stays the only one that downloads into the mirror.
+- **The budget lets the least recently opened go**, with their engine paused for the moment: the bytes go and so does the engine's base, so the path is as one never downloaded and the fetch policy decides it afresh. Why: the engine keeps its state in memory, and with the base left behind a later yes would read as a deletion here and trash the file in Kumbu². Never a file changed here and not uploaded; never a small one or one kept offline; one larger than the whole budget isn't kept at all.
+- **A file this device holds stays wanted** until the budget lets it go, so a newer version in Kumbu² replaces it. Why: otherwise a removed Keep offline would leave stale bytes behind.
+- **Keep offline takes in what is below it**: keeping a folder drops the folders kept inside it, keeping the vault keeps all. Known gap: a kept folder renamed or moved online stays listed under its old path, and keeps nothing until kept again (moves are online only in 0.7.0).
+- **A vault's size before it is chosen is its note count** from the vault list; while it comes, "1,204 of 2,000 notes"; then its notes and the size of its attachments here. Why: no new server field, and note texts are small; the attachments that weigh are the budgeted ones.
+- **Unticking All my vaults keeps today's vaults chosen** one by one; unticking a vault removes its copy, asking first when changes in it haven't uploaded.
+- **Removing the copy here also removes its place in the device list**; offline, the list keeps it until it is removed there.
+- **The engines run in the one tab that leads the copy** (§4.7), hosted in the core (`MirrorEngines`). Another tab's choice and writes reach them through the copy's channel.
+
 ## 5. Browser storage
 
 - **IndexedDB only**, attachment bytes as Blobs in it. OPFS would be faster for big files, but one store is simpler, and on-demand fetching keeps the mirror small. OPFS stays an option if measurement says so.
