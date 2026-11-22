@@ -247,6 +247,21 @@ Decisions of 2026-11-22 while building it, each with its reason; to be confirmed
 - **A wipe locks every tab of the copy**, and a purge of one vault drops it in every tab. Why: a tab must not go on showing what the server wants gone.
 - **What waits for the next packages:** the switch that turns the copy on and the vault choice (WP9), the editor's drafts as the copy's `Drafts` port (WP7: unsaved discreet text never reaches it, as the copy never holds a discreet vault), the `Kumbu-Mirror` header and the contacts on sign-in, reconnect and `mirror` frame (WP8, with the mode), the tree and reading from the copy (WP5).
 
+### 4.8 Offline writing (work package 7, built)
+
+Decisions of 2026-11-22 while building it, each with its reason; to be confirmed in review. The core is `packages/eidolon-core/src/store/writing.ts`, the web app's side `web/src/offline/writing.ts`.
+
+- **The editor writes into the copy, and the engine uploads.** While the host has offline writes on (from going offline until every change has uploaded, §3), `useSaveNote`, `useCreateNote`, `useCreateUntitled` and `useDeleteNote` go to the copy through the core's `NoteWriter` instead of `/api`; the engine sends them once online, as it sends an edit made in Obsidian. Why: one way a change reaches Kumbu², with the engine's conflict copies, and the screens keep their hooks.
+- **The answers keep the server's shapes.** A save answers the new version, or the text there now as a `409` does; a read-only vault refuses with the `403` and its code `read-only`; a vault not kept here, or a note listed but not here yet, says it needs a connection. Why: the editor's conflict choice, the Write refusal and the error line work offline as they do online, with nothing new to learn (§3a, unified UX).
+- **A save checks against what the copy stores, never against the editor's own unsaved text.** Why: the editor's draft is the very text being saved; comparing with it would never find another tab's save. Another tab's save is found this way, and offered as "changed elsewhere".
+- **The open editor is the copy's draft only while offline writes are on.** The engine then reads what the user sees, so a download while uploading never replaces unsaved typing (it makes a conflict copy). Online it doesn't: the editor saves to the server, and an engine reading unsaved text would upload it beside the editor's own save, ending in a conflict with oneself. Only this tab's editors count; another tab's are covered by the version check of their saves.
+- **Read-only members are refused in the core**, from the rights of the last contact (`canWrite`), so nothing reaches even the copy. The board's structure (`maintain`) isn't known offline; the server refuses it on upload and the engine lists it as refused, as for Obsidian.
+- **A new note never takes a path the copy knows**, on this device or only listed, and only a note's path Kumbu² takes (relative, no empty or dot segment, `.md`). A note made offline and trashed again leaves nothing to upload. **Untitled in the board's folder needs a connection**: there a note is a card, and the board does (§3).
+- **Trashing removes the note from the copy;** the engine's upload trashes it in Kumbu², which keeps the trash (§4.7). A note listed but not here can't be trashed offline: the engine has no base to delete it on.
+- **Each write tells the vault's engine (`localChanged`) and the offline mode**, which counts the changes waiting again. Why: a tab's own writes don't come back to it over the copy's channel, which reaches the other tabs only.
+- **Saving a conflict's text as a new note works offline** (into the copy, as a new note). **Duplicating a note stays "needs a connection"** in 0.7.0: it reads the server's text and leaves out keys a copy doesn't take, which is the server's to say.
+- **Wiring left to the second of the parallel packages to land:** the offline mode (WP8) sets and clears `setOfflineWrites` with the offline source's `vaultFor` (WP5) and the engines' `localChanged` (WP9), passes `draftsFor(vault.id)` to `vault.files()`, and subscribes `onOfflineWrite` to recount the changes waiting.
+
 ## 5. Browser storage
 
 - **IndexedDB only**, attachment bytes as Blobs in it. OPFS would be faster for big files, but one store is simpler, and on-demand fetching keeps the mirror small. OPFS stays an option if measurement says so.

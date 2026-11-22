@@ -8,6 +8,7 @@ import { isNotFound, isVaultBusy } from "./error-text";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt, type FileKind } from "./paths";
 import { textOrder } from "./textOrder";
 import { copyName, copyText } from "../note/duplicate";
+import { createOffline, createUntitledOffline, offlineWrites, saveOffline, trashOffline } from "../offline/writing";
 import type { FlagName } from "../flags/api";
 import type { components } from "./schema";
 
@@ -185,6 +186,7 @@ export function findFolder(root: TreeFolder, path: string): TreeFolder | undefin
 
 /** An empty note at `path`; one that is there already (its link was stale) is simply opened. */
 async function createEmpty(path: string) {
+  if (offlineWrites()) return createOffline(path, "").catch((e: unknown) => (e instanceof HttpError && e.status === 409 ? path : Promise.reject(e)));
   const { error, response } = await api.PUT("/api/notes/{vault}/{path}", { params: params(path), body: { content: "" } });
   if (!response.ok && response.status !== 409) await call(Promise.resolve({ error, response }));
   return path;
@@ -195,6 +197,7 @@ export function useCreateUntitled() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (folder: string) => {
+      if (offlineWrites()) return createUntitledOffline(folder);
       const [vault, ...rest] = folder.split("/").slice(1);
       const tree = await queryClient.ensureQueryData({
         queryKey: ["tree", vault],
@@ -360,6 +363,13 @@ export function useSaveNote(path: string) {
     // save would wait behind it. Failing at once, the editor keeps the text and saves the latest when it can.
     networkMode: "always",
     mutationFn: async ({ content, version, keepalive = false }: { content: string; version: string; keepalive?: boolean }): Promise<SaveResult> => {
+      // Offline, into the copy on this device: the engine uploads it once online (offline/writing.ts).
+      if (offlineWrites()) {
+        const answer = await saveOffline(path, content, version);
+        if ("conflict" in answer) return answer;
+        const note = queryClient.getQueryData<NoteView>(["note", path]);
+        return { saved: { ...(note ?? ({ path } as NoteView)), content, version: answer.saved.version } };
+      }
       const body = { content, version };
       const small = new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_LIMIT;
       const { data, error, response } = await api.PUT("/api/notes/{vault}/{path}", { params: params(path), body, keepalive: keepalive && small });
@@ -434,6 +444,7 @@ export function useDeleteNote() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (path: string) => {
+      if (offlineWrites()) return trashOffline(path);
       const vault = vaultOf(path);
       const tree = await queryClient.ensureQueryData({
         queryKey: ["tree", vault],

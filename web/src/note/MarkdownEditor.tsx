@@ -2,10 +2,12 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useBlocker, type BlockerFunction, type Location } from "react-router-dom";
-import { api, isRefusal } from "../api/client";
+import { versionOf } from "eidolon-core/engine/version";
+import { api, HttpError, isRefusal } from "../api/client";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { besideOf, folderOf, inVault, titleOf, vaultOf } from "../api/paths";
 import { goneVault, useDiscreet } from "../discreet/state";
+import { createOffline, offlineWrites, useOfflineDraft } from "../offline/writing";
 import { topDialog } from "../hooks/useDialog";
 import { PaneSide, useOpenNote } from "../shell/openInPane";
 import { useEditor, type Pane, type Side } from "../state/editor";
@@ -97,9 +99,10 @@ export default function MarkdownEditor({
   });
   const autosave = useAutosave(
     note,
-    // Without a session a save can only fail (401); what is unsaved is kept as a draft instead (below).
+    // Without a session a save can only fail (401); what is unsaved is kept as a draft instead (below). Offline it goes
+    // into the copy on this device, which the offline sign-in opened.
     (content, version, options) =>
-      useSession.getState().user
+      useSession.getState().user || offlineWrites()
         ? save.mutateAsync({ content, version, ...options }).catch((e: unknown) => {
             // Refused for the level (a role lowered, the board's structure, the vault closing): by its code, never its text.
             if (isRefusal(e)) useEditor.getState().setRefused({ path, code: e.code, at: Date.now() });
@@ -109,6 +112,14 @@ export default function MarkdownEditor({
     draft,
   );
   const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved, savedText } = autosave;
+  // Offline, the engine reads the unsaved text; a download that replaced the note under it is offered as online.
+  useOfflineDraft(path, {
+    text: () => unsaved()?.text ?? null,
+    replaced: (content) => {
+      if (content === null) void queryClient.invalidateQueries({ queryKey: ["note", path], exact: true });
+      else void versionOf(content).then((version) => offer({ content, version }) && setDiff(true));
+    },
+  });
   const openNote = useOpenNote();
   // The pane the editor is in: what it holds while a navigation waits for its save, and where its new note opens.
   const side = useContext(PaneSide) ?? "left";
@@ -137,10 +148,14 @@ export default function MarkdownEditor({
     for (let i = 1; i <= 20; i++) {
       const target = `${folderOf(path)}/${titleOf(path)} (kept${i === 1 ? "" : ` ${i}`}).md`;
       try {
-        const { response } = await api.PUT("/api/notes/{vault}/{path}", { params: { path: { vault: vaultOf(target), path: inVault(target) } }, body: { content: text } });
-        if (response.status === 409) continue;
-        if (!response.ok) break;
-      } catch {
+        if (offlineWrites()) await createOffline(target, text);
+        else {
+          const { response } = await api.PUT("/api/notes/{vault}/{path}", { params: { path: { vault: vaultOf(target), path: inVault(target) } }, body: { content: text } });
+          if (response.status === 409) continue;
+          if (!response.ok) break;
+        }
+      } catch (e) {
+        if (e instanceof HttpError && e.status === 409) continue;
         break;
       }
       release();
