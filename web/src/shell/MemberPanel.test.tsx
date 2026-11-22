@@ -2,7 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { fakeApi, json, noContent } from "../test/app";
@@ -80,6 +80,46 @@ describe("MemberPanel", () => {
     expect(new URL(sent(fetch, "POST")[0].url).pathname).toBe("/api/memberships/m1/leave");
     expect(useEditor.getState().recentPaths).toEqual(["/Work/a.md"]);
     expect(useEditor.getState().activeVault).toBeNull();
+  });
+
+  it("leaves the gone vault's note for the vault list, although the panel goes with the vault", async () => {
+    // As on the server: once left, the vault is gone from the list. And as in the tree's drawer, the panel shows only
+    // while a vault is active, which leaving clears at once: the panel, and the confirmation in it, go first.
+    let left = false;
+    panelApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false }, ...(left ? [] : [garten])]),
+      "POST /api/memberships/m1/leave": () => {
+        left = true;
+        return noContent();
+      },
+    });
+    void useEditor.getState().openNote("/garten/plan.md");
+    useEditor.setState({ activeVault: "garten" });
+    const onClose = vi.fn();
+    let where = "";
+    function Where() {
+      where = useLocation().pathname;
+      return null;
+    }
+    function Drawer() {
+      const active = useEditor((s) => s.activeVault);
+      return active ? <MemberPanel vault={active} onClose={onClose} /> : null;
+    }
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={["/notes/garten/plan.md"]}>
+          <Drawer />
+          <Where />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "garten" });
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Leave this vault" }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Leave vault" }));
+
+    await waitFor(() => expect(where).toBe("/"));
+    expect(onClose).toHaveBeenCalled();
   });
 
   it("the member panel's field is labelled Your name for this vault and has a sentence of lead-in", async () => {
