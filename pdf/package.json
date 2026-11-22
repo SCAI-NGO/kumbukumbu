@@ -26,6 +26,6 @@
     "@types/omggif": "1.0.5",
     "pdf-lib": "^1.17.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
