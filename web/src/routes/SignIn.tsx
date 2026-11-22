@@ -7,6 +7,7 @@ import { errorText } from "../api/error-text";
 import { AuthScreen, FormError, primaryButtonClass, TextField } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { NEUTRAL } from "../discreet/neutralWindow";
+import { openCopy } from "../offline/mode";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 
@@ -55,6 +56,8 @@ export default function SignIn() {
         if (next.startsWith("/notes/") || next.startsWith("/n/")) next = "/";
       }
       signedIn(view);
+      // The contact at sign-in: the offline copy on this device opens, wrapped again under this password (design §4.2).
+      void openCopy(view.user.id, { username, password, remember });
       navigate(next, { replace: true });
     },
   });

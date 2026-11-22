@@ -5,7 +5,7 @@ import type { StorePorts, TabChannel, TabLocks, TabMessage } from "eidolon-core/
 import { openRecordStorage } from "./idbStorage";
 import { mirrorSlots } from "./slots";
 
-const locks: TabLocks = {
+export const locks: TabLocks = {
   // The grant callback returns a promise, which request() passes on: awaited, it is the callback's result.
   run: async (name, fn) => await navigator.locks.request(name, fn),
   hold(name) {

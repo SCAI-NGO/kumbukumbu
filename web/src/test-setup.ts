@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
+import { resetOfflineMode } from "./offline/mode";
 import { startOver } from "./shell/lastNote";
 
 // React Router builds a Request with an AbortSignal for every navigation. Under jsdom that signal is jsdom's,
@@ -26,5 +27,7 @@ Object.defineProperty(globalThis, "WebSocket", { value: undefined, configurable:
 // The last note a test opened would open on start in the next one, and each test is a new page load.
 afterEach(() => {
   startOver();
+  // A request a test left unanswered would leave the next test offline.
+  resetOfflineMode();
   for (const key of Object.keys(localStorage)) if (key.startsWith("kumbu.lastNote.")) localStorage.removeItem(key);
 });

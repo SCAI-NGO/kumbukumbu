@@ -10,12 +10,14 @@ import PasswordPrompt from "./components/PasswordPrompt";
 import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hideAgain";
 import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
 import { followVaults } from "./discreet/state";
+import { openCopy, useOfflineMode } from "./offline/mode";
 import ForgotPassword from "./routes/ForgotPassword";
 import { Moved, SettingsMoved } from "./routes/settings/redirects";
 import SignIn from "./routes/SignIn";
 import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
 import { useApplyUpdates } from "./update/apply";
+import OfflineBar from "./offline/OfflineBar";
 import UpdateBar from "./update/UpdateBar";
 import { setWindowRoutes } from "./windows/store";
 import WindowHost from "./windows/WindowHost";
@@ -45,6 +47,7 @@ function Root() {
   const inShell = useMatches().some((m) => (m.handle as { shell?: boolean } | undefined)?.shell === true);
   return (
     <>
+      {!inShell && <OfflineBar />}
       {!inShell && <UpdateBar />}
       <Outlet />
       <PasswordPrompt />
@@ -66,7 +69,11 @@ function RequireSession({ children }: { children?: ReactNode }) {
   useEffect(() => followVaults(queryClient), [queryClient]);
 
   useEffect(() => {
-    if (session.data) signedIn(session.data);
+    if (!session.data) return;
+    signedIn(session.data);
+    useOfflineMode.getState().signedIn();
+    // Signed in, the slot answers for the offline copy without asking (design §4.2); after the form, it opened already.
+    void openCopy(session.data.user.id);
   }, [session.data, signedIn]);
 
   // Each read: one answering as the last did is the same object, and may still need following (a hide unsent).

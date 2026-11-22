@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import createClient, { type Middleware } from "openapi-fetch";
+import { useOfflineCopy } from "../offline/copy";
+import { useOfflineMode, wipeCopy } from "../offline/mode";
 import { usePasswordPrompt } from "../state/passwordPrompt";
 import { useSession } from "../state/session";
 import { useUpdate } from "../update/store";
@@ -50,6 +52,12 @@ export async function isPasswordRequired(response: Response): Promise<boolean> {
 /** A 401 for a missing session ends it. `key`: "PUT /api/files/{vault}/{path}". */
 async function endOnLostSession(key: string, response: Response) {
   if (response.status !== 401 || anonymous.has(key) || (await isPasswordRequired(response))) return;
+  const body: unknown = await response.clone().json().catch(() => null);
+  // The request handed in the offline copy's slot, which is gone: the copy goes too (offline mode design §4.6).
+  if (!!body && typeof body === "object" && "code" in body && body.code === "mirror-wipe") return void (await wipeCopy());
+  // Back from offline with changes waiting: the bar asks to sign in again over the app, which keeps the place (§3a).
+  const mode = useOfflineMode.getState();
+  if (mode.offline && mode.waiting > 0) return mode.sessionLost();
   // After a sign-out, the page being left may still ask (or hear back) for a moment; those 401s are the sign-out
   // itself. Asking for the session is the way back in, and still leads to sign-in.
   if (useSession.getState().signedOut && key !== "GET /api/session") return;
@@ -58,6 +66,29 @@ async function endOnLostSession(key: string, response: Response) {
 
 const sessionEnds: Middleware = {
   onResponse: ({ request, response, schemaPath }) => endOnLostSession(`${request.method} ${schemaPath}`, response),
+};
+
+/** Gateways answer these while Kumbu² behind them is down. */
+const unreachable = new Set([502, 503, 504]);
+
+/**
+ * What the offline mode needs to hear of every request (offline mode design §3a): whether it reached Kumbu²; and the
+ * offline copy's slot token goes with it, so a 401 can say the copy was removed (§4.6).
+ */
+const reachWatch: Middleware = {
+  onRequest({ request }) {
+    const token = useOfflineCopy.getState().header?.slot.token;
+    if (token !== undefined) request.headers.set("Kumbu-Mirror", token);
+    return request;
+  },
+  onResponse({ response }) {
+    if (unreachable.has(response.status)) useOfflineMode.getState().failed();
+    else useOfflineMode.getState().reached();
+  },
+  onError({ error }) {
+    // fetch fails with a TypeError when it gets no answer; a cancelled request (an AbortError) says nothing.
+    if (error instanceof TypeError) useOfflineMode.getState().failed();
+  },
 };
 
 // Every API answer carries the server's build version: a different one means a release to reload into.
@@ -69,6 +100,8 @@ const versionWatch: Middleware = {
 
 /** What the middleware hears of every answer, for a request sent without openapi-fetch (an upload with progress). */
 export async function heard(key: string, response: Response) {
+  if (unreachable.has(response.status)) useOfflineMode.getState().failed();
+  else useOfflineMode.getState().reached();
   useUpdate.getState().report(response.headers.get("X-Kumbu-Version"));
   await endOnLostSession(key, response);
 }
@@ -124,6 +157,7 @@ export const api = createClient<paths>({
   // Looked up per call, so tests can stub it.
   fetch: (request) => globalThis.fetch(request),
 });
+api.use(reachWatch);
 api.use(sessionEnds);
 api.use(versionWatch);
 // After the two above: openapi-fetch hands answers to the last one first, so they see the repeated answer.

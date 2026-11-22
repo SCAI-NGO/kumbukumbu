@@ -7,6 +7,7 @@ import { vaultHinted } from "../api/history";
 import { useVaults } from "../api/notes";
 import { followRename } from "../api/sharing";
 import { leaveVaults } from "../discreet/leftElsewhere";
+import { contact, useOfflineMode } from "../offline/mode";
 import { presenceKey, useSyncStatus } from "../state/sync";
 import { useShellNavigate } from "../windows/context";
 
@@ -55,6 +56,8 @@ function onFrame(queryClient: QueryClient, navigate: NavigateFunction, data: unk
     return;
   }
   if (!frame || typeof frame !== "object" || !("type" in frame)) return;
+  // The offline copy's slot was removed, or a vault left the session: the contact says what to purge (design §4.6).
+  if (frame.type === "mirror") return void contact();
   if (frame.type === "hidden" || frame.type === "revealed") {
     if (frame.type === "revealed") {
       void queryClient.invalidateQueries({ queryKey: ["session"] });
@@ -149,6 +152,9 @@ export function useSyncSocket() {
             return true;
           },
         });
+        useOfflineMode.getState().socket(true);
+        // Every (re)connect is a contact: what changed for the offline copy while the socket was down.
+        void contact();
         // Hints sent while there was no socket are lost: everything they would have asked again is.
         if (before.current) before.current.since = Date.now();
         if (opened.current) for (const key of ["session", "tree", "vaults", "history", "trash", "archive", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });
@@ -159,6 +165,7 @@ export function useSyncSocket() {
         if (socket !== s) return;
         socket = null;
         useSyncStatus.setState(down);
+        useOfflineMode.getState().socket(false);
         // What the session shows changed: its discreet mode, and the vault list with it.
         if (e.code === HIDDEN) void queryClient.invalidateQueries({ queryKey: ["session"] });
         // What the list held, for once it is read again; a second close before that adds to the first.
@@ -185,6 +192,7 @@ export function useSyncSocket() {
       socket = null;
       s?.close();
       useSyncStatus.setState(down);
+      useOfflineMode.getState().socket(false);
     };
   }, [queryClient, generation]);
 
