@@ -4,10 +4,12 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { initScheme } from "./theme/apply";
+import { registerShell } from "./update/serviceWorker";
 import { keepStrayDrops } from "./upload/strayDrops";
 
 initScheme();
 keepStrayDrops();
+void registerShell();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

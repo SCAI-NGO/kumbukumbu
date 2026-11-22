@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { showsDiscreet } from "../discreet/neutralWindow";
 import { useEditor, type Mode } from "../state/editor";
+import { refreshShell } from "./serviceWorker";
 import { checkVersion, useUpdate } from "./store";
 import { appVersion, parseVersion, type Version } from "./version";
 
@@ -167,9 +168,11 @@ export function useApplyUpdates(): void {
     };
   }, []);
 
-  // A version this tab already reloaded for, and still old: said at once, not at the next navigation.
   useEffect(() => {
-    if (available && read(reloadedKey) === full(available)) useUpdate.getState().fail(available);
+    if (!available) return;
+    // A version this tab already reloaded for, and still old: said at once, not at the next navigation.
+    if (read(reloadedKey) === full(available)) useUpdate.getState().fail(available);
+    else void refreshShell();
   }, [available]);
 
   useEffect(() => {

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import type { Plugin } from "vite";
 import { configDefaults, defineConfig } from "vitest/config";
+import { precache } from "./sw/shell.ts";
 
 const server = "http://localhost:8083";
 
@@ -42,8 +43,49 @@ function pdfDecoders(): Plugin {
   };
 }
 
+/**
+ * The app shell's service worker (sw/worker.ts) as /sw.js, at the root so that its scope is the whole app, with the
+ * list of this build's files written into it. Its cache is named by their content: a new build is a new /sw.js, which
+ * the browser installs, and only an unchanged build keeps the old cache.
+ */
+function appShell(): Plugin {
+  let publicDir = "";
+  return {
+    name: "kumbu-app-shell",
+    apply: "build",
+    enforce: "post",
+    configResolved(config) {
+      publicDir = config.publicDir;
+    },
+    buildStart() {
+      this.emitFile({ type: "chunk", id: join(import.meta.dirname, "sw/worker.ts"), fileName: "sw.js" });
+    },
+    generateBundle(_, bundle) {
+      const worker = bundle["sw.js"];
+      if (worker?.type !== "chunk") return this.error("The app shell's worker wasn't built.");
+      if (worker.imports.length > 0) return this.error("The app shell's worker must be one file: it imports none of the app.");
+      const publicFiles = publicDir
+        ? readdirSync(publicDir, { recursive: true, withFileTypes: true })
+            .filter((entry) => entry.isFile())
+            .map((entry) => relative(publicDir, join(entry.parentPath, entry.name)).split("\\").join("/"))
+            .sort()
+        : [];
+      const files = precache(Object.keys(bundle).sort(), publicFiles);
+      const hash = createHash("sha256");
+      for (const file of files) {
+        const item = bundle[file.slice(1)];
+        hash.update(file).update(item ? (item.type === "chunk" ? item.code : item.source) : readFileSync(join(publicDir, file)));
+      }
+      const shell = JSON.stringify({ name: `kumbu-shell-${hash.digest("hex").slice(0, 16)}`, files });
+      const code = worker.code.replace(/(["'`])__KUMBU_SHELL__\1/, () => shell);
+      if (code === worker.code) return this.error("The app shell's worker has no place for its list of files.");
+      worker.code = code;
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), pdfDecoders()],
+  plugins: [react(), tailwindcss(), pdfDecoders(), appShell()],
   // At the top level, so the tests have them too.
   define: { __KUMBU_VERSION__: JSON.stringify(version), __PDF_DECODERS__: JSON.stringify(decoderFolder) },
   server: { proxy: { "/api": server, "/mcp": server } },

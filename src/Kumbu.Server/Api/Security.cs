@@ -51,9 +51,9 @@ public static class Security
     /// (the web app's submit through fetch, but for the gallery's ZIP, a same-origin form post). <c>object-src 'none'</c>
     /// is stricter than the <c>'self'</c> it would inherit: no plug-in content at all. <c>blob:</c> images: the web app shows an attachment
     /// it fetched (with its session) through an object URL. <c>worker-src 'self'</c> is what it would inherit, said
-    /// explicitly: the only worker is pdf.js's, a file of the app; no <c>blob:</c> worker, and no WebAssembly (pdf.js
-    /// runs without it, so no <c>'wasm-unsafe-eval'</c>). Scripts never get <c>'unsafe-eval'</c>: nothing in a PDF is
-    /// compiled into code.
+    /// explicitly: the only workers are pdf.js's and the app shell's service worker (<c>/sw.js</c>), files of the app;
+    /// no <c>blob:</c> worker, and no WebAssembly (pdf.js runs without it, so no <c>'wasm-unsafe-eval'</c>). Scripts
+    /// never get <c>'unsafe-eval'</c>: nothing in a PDF is compiled into code.
     /// </summary>
     public const string ContentSecurityPolicy =
         "default-src 'self'; img-src 'self' data: blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
