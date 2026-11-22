@@ -219,6 +219,19 @@ describe("tabs", () => {
     expect(last(1)).toMatchObject({ offline: false, done: { uploaded: 5 } });
   });
 
+  test("what a tab saw before any tab led reaches the first to lead", async () => {
+    const locks = new FakeLocks();
+    const blocker = locks.hold("kumbu-mode");
+    await blocker.acquired;
+    let heard: ModeState | undefined;
+    const tab = new SharedMode({ locks, channel: bus()(), clock }, "t", (s) => (heard = s));
+    tab.send({ type: "failed" });
+    tab.send({ type: "waiting", count: 2 });
+    blocker.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toMatchObject({ offline: true, waiting: 2 });
+  });
+
   test("a tab opened later hears the state at once", async () => {
     const { tabs, locks, channel } = await browser(1);
     tabs[0]!.send({ type: "failed" });

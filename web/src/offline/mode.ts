@@ -170,8 +170,9 @@ export async function contact(): Promise<void> {
 export async function wipeCopy(): Promise<void> {
   const header = useOfflineCopy.getState().header;
   useOfflineCopy.getState().mirror?.lock();
-  if (header !== null) await (await mirrorCopies()).wipe(header.copy);
   wiped();
+  if (header === null || typeof indexedDB === "undefined") return;
+  await (await mirrorCopies()).wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
 }
 
 /** For the tests: a fresh mode, as in a new tab. */
