@@ -6,6 +6,7 @@
 // the mirror slot's id and token (the token is kept in the clear by design, §4.6: the server's key needs the user key
 // too), the mirror key wrapped under the password, and the idle limit of the last sign-in. Everything else is sealed
 // (vault.ts). The key is only ever in the tab's memory.
+import { DEFAULT_CHOICE, type OfflineChoice } from "./choice";
 import { fromBase64Url, toBase64Url, unwrapWithPassword, wrapWithPassword, type PasswordWrap } from "./crypto";
 import type { SlotAnswer, SlotVault, StorePorts, TabMessage } from "./ports";
 import { MirrorLockedError, Records, VaultMirror, type VaultMeta } from "./vault";
@@ -140,9 +141,12 @@ export class SealedMirror {
   private listed: Map<string, SlotVault> | null = null;
   private stopListening: (() => void) | null = null;
   private engines: { release(): void } | null = null;
+  private chosen: OfflineChoice = DEFAULT_CHOICE;
   /** Another tab changed paths of a vault, or purged one (vault null: the whole copy). */
   onChanged: ((vault: string, paths: string[]) => void) | null = null;
   onPurged: ((vault: string | null) => void) | null = null;
+  /** Another tab changed what this device keeps offline. */
+  onChoice: (() => void) | null = null;
 
   private constructor(private readonly p: StorePorts, readonly header: CopyHeader, private readonly r: Records) {}
 
@@ -154,6 +158,7 @@ export class SealedMirror {
       const meta = await r.openJson<VaultMeta>(key, sealed);
       if (meta !== null) mirror.vaults.set(meta.id, await VaultMirror.open(r, meta));
     }
+    mirror.chosen = (await r.openJson<OfflineChoice>(await mirror.choiceKey(), await p.storage.get(await mirror.choiceKey()))) ?? DEFAULT_CHOICE;
     if (vaults !== null) await mirror.align(vaults);
     mirror.stopListening = r.channel.listen((m) => void mirror.heard(m));
     return mirror;
@@ -187,6 +192,26 @@ export class SealedMirror {
     const vault = await VaultMirror.open(this.r, meta);
     this.vaults.set(id, vault);
     return vault;
+  }
+
+  /** What this device keeps offline (Settings, Offline). */
+  get choice(): OfflineChoice {
+    this.assertOpen();
+    return this.chosen;
+  }
+
+  /** Changes the choice, on the copy's latest across tabs, and tells the other tabs. */
+  async choose(change: (choice: OfflineChoice) => OfflineChoice): Promise<OfflineChoice> {
+    this.assertOpen();
+    const key = await this.choiceKey();
+    return this.p.locks.run(this.r.lockName, async () => {
+      const now = (await this.r.openJson<OfflineChoice>(key, await this.p.storage.get(key))) ?? DEFAULT_CHOICE;
+      const next = change(now);
+      await this.p.storage.write({ put: [await this.r.sealJson(key, next)] });
+      this.chosen = next;
+      this.r.channel.post({ type: "choice" });
+      return next;
+    });
   }
 
   /** The changes waiting to upload, across the copy's vaults. */
@@ -271,6 +296,13 @@ export class SealedMirror {
 
   private async heard(m: TabMessage): Promise<void> {
     if (this.locked) return;
+    if (m.type === "choice") {
+      const key = await this.choiceKey();
+      const chosen = await this.r.openJson<OfflineChoice>(key, await this.p.storage.get(key));
+      if (chosen !== null && !this.locked) this.chosen = chosen;
+      this.onChoice?.();
+      return;
+    }
     if (m.type === "purged") {
       if (m.vault === null) this.lock();
       else this.vaults.delete(m.vault);
@@ -285,6 +317,10 @@ export class SealedMirror {
       await vault.refresh(m.paths);
     }
     this.onChanged?.(m.vault, m.paths);
+  }
+
+  private async choiceKey(): Promise<string> {
+    return `${this.r.prefix}o/${await this.r.name("choice")}`;
   }
 
   private async reopen(id: string): Promise<void> {

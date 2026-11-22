@@ -210,9 +210,35 @@ export class VaultMirror {
    * 1 MB. `onNotesDone` runs once when that point is reached: the host asks the engine for a full check then, which
    * fetches what is now wanted.
    */
-  downloadOrder(onNotesDone: () => void): FetchPolicy {
+  downloadOrder(onNotesDone: () => void, wanted?: (path: string) => boolean): FetchPolicy {
     this.onNotesDone = onNotesDone;
-    return { wantBytes: (_path, size) => this.meta.notesDone && size !== null && size <= SMALL_ATTACHMENT_BYTES };
+    return {
+      wantBytes: (path, size) => this.meta.notesDone && size !== null && (size <= SMALL_ATTACHMENT_BYTES || wanted?.(path) === true),
+    };
+  }
+
+  /** Here as Kumbu² has it: nothing changed on this device that hasn't uploaded. */
+  unchanged(path: string): boolean {
+    const local = this.entries.get(path)?.local;
+    return local !== undefined && this.state.bases[path] === local.version;
+  }
+
+  /**
+   * Drops the bytes of attachments the device no longer wants (design §6, the budget), and the engine's memory of
+   * them, so the path is as one never downloaded: the fetch policy decides it again. Only while the vault's engine is
+   * stopped, as it holds the state in memory; a path changed here in the meantime is left as it is.
+   */
+  async evict(paths: readonly string[]): Promise<void> {
+    const gone = await this.change(paths, (p, entry) => Promise.resolve(
+      entry?.local === undefined || this.state.bases[p] !== entry.local.version ? false
+        : { entry: { path: p, ...(entry.remote ? { remote: entry.remote } : {}) }, body: null }));
+    const state = clone(this.state);
+    paths.forEach((p, i) => {
+      if (!gone[i]) return;
+      delete state.bases[p];
+      delete state.hashed?.[p];
+    });
+    await this.stateStore().save(state);
   }
 
   /** The engine's RemoteApi, which records every version list in the inventory before the engine acts on it. */
