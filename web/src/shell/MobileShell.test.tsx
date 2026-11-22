@@ -740,7 +740,7 @@ describe("the shell", () => {
     await screen.findByRole("heading", { name: "garden" });
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
-    expect(items.slice(items.indexOf("History") + 1, items.indexOf("History") + 5)).toEqual(["Who wrote what", "Copy file path", "Copy link", "Copy markdown link"]);
+    expect(items.slice(items.indexOf("History") + 1, items.indexOf("History") + 6)).toEqual(["Who wrote what", "Open graph…", "Copy file path", "Copy link", "Copy markdown link"]);
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Copy link" }));
     expect(writeText).toHaveBeenCalledWith("[[garden]]");
@@ -985,7 +985,7 @@ describe("vaults shared with the user", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     // Copying writes nothing: the three copy items stay.
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Who wrote what", "Copy file path", "Copy link", "Copy markdown link"]);
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Who wrote what", "Open graph…", "Copy file path", "Copy link", "Copy markdown link"]);
     await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "New" }));
     for (const item of screen.getAllByRole("menuitem")) expect(item).toBeDisabled();
@@ -996,7 +996,7 @@ describe("vaults shared with the user", () => {
     // Reading, the trash, activity, checkpoints, the calendar, the gallery, recent changes, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
     expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Calendar", "Gallery", "Recent changes", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
     expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
-    expect(await menuItems("Actions for soup")).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
+    expect(await menuItems("Actions for soup")).toEqual(["Open graph…", "Copy file path", "Copy link", "Copy markdown link"]);
   });
 
   it("shows Board.md read-only below maintain", async () => {
@@ -1009,7 +1009,7 @@ describe("vaults shared with the user", () => {
     expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("title", sentence);
     expect(screen.getByText(sentence)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Who wrote what", "Copy file path", "Copy link", "Copy markdown link"]);
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History", "Who wrote what", "Open graph…", "Copy file path", "Copy link", "Copy markdown link"]);
     await userEvent.keyboard("{Escape}");
 
     await openDrawer();
@@ -1017,10 +1017,10 @@ describe("vaults shared with the user", () => {
     expect(await within(drawer()).findAllByRole("button", { name: "Board" })).toHaveLength(2);
     expect(within(within(drawer()).getByRole("group", { name: "Tools for this vault" })).getByRole("button", { name: "Board" })).toBeInTheDocument();
     // A note beside it can be changed; the board's definition and its folder can't, and the definition is only copied.
-    expect(await menuItems("Actions for plan")).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Flag", "Add to calendar…"]);
+    expect(await menuItems("Actions for plan")).toEqual(["Open graph…", "Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note", "Flag", "Add to calendar…"]);
     expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(2);
     expect(await menuItems("Actions for Board")).toEqual(["New note here", "New folder…", "Upload here"]);
-    expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link"]);
+    expect(await menuItems("Actions for Board", 1)).toEqual(["Open graph…", "Copy file path", "Copy link", "Copy markdown link"]);
     expect(await menuItems("Actions for garten")).toEqual(
       expect.arrayContaining(["New note here", "New folder…", "Upload here", "Trash", "Board", "Export as ZIP…"]),
     );
@@ -1099,7 +1099,7 @@ describe("vaults shared with the user", () => {
     expect(within(within(drawer()).getByRole("group", { name: "Tools for this vault" })).getByRole("button", { name: "Board" })).toBeInTheDocument();
     // The folder's menu, then the note's.
     expect(await menuItems("Actions for Board")).toContain("Rename or move");
-    expect(await menuItems("Actions for Board", 1)).toEqual(["Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note"]);
+    expect(await menuItems("Actions for Board", 1)).toEqual(["Open graph…", "Copy file path", "Copy link", "Copy markdown link", "Rename or move", "Delete note"]);
     const items = await menuItems("Actions for Beete");
     expect(items).toContain("Board");
     // A member may pair her own device; sharing and the embedding provider stay the owner's.

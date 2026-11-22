@@ -305,3 +305,43 @@ describe("Ctrl+Shift+G", () => {
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 });
+
+describe("Open graph… in the note's menus", () => {
+  it("opens the dialog from the note's ⋯ where no column fits", async () => {
+    width = 90;
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open graph…" }));
+    const dialog = await screen.findByRole("dialog", { name: "a" });
+    expect(await within(dialog).findByRole("button", { name: "node a" })).toBeInTheDocument();
+  });
+
+  it("shows the collapsed column where it fits, rather than a dialog", async () => {
+    localStorage.setItem(storageKey, "true");
+    await open();
+    expect(screen.queryByRole("complementary", { name: "Graph" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open graph…" }));
+    expect(column()).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens another note's graph from its menu in the tree, the column staying on the note shown", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Actions for b" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open graph…" }));
+    const dialog = await screen.findByRole("dialog", { name: "b" });
+    expect(await within(dialog).findByRole("button", { name: "node b" })).toBeInTheDocument();
+    expect(within(column()).getByRole("button", { name: "node a" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens the dialog full screen on a phone", async () => {
+    width = 24;
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open graph…" }));
+    expect(await screen.findByRole("dialog", { name: "a" })).toBeInTheDocument();
+  });
+});

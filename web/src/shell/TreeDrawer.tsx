@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Columns2, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Columns2, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users, Waypoints } from "lucide-react";
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
@@ -291,6 +291,7 @@ function FileMenu({
   onTask,
   onFlag,
   onOpenBeside,
+  onGraph,
 }: {
   row: Extract<Row, { kind: "note" }>;
   names: NoteNames | undefined;
@@ -305,6 +306,7 @@ function FileMenu({
   onFlag?: (path: string) => void;
   /** From 1280 px on: opens the note in the split view's right pane. */
   onOpenBeside?: (path: string) => void;
+  onGraph?: (path: string) => void;
 }) {
   const note = row.fileKind === "note";
   const { path, version } = row;
@@ -316,6 +318,7 @@ function FileMenu({
   const dated = useNoteEntry(note ? path : null, asked && changes && !!onDate);
   const items: MenuItem[] = [
     ...(note && onOpenBeside ? [{ label: "Open beside", icon: Columns2, onSelect: () => onOpenBeside(path) }] : []),
+    ...(note && onGraph ? [{ label: "Open graph…", icon: Waypoints, onSelect: () => onGraph(path) }] : []),
     ...copyItems(path, names, note, copy),
     ...(changes && !renaming ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
     // An attachment can be marked too: a copy that holds it is then withdrawn (publish spec §3.6).
@@ -545,8 +548,9 @@ export default function TreeDrawer(props: {
   onDate?: (path: string) => void;
   /** A note menu's Flag. */
   onFlag?: (path: string) => void;
+  onGraph?: (path: string) => void;
 }) {
-  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate, onFlag } = props;
+  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet, onDate, onFlag, onGraph } = props;
   // Picked: docked beside the editor, the tree isn't rendered again for every key typed (`live`).
   const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor(
     useShallow(({ activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay }) => ({ activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay })),
@@ -854,7 +858,7 @@ export default function TreeDrawer(props: {
                       unpublishable={!!marks?.includes(row.path)}
                       onOpen={() => openEntry(row.path, row.fileKind)}
                     />
-                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onTask={switchTask} onFlag={onFlag} onOpenBeside={wide ? (path) => openNote(path, { side: "right" }) : undefined} />
+                    <FileMenu row={row} names={names} level={level} publishing={publishingActions} copy={copied.copy} onMove={onMove} onDelete={onDelete} onDate={onDate} onRemoveDate={removeDate} onTask={switchTask} onFlag={onFlag} onGraph={onGraph} onOpenBeside={wide ? (path) => openNote(path, { side: "right" }) : undefined} />
                   </>
                 )}
               </li>

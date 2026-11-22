@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CopyPlus, Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2, Users } from "lucide-react";
+import { CopyPlus, Flag, FolderInput, History, ListPlus, Star, TextSearch, Trash2, Users, Waypoints } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { mayChange, useDuplicateNote, useLevel, useNoteText, useTree, useVaults } from "../api/notes";
@@ -36,6 +36,8 @@ export interface NoteActionsShell {
   onDelete(subject: DeleteSubject): void;
   onDate(path: string): void;
   onFlag(path: string): void;
+  /** Shows the note's graph; absent where the graph isn't offered (a phone in Write mode). */
+  onGraph?(path: string): void;
 }
 
 /**
@@ -132,6 +134,7 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
               { label: "Who wrote what", icon: Users, onSelect: () => navigate(blameUrl(path)) },
             ]
           : []),
+        ...(shell.onGraph ? [{ label: "Open graph…", icon: Waypoints, onSelect: () => shell.onGraph!(path) }] : []),
         ...copyItems(path, noteNamesInVault, true, copied.copy),
         // Once the list is read: a change before would replace it. The change lets go of the vault's favourites whose note is gone.
         // None for an archived note: the server takes none.
