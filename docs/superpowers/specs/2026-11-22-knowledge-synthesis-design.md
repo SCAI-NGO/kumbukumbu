@@ -1,6 +1,6 @@
 # Knowledge synthesis (`similar`, `synthesize-knowledge`) — design
 
-Date: 2026-11-22. Status: draft for Chris's review; every decision in §3 is *(Claude's call)*, made overnight on the basis of the pre-analysis, and open to change. Size: M (an index method, one new `sh` command, three filters, a system skill). Release: open; 0.7.0 is otherwise scoped to offline mode, and none of this touches offline code.
+Date: 2026-11-22. Status: draft for Chris's review; every decision in §3 is *(Claude's call)*, made overnight on the basis of the pre-analysis, and open to change. Size: M (an index method, one new `sh` command, three filters, a system skill). Release: 0.7.0, beside offline mode (Chris, 2026-11-22); none of this touches offline code.
 
 Sources:
 - the pre-analysis "Operation Fish Oil" (2026-11-22, `/SWE/Kumbu/Ideas/`): Swanson's ABC model mapped to the commands, the gaps, a draft of the skill;
@@ -57,6 +57,8 @@ Task<StoredVectors> VectorsAsync(VaultPath scope, CancellationToken ct);
 ```
 
 `EncryptedNoteStore` answers it from the vault's working set, as `SearchAsync` reads it: per note below the scope, the chunks embedded by the vault's current model under the current chunking scheme; `Space` is the model's key, so the command compares only within one. Notes without such embeddings count as pending; a vault whose provider isn't configured is left out with a reason. The vectors are the stored arrays, handed out by reference and never written to. No consent check is needed: nothing is embedded, nothing leaves.
+
+The ranking lives in `Kumbu.Core.Search.SimilarSearch.RunAsync` (a `SimilarQuery` in, a `SimilarResult` out), not in the command, so that an HTTP endpoint can call it: link prediction's Similar tab and the graph's suggested links build on it; the command only parses and prints. Candidates a caller leaves out (a silo, a tag, a person's "not related") come in as a predicate over notes.
 
 Cost: one dot product per pair of a source chunk and a candidate chunk. A 2,000-note vault holds some 10,000 chunks; a source note of five chunks is 50,000 dot products of 768 floats, well under a tenth of a second. `--between` doubles it.
 
