@@ -2,29 +2,18 @@
 // The offline copy's unlocking and locking (offline mode design §3a "Unlocking", "Sign in again, sign out"): the
 // sign-in form opens it offline after a reload, an offline unlock ends like a session, and a sign-out offline is
 // pending until the device is online again.
-import { IdleLock } from "eidolon-core/store/idle";
 import type { SealedMirror } from "eidolon-core/store/mirror";
-import { useSession } from "../state/session";
 import { useOfflineCopy } from "./copy";
-import { keep, mirrorCopies, useOfflineMode } from "./mode";
+import { keep, lockEverywhere, mirrorCopies, useOfflineMode } from "./mode";
+
+// Where the locking was announced: it lives beside the copy's unlocking in mode.ts, which arms every copy's idle lock.
+export { lockCopy, onBeforeLock } from "./mode";
 
 /** The sign-in page's line after a sign-out offline. */
 export const PENDING_NOTICE = "Your session ends on the server when this device is back online.";
 const PENDING = "kumbu.signOutPending";
 
-const beforeLock = new Set<() => void | Promise<void>>();
-
-/** Runs before the copy locks: the editor writes its unsaved text into the copy then. */
-export function onBeforeLock(fn: () => void | Promise<void>): () => void {
-  beforeLock.add(fn);
-  return () => void beforeLock.delete(fn);
-}
-
-let idle: IdleLock | null = null;
-const clock = { now: () => Date.now(), setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (h: unknown) => clearTimeout(h as number) };
-
 if (typeof window !== "undefined") {
-  for (const type of ["keydown", "pointerdown", "wheel", "touchstart"]) window.addEventListener(type, () => idle?.touch(), { passive: true, capture: true });
   // Back online: the server hears of a sign-out made while away.
   window.addEventListener("online", () => void endPendingSignOut());
 }
@@ -39,23 +28,10 @@ export async function unlockOffline(username: string, password: string): Promise
   const header = await all.forUsername(username);
   const opened = header === null ? null : await all.unlockOffline(header, password);
   if (opened === null) return false;
+  // Locked after the idle limit of the last sign-in here, like the session it stands in for (§3a).
   keep(opened);
-  // Like the session it stands in for: locked after the idle limit of the last sign-in here (§3a).
-  idle?.stop();
-  idle = new IdleLock(clock, opened.header.idleMs, () => void lockCopy().then(() => useSession.getState().end()));
   useOfflineMode.getState().waitingChanged();
   return true;
-}
-
-/** Drops the key from this tab: unsaved editor text goes into the copy first; changes waiting stay sealed. */
-export async function lockCopy(): Promise<void> {
-  const { header, mirror } = useOfflineCopy.getState();
-  idle?.stop();
-  idle = null;
-  if (mirror === null || header === null) return;
-  for (const fn of [...beforeLock]) await fn();
-  mirror.lock();
-  useOfflineCopy.getState().set(header, null);
 }
 
 /**
@@ -63,21 +39,20 @@ export async function lockCopy(): Promise<void> {
  * has the next start online end the session first. With `remove`, the copy goes from this device, its waiting
  * changes with it; otherwise they stay sealed and upload at the next sign-in here.
  */
-export async function signOutOffline(remove: boolean): Promise<void> {
+export async function signOutOffline(remove: boolean): Promise<boolean> {
+  let marked = true;
   try {
     localStorage.setItem(PENDING, "1");
   } catch {
     // Storage refused: the session ends with its own limits, as before offline mode.
+    marked = false;
   }
   const mirror: SealedMirror | null = useOfflineCopy.getState().mirror;
-  if (remove && mirror !== null) {
-    idle?.stop();
-    idle = null;
-    await mirror.remove();
-  } else {
-    await lockCopy();
-  }
+  // Every tab: a forgotten second one on a borrowed device is the risk (audit S7-03 d). A removal locks them anyway.
+  if (remove && mirror !== null) await mirror.remove();
+  else await lockEverywhere();
   useOfflineCopy.getState().clear();
+  return marked;
 }
 
 export function signOutPending(): boolean {
@@ -93,13 +68,39 @@ export function signOutPending(): boolean {
  * online again, and before a sign-in (which would otherwise end the new session instead). Kept for the next try
  * while the server can't be reached.
  */
-export async function endPendingSignOut(): Promise<void> {
-  if (!signOutPending()) return;
-  try {
-    const response = await fetch("/api/session", { method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(5_000) });
-    // A 401: the session had ended on its own.
-    if (response.ok || response.status === 401) localStorage.removeItem(PENDING);
-  } catch {
-    // Still offline.
+let ending: Promise<void> | null = null;
+
+export function endPendingSignOut(): Promise<void> {
+  if (!signOutPending()) return Promise.resolve();
+  ending ??= (async () => {
+    try {
+      const response = await fetch("/api/session", { method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(5_000) });
+      // A 401: the session had ended on its own.
+      if (response.ok || response.status === 401) localStorage.removeItem(PENDING);
+    } catch {
+      // Still offline.
+    } finally {
+      ending = null;
+    }
+  })();
+  return ending;
+}
+
+/**
+ * At the sign-in page, online: asks once per copy kept here, with its slot's token, whether the slot still exists,
+ * and removes the copies that are answered `mirror-wipe` (design §4.6, audit S7-05). Without it, a copy removed in
+ * the device list, or an account deleted, would stay until its owner signed in here again.
+ */
+export async function sweepRemovedCopies(): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  const all = await mirrorCopies();
+  for (const header of await all.headers()) {
+    try {
+      const response = await fetch("/api/session", { credentials: "same-origin", headers: { "Kumbu-Mirror": header.slot.token } });
+      const body = (await response.json().catch(() => null)) as { code?: string } | null;
+      if (response.status === 401 && body?.code === "mirror-wipe") await all.wipe(header.copy);
+    } catch {
+      return; // offline: the next visit asks
+    }
   }
 }

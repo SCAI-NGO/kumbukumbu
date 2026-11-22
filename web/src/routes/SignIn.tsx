@@ -8,7 +8,7 @@ import { AuthScreen, FormError, primaryButtonClass, TextField } from "../compone
 import { PasswordField } from "../components/PasswordField";
 import { NEUTRAL } from "../discreet/neutralWindow";
 import { openCopy, useOfflineMode } from "../offline/mode";
-import { endPendingSignOut, unlockOffline } from "../offline/unlock";
+import { endPendingSignOut, sweepRemovedCopies, unlockOffline } from "../offline/unlock";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 
@@ -44,6 +44,11 @@ export default function SignIn() {
   }, [queryClient]);
 
   const offline = useOfflineMode((s) => s.offline);
+
+  // A copy whose slot is gone goes from this device now, not only once its owner signs in here again.
+  useEffect(() => {
+    if (!offline) void sweepRemovedCopies();
+  }, [offline]);
 
   /** Offline the form opens the copy on this device instead (offline mode design §3a): "offline" when it did. */
   const openHere = async (): Promise<"offline"> => {

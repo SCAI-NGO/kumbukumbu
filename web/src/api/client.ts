@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import createClient, { type Middleware } from "openapi-fetch";
 import { useOfflineCopy } from "../offline/copy";
-import { useOfflineMode, wipeCopy } from "../offline/mode";
+import { lockCopy, useOfflineMode, wipeCopy } from "../offline/mode";
+import { endPendingSignOut, signOutPending } from "../offline/unlock";
 import { usePasswordPrompt } from "../state/passwordPrompt";
 import { useSession } from "../state/session";
 import { useUpdate } from "../update/store";
@@ -61,6 +62,9 @@ async function endOnLostSession(key: string, response: Response) {
   // After a sign-out, the page being left may still ask (or hear back) for a moment; those 401s are the sign-out
   // itself. Asking for the session is the way back in, and still leads to sign-in.
   if (useSession.getState().signedOut && key !== "GET /api/session") return;
+  // The copy's life in the tab follows the session's: no way back past the sign-in page without the password, and
+  // the next user never inherits it (audit S7-03).
+  void lockCopy();
   useSession.getState().end();
 }
 
@@ -82,8 +86,10 @@ const reachWatch: Middleware = {
     return request;
   },
   onResponse({ response }) {
-    if (unreachable.has(response.status)) useOfflineMode.getState().failed();
-    else useOfflineMode.getState().reached();
+    if (unreachable.has(response.status)) return void useOfflineMode.getState().failed();
+    useOfflineMode.getState().reached();
+    // Kumbu² answers again: a sign-out made while away reaches it now, not only at the next start (audit L7-02).
+    if (signOutPending()) void endPendingSignOut();
   },
   onError({ error }) {
     // fetch fails with a TypeError when it gets no answer; a cancelled request (an AbortError) says nothing.

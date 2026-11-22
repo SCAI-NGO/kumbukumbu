@@ -9,9 +9,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { useSession } from "../state/session";
 import { json, noContent, renderApp } from "../test/app";
 import { useOfflineCopy } from "./copy";
-import { useOfflineMode } from "./mode";
+import { lockCopy, onBeforeLock, useOfflineMode } from "./mode";
 import { browserPorts } from "./ports";
-import { endPendingSignOut, lockCopy, onBeforeLock, signOutOffline, signOutPending, unlockOffline } from "./unlock";
+import { endPendingSignOut, signOutOffline, signOutPending, unlockOffline } from "./unlock";
 
 const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 const vaults = [{ id: "v1", tag: "t1", canWrite: true, pending: false }];
@@ -68,6 +68,7 @@ test("an offline unlock locks after the idle limit; the editor's text goes into 
   const wrote = vi.fn();
   const stop = onBeforeLock(wrote);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  useOfflineMode.getState().failed();
   expect(await unlockOffline("ada", "pw")).toBe(true);
   useSession.getState().signedIn({ user: { id: "", username: "ada", display: "ada", role: "user" }, previousSignInAt: null });
   await vi.advanceTimersByTimeAsync(1_000);

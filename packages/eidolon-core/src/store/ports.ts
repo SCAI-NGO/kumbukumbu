@@ -41,7 +41,9 @@ export interface TabLocks {
 /** What a tab tells the copy's other unlocked tabs. Only unlocked tabs listen. */
 export type TabMessage =
   | { type: "changed"; vault: string; paths: string[] }
-  | { type: "purged"; vault: string | null };
+  | { type: "purged"; vault: string | null }
+  /** Signed out: every tab of the copy locks. */
+  | { type: "locked" };
 
 export interface TabChannel {
   post(message: TabMessage): void;

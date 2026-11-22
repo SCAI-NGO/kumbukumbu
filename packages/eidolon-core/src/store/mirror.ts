@@ -143,6 +143,11 @@ export class SealedMirror {
   /** Another tab changed paths of a vault, or purged one (vault null: the whole copy). */
   onChanged: ((vault: string, paths: string[]) => void) | null = null;
   onPurged: ((vault: string | null) => void) | null = null;
+  /**
+   * Another tab signed out: the host writes what its editors hold into the copy and locks. Without a host's answer
+   * the copy locks at once.
+   */
+  onLockAsked: (() => void) | null = null;
 
   private constructor(private readonly p: StorePorts, readonly header: CopyHeader, private readonly r: Records) {}
 
@@ -269,8 +274,19 @@ export class SealedMirror {
     return purged;
   }
 
+  /** Locks the copy in every tab that has it open: a sign-out, made in one tab, ends it in all (audit S7-03 d). */
+  lockEverywhere(): void {
+    if (!this.locked) this.r.channel.post({ type: "locked" });
+    this.lock();
+  }
+
   private async heard(m: TabMessage): Promise<void> {
     if (this.locked) return;
+    if (m.type === "locked") {
+      if (this.onLockAsked !== null) this.onLockAsked();
+      else this.lock();
+      return;
+    }
     if (m.type === "purged") {
       if (m.vault === null) this.lock();
       else this.vaults.delete(m.vault);

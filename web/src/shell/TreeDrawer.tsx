@@ -17,9 +17,9 @@ import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
 import { LeaveDialog } from "../components/shownOnce";
 import { useOfflineCopy } from "../offline/copy";
-import { uploaded, useOfflineMode } from "../offline/mode";
+import { lockEverywhere, uploaded, useOfflineMode } from "../offline/mode";
 import SignOutDialog from "../offline/SignOutDialog";
-import { lockCopy, PENDING_NOTICE, signOutOffline } from "../offline/unlock";
+import { PENDING_NOTICE, signOutOffline } from "../offline/unlock";
 import { topDialog, useDialog } from "../hooks/useDialog";
 import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
 import { useTruncated } from "../hooks/useTruncated";
@@ -461,8 +461,8 @@ function AccountRow() {
     if (copy === undefined && waiting > 0) return setWaitingAsk(waiting);
     let notice: string | null = null;
     if (offline) {
-      await signOutOffline(copy === "remove");
-      notice = PENDING_NOTICE;
+      // Said only where the mark was kept: without it, the session ends by its own limits.
+      if (await signOutOffline(copy === "remove")) notice = PENDING_NOTICE;
     } else {
       try {
         const { response } = await api.DELETE("/api/session");
@@ -472,7 +472,7 @@ function AccountRow() {
         return setFailed(true);
       }
       if (copy === "remove") await useOfflineCopy.getState().mirror?.remove();
-      else await lockCopy();
+      else await lockEverywhere();
       useOfflineCopy.getState().clear();
     }
     useEditor.getState().reset();

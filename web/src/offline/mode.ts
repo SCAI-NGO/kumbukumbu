@@ -6,6 +6,7 @@
 import { AuthError, OfflineError } from "eidolon-core/engine/ports";
 import { initialMode, type Conflict, type ModeInput, type ModeState } from "eidolon-core/mode/mode";
 import { SharedMode, type ModeChannel, type ModePorts } from "eidolon-core/mode/shared";
+import { IdleLock } from "eidolon-core/store/idle";
 import { IDLE_MS, MirrorCopies, REMEMBERED_IDLE_MS, type SealedMirror } from "eidolon-core/store/mirror";
 import { create } from "zustand";
 import { useSession } from "../state/session";
@@ -121,8 +122,61 @@ export const mirrorCopies = () => (copies ??= browserPorts().then((p) => new Mir
 
 /** The copy went: this tab forgets it, and the sign-in page says so. */
 function wiped() {
+  idle?.stop();
+  idle = null;
+  useOfflineCopy.getState().mirror?.lock();
   useOfflineCopy.getState().clear();
   useSession.getState().end(WIPED);
+}
+
+const beforeLock = new Set<() => void | Promise<void>>();
+/** How long the hooks before a lock may take: a save that hangs mustn't keep the copy open (audit L7-09). */
+const BEFORE_LOCK_MS = 3_000;
+
+/** Runs before the copy locks: the editor writes its unsaved text into the copy then. */
+export function onBeforeLock(fn: () => void | Promise<void>): () => void {
+  beforeLock.add(fn);
+  return () => void beforeLock.delete(fn);
+}
+
+/** Drops the key from this tab: unsaved editor text goes into the copy first; changes waiting stay sealed. */
+export async function lockCopy(everywhere = false): Promise<void> {
+  const { header, mirror } = useOfflineCopy.getState();
+  idle?.stop();
+  idle = null;
+  if (mirror === null || header === null) return;
+  const hooks = Promise.all([...beforeLock].map(async (fn) => fn())).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
+  await Promise.race([hooks, new Promise((r) => setTimeout(r, BEFORE_LOCK_MS))]);
+  // Another copy may have replaced this one meanwhile: only this one locks.
+  if (everywhere) mirror.lockEverywhere();
+  else mirror.lock();
+  if (useOfflineCopy.getState().mirror === mirror) useOfflineCopy.getState().set(header, null);
+}
+
+/** Locks the copy in every tab that has it open: a sign-out in one tab ends what the others show too (audit S7-03 d). */
+export const lockEverywhere = () => lockCopy(true);
+
+let idle: IdleLock | null = null;
+const clock = { now: () => Date.now(), setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (h: unknown) => clearTimeout(h as number) };
+
+/**
+ * Every unlocked copy ends like a session (§3a, audit S7-02). Due, it starts again only while the server vouches
+ * for the session (online, signed in, nothing lost: the server's own idle limit governs then, and the slot would open
+ * the copy again anyway); otherwise the copy locks and the sign-in form asks.
+ */
+function armIdle(mirror: SealedMirror) {
+  idle?.stop();
+  idle = new IdleLock(clock, mirror.header.idleMs, () => {
+    const mode = useOfflineMode.getState();
+    if (!mode.offline && useSession.getState().user !== null) return armIdle(mirror);
+    void lockCopy().then(() => useSession.getState().end());
+  });
+}
+
+if (typeof window !== "undefined") {
+  for (const type of ["keydown", "pointerdown", "wheel", "touchstart"]) window.addEventListener(type, () => idle?.touch(), { passive: true, capture: true });
+  // No timer runs while the laptop sleeps or the page is frozen: waking up looks at the clock.
+  for (const type of ["visibilitychange", "pageshow", "focus"]) window.addEventListener(type, () => idle?.check());
 }
 
 function contacted(mirror: SealedMirror) {
@@ -132,13 +186,17 @@ function contacted(mirror: SealedMirror) {
 
 let opening: Promise<void> | null = null;
 
-/** Holds an unlocked copy in this tab, following what other tabs do to it. */
+/** Holds an unlocked copy in this tab, following what other tabs do to it; a copy it held before is locked. */
 export function keep(opened: SealedMirror) {
+  const before = useOfflineCopy.getState().mirror;
+  if (before !== null && before !== opened) before.lock();
+  armIdle(opened);
   opened.onPurged = (vault) => {
     if (vault === null) wiped();
     else useOfflineMode.getState().waitingChanged();
   };
   opened.onChanged = () => useOfflineMode.getState().waitingChanged();
+  opened.onLockAsked = () => void lockCopy();
   useOfflineCopy.getState().set(opened.header, opened);
 }
 
@@ -149,12 +207,17 @@ export function keep(opened: SealedMirror) {
  */
 export function openCopy(userId: string, signIn?: { username: string; password: string; remember: boolean }): Promise<void> {
   // No IndexedDB (a private window of some browsers, the tests): no copy can be here.
-  if (useOfflineCopy.getState().mirror !== null || typeof indexedDB === "undefined") return Promise.resolve();
+  if (typeof indexedDB === "undefined") return Promise.resolve();
   opening ??= (async () => {
     try {
       const all = await mirrorCopies();
       const header = await all.forUser(userId);
-      if (header === null) return;
+      const held = useOfflineCopy.getState().mirror;
+      // This user's copy is open already; a sign-in still wraps it again under the password and renews its limit.
+      if (held !== null && held.header.copy === header?.copy && signIn === undefined) return;
+      // Someone else's copy, or this one about to open afresh: it never serves another session (audit S7-03 b).
+      if (held !== null) await lockCopy();
+      if (header === null) return useOfflineCopy.getState().clear();
       const opened = await all.unlockOnline(header, signIn && {
         username: signIn.username, password: signIn.password, idleMs: signIn.remember ? REMEMBERED_IDLE_MS : IDLE_MS,
       });
@@ -175,6 +238,9 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
 export async function contact(): Promise<void> {
   const mirror = useOfflineCopy.getState().mirror;
   if (mirror === null || mirror.locked) return;
+  // A contact under another user's session would hand in this copy's token for them, and be answered "wipe".
+  const userId = useSession.getState().user?.id;
+  if (!userId || (await (await mirrorCopies()).forUser(userId))?.copy !== mirror.header.copy) return;
   try {
     const result = await mirror.contact();
     if (result === "wiped") return wiped();
@@ -198,6 +264,8 @@ export async function wipeCopy(): Promise<void> {
 export function resetOfflineMode() {
   shared?.stop();
   shared = null;
+  idle?.stop();
+  idle = null;
   failing = false;
   opening = null;
   copies = null;
