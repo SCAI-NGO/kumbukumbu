@@ -29,7 +29,7 @@
 //     → "similar #8"
 // Left out: "preparing" (the model is loaded before the tests run, plan review point 5); "this note not indexed yet"
 // in the page (a note is embedded within about a second of its write here, so the page can't be timed to see it; the
-// API's answer is similar-api #11); offline ("needs a connection"): Task 7, with the offline helpers.
+// API's answer is similar-api #11, its shape only: the state itself rests on Vitest and xUnit); offline ("needs a connection"): Task 7, with the offline helpers.
 import type { Locator, Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { secrets } from "../support/env";
