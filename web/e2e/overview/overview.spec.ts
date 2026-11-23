@@ -328,7 +328,7 @@ test("overview #7: Compare says so when the history no longer keeps the copy's v
 });
 
 test("overview #8: Compare shows the copy's version after a note was edited, published and edited again in one session @overview", async ({ page, aliceApi, folder }) => {
-  test.info().annotations.push({ type: "finding", description: "F-xx: a copy made within a changeset loses its version at the next write of it, so Compare says it is no longer kept" });
+  test.info().annotations.push({ type: "finding", description: "F-04: a copy made within a changeset loses its version at the next write of it, so Compare says it is no longer kept" });
   test.fail();
   const n = named(folder);
   const path = n.path("Shore");
@@ -343,7 +343,7 @@ test("overview #8: Compare shows the copy's version after a note was edited, pub
   await row(page, path).getByRole("button", { name: `Compare copy of ${path}`, exact: true }).click();
   const sheet = page.getByRole("dialog", { name: `Compare ${n.name("Shore")}` });
   await expect(sheet.getByRole("list", { name: "Now" }).getByRole("listitem")).toHaveText(["# Shore", "", "The new line.", ""]);
-  await expect(sheet.getByText("This version is no longer kept", { exact: true }), "F-xx: Compare shows the copy's version, not that it is no longer kept").toHaveCount(0, {
+  await expect(sheet.getByText("This version is no longer kept", { exact: true }), "F-04: Compare shows the copy's version, not that it is no longer kept").toHaveCount(0, {
     timeout: 3_000,
   });
   await expect(sheet.getByRole("list", { name: "Published copy" }).getByRole("listitem")).toHaveText(["# Shore", "", "The old line.", ""]);
