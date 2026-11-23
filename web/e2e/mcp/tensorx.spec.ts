@@ -112,8 +112,8 @@ test("a vault switched to tensorx is embedded through it: semsearch and similar 
   const providers = await aliceApi.json<{ name: string; external: boolean; available: boolean }[]>("GET", "/api/embeddings");
   expect(providers.find((p) => p.name === "tensorx")).toMatchObject({ external: true, available: true });
 
-  // By meaning only: the query shares no word with the swarm note but "bees", and none with the cake.
-  const found = await sh(`semsearch --meaning -l -n 10 a colony of bees leaving with its old queen /${external}`);
+  // By meaning: the query shares no content word with any note (--meaning adds a bonus per query word, Semsearch.cs:43-44).
+  const found = await sh(`semsearch --meaning -l -n 10 insects abandoning their home in spring with a new ruler /${external}`);
   const ranked = found.split("\n").flatMap((l) => /^\d+\. (.+?\.md)#/.exec(l)?.[1] ?? []);
   expect(ranked[0], found).toBe(notes.swarm);
   expect(ranked, found).toEqual([notes.swarm, notes.hive, notes.cake].slice(0, ranked.length));

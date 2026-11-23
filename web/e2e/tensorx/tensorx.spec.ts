@@ -13,23 +13,27 @@
 //   kept and never shown again ("TensorX key: saved, ends in …", never in an API answer), `GET /api/account/embeddings-key`
 //   and the `tensorx-byok` provider's `needsKey` following it.
 // - The New vault dialog with a key saved: "Search by meaning with TensorX (your own key)", ticked, its one line; the vault
-//   starts on `tensorx-byok` and is embedded with the key.
+//   starts on `tensorx-byok` and is embedded with the key; unticked, the vault starts on this server (`internal`).
+// - "An imported vault starts on the server": the import makes its vaults with `POST /api/vaults` without a provider
+//   (README "Export and import"); that call, with the key saved, gives `internal`. The import's own screens are left out:
+//   they add nothing to the provider's choice.
 // - Remove: the vaults on the key go back to this server (`internal`) and are embedded there again; the form is back.
 // Left out:
-// - The password window (`PUT /api/account/embeddings-key` needs it): a joined user's session is a normal one, whose
-//   window is always open; a remembered session's closes after 30 minutes, longer than a test.
+// - The password window (`PUT /api/account/embeddings-key` needs it): it can't be closed within a run. A normal
+//   session's window is always open (Sessions.cs:136), a remembered one's closes only after 30 minutes idle, and the
+//   session-only check runs before the window's (Security.cs:183, 199), so a bearer gets 403, never the window's 401.
+//   xUnit covers it: ByokApiTests.cs:247, PasswordWindowTests.cs:241-261.
 // - "Move these N vaults to TensorX too?" beyond Not now (asserted to move nothing): Move would send the new account's
 //   Welcome vault, eight notes, to the paid service.
 // - A refused key (401/403 from TensorX) and "TensorX refused the key": the proxy replaces every key, so none is refused.
 // - Replace, discreet vaults, shared vaults on the owner's key, BYOK switched off: xUnit (the BYOK spec's tests) and
 //   other stacks.
-import { request } from "@playwright/test";
+import { request, type APIRequestContext } from "@playwright/test";
 import { Api, encodePath } from "../support/api";
-import { baseURL, secrets, type User } from "../support/env";
+import { baseURL, type User } from "../support/env";
 import { nextIndex, waitIndexed } from "../support/search";
-import { reservePassword } from "../support/session";
 import { expect, shot, shotsDir070, test } from "../support/test";
-import { invitedUser, type TestUser } from "../support/users";
+import { invitedUser, removeUser, type TestUser } from "../support/users";
 
 test.use({ shotsDir: shotsDir070 });
 
@@ -47,12 +51,13 @@ test("BYOK: a saved key is checked and kept, a new vault starts on it, removing 
   // The join, a few page loads and two waits for the index (nextIndex each), and Alice's password check at the end.
   test.setTimeout(300_000);
   const user = await invitedUser(browser, projectContextOptions, "byok");
-  // The user's API, as the web app calls it: the session's cookie and the Origin every state-changing request needs. The
-  // `User` type names Alice and Bob; it is used only for their password checks, which this one never makes.
-  const context = await request.newContext({ baseURL, storageState: await user.context.storageState(), extraHTTPHeaders: { Origin: baseURL } });
-  const api = await Api.from(context, user.username as User);
-  const page = user.page;
+  let context: APIRequestContext | undefined;
   try {
+    // The user's API, as the web app calls it: the session's cookie and the Origin every state-changing request needs.
+    // The cast: `User` names Alice and Bob, and is used only for their password checks, which this API never makes.
+    context = await request.newContext({ baseURL, storageState: await user.context.storageState(), extraHTTPHeaders: { Origin: baseURL } });
+    const api = await Api.from(context, user.username as User);
+    const page = user.page;
     const before = await api.json<Byok>("GET", "/api/account/embeddings-key");
     expect(before).toEqual({ offered: true, keySaved: false, last4: null, refusedAt: null });
     const byokBefore = (await api.json<Provider[]>("GET", "/api/embeddings")).find((p) => p.name === "tensorx-byok");
@@ -107,6 +112,21 @@ test("BYOK: a saved key is checked and kept, a new vault starts on it, removing 
     const created = (await api.json<Vault[]>("GET", "/api/vaults")).find((v) => v.name === vault);
     expect(created?.embeddings, "the new vault starts on the key").toBe("tensorx-byok");
 
+    // Unticked, the vault stays on this server.
+    const unticked = `Local-${user.username.slice(-6)}`;
+    await page.goto("/");
+    await page.getByRole("button", { name: /^(New vault|Create your first vault)$/ }).click();
+    await dialog.getByLabel("Name").fill(unticked);
+    await box.uncheck();
+    await dialog.getByRole("button", { name: "Create vault" }).click();
+    await expect(dialog).toHaveCount(0);
+    // As the import makes its vaults: no provider named.
+    const imported = `Imported-${user.username.slice(-6)}`;
+    await api.json("POST", "/api/vaults", { name: imported });
+    const both = await api.json<Vault[]>("GET", "/api/vaults");
+    expect(both.find((v) => v.name === unticked)?.embeddings, "an unticked vault starts on the server").toBe("internal");
+    expect(both.find((v) => v.name === imported)?.embeddings, "a vault made without a provider, as the import does, starts on the server").toBe("internal");
+
     // Embedded with the key: `similar` answers for the note (one request to TensorX).
     const note = `/${vault}/Bees/Hive.md`;
     await api.json("PUT", `/api/notes/${encodePath(note)}`, {
@@ -128,23 +148,23 @@ test("BYOK: a saved key is checked and kept, a new vault starts on it, removing 
     await waitIndexed(api, [note], nextIndex);
     expect((await api.json<Provider[]>("GET", "/api/embeddings")).find((p) => p.name === "tensorx-byok")?.needsKey).toBe(true);
   } finally {
-    await cleanUp(api, user);
-    await context.dispose();
+    await cleanUp(context, user);
   }
 });
 
 /** The key removed, then the user deleted with all of theirs by Alice (Admin → Users), so the stack keeps no state of the test. */
-async function cleanUp(api: Api, user: TestUser) {
+async function cleanUp(context: APIRequestContext | undefined, user: TestUser) {
   try {
-    if ((await api.json<Byok>("GET", "/api/account/embeddings-key")).keySaved) await api.json("DELETE", "/api/account/embeddings-key");
+    try {
+      if (context) {
+        const api = await Api.from(context, user.username as User);
+        if ((await api.json<Byok>("GET", "/api/account/embeddings-key")).keySaved) await api.json("DELETE", "/api/account/embeddings-key");
+      }
+    } finally {
+      await context?.dispose();
+    }
   } finally {
     await user.context.close();
-    const alice = await Api.as("alice");
-    try {
-      await reservePassword("alice");
-      await alice.json("POST", `/api/admin/users/${encodeURIComponent(user.id)}/delete`, { password: secrets().passwords.alice, confirm: user.username });
-    } finally {
-      await alice.dispose();
-    }
+    await removeUser(user.username);
   }
 }
