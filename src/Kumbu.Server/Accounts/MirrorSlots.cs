@@ -57,7 +57,7 @@ public sealed record MirrorSlot(string Id, string Label, DateTime CreatedAt, Dat
 /// sealed under the user key and a random token the browser keeps in the clear, beside its sealed mirror. A signed-in tab
 /// hands in the token at every contact and gets the key back, so it unwraps its mirror without asking for the password.
 /// A slot ends with its removal from the device list, "end other sessions" (but the asking session's), a rotation of the
-/// user key and the account's deletion; a browser that then hands in its token is told to purge its whole mirror.
+/// user key, the user's deactivation and the account's deletion; a browser that then hands in its token is told to purge its whole mirror.
 /// </summary>
 public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
 {
@@ -129,8 +129,8 @@ public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
     /// <summary>
     /// The browser of <paramref name="token"/> is in contact: its slot records the time, the changes it has waiting and
     /// the session, and the slot's id and mirror key are answered. Null when the user has no slot of this token (another
-    /// user's token is none of hers, and is left untouched), or when it doesn't open (sealed under a user key rotated
-    /// since); such a slot is deleted. Either way the browser purges its mirror.
+    /// user's token is none of hers, and is left untouched: <see cref="ExistsAsync"/> tells the two apart), or when it
+    /// doesn't open (sealed under a user key rotated since); such a slot is deleted, and the browser purges its mirror.
     /// </summary>
     public async Task<(string Id, byte[] Key)?> ContactAsync(
         string userId, byte[] userKey, byte[] token, int waiting, string? sessionSubject, CancellationToken ct)
@@ -171,12 +171,12 @@ public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
     public Task EndOthersAsync(string userId, string? sessionSubject, CancellationToken ct) =>
         Slots.DeleteManyAsync(m => m.User == userId && m.Session != sessionSubject, ct);
 
-    /// <summary>Every slot of the user, inside the caller's transaction (a rotation of the user key, the account's deletion).</summary>
+    /// <summary>Every slot of the user, inside the caller's transaction (a rotation of the user key, a deactivation, the account's deletion).</summary>
     internal static Task DeleteAllAsync(IMongoDatabase db, IClientSessionHandle session, string userId, CancellationToken ct) =>
         db.GetCollection<MirrorSlotDocument>(CollectionName).DeleteManyAsync(session, m => m.User == userId, cancellationToken: ct);
 
     /// <summary>Whether a slot of <paramref name="token"/> exists, whoever's: for the 401 of a browser no longer signed in,
-    /// which can't say whose it is. The token is random, so this tells nothing to whoever doesn't hold it.</summary>
+    /// which can't say whose it is, and for a contact with another user's token. The token is random, so this tells nothing to whoever doesn't hold it.</summary>
     public async Task<bool> ExistsAsync(byte[] token, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);

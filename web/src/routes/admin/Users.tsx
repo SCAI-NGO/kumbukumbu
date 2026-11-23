@@ -377,7 +377,7 @@ function ToggleDialog({ user, onClose }: { user: AdminUser; onClose(): void }) {
       title={`${action} ${user.display}?`}
       text={
         user.active
-          ? "They are signed out at once and can't sign in until you reactivate them. Their notes stay."
+          ? "They are signed out at once and can't sign in until you reactivate them. Their notes stay. Offline copies on their devices are deleted when those devices next reach Kumbu², with any changes not uploaded yet; reactivating doesn't bring them back."
           : "They can sign in again."
       }
       word={user.username}
