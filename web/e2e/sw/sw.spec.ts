@@ -14,7 +14,8 @@
 //    changed …".
 // Left out: a new build replacing the old cache (web/e2e/shell/shell.browser.ts, against a server of its own), and
 // the worker's script itself (out of any page's reach by design: the browser keeps it).
-// Chromium only (desktop): the check is the worker's own code, the same in every browser.
+// Chromium only (desktop): the check is the worker's own code, the same in every browser, and the run's spec
+// (docs/superpowers/specs/2026-11-23-tests-0-7-0-design.md §1) leaves Firefox beyond @offline out.
 import type { Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { expect, shot, shotsDir070, test } from "../support/test";
@@ -128,16 +129,16 @@ test("sw #2: the kept app page changed in the cache is never shown at an offline
   await tamper(page, name, "/index.html", `<!doctype html><title>Changed</title><p>${CHANGED}</p>`, "text/html");
   await page.context().setOffline(true);
   try {
-    // The start fails rather than run the changed page: the reload gets no page, or anything but the changed one.
+    // The start fails rather than run the changed page. The page is served `no-cache`, so the HTTP cache can't answer
+    // offline either: only the worker's kept page could, and it is deleted instead.
     const failed = await page.reload().then(
       () => false,
       () => true,
     );
-    // Chromium shows its own error page for a start that got no page; anything else must have finished loading.
-    if (failed) await expect(page).toHaveURL(/^chrome-error:/);
-    else await page.waitForLoadState();
+    expect(failed, "offline, the start fails rather than run the changed page").toBe(true);
+    // Chromium's own error page for a start that got no page.
+    await expect(page).toHaveURL(/^chrome-error:/);
     const shown = await page.content();
-    test.info().annotations.push({ type: "offline start", description: failed ? "the reload failed" : "the reload answered" });
     expect(shown, "offline, never the changed page").not.toContain(CHANGED);
     await expect(page).not.toHaveTitle("Changed");
   } finally {

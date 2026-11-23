@@ -14,20 +14,28 @@
 // 3. Deactivating a user deletes their copies: the admin's confirmation says so, their browser purges its copy at its
 //    next request (the sign-in page says so; offline nothing opens), and reactivating doesn't bring it back (ADR 0019)
 //    → "devices #3: deactivating a user …".
-// 4. Another user's token is refused with a 403 without a code, and the copy is kept, not wiped: a copy made by Alice,
-//    then Bob's session in the same browser (ADR 0020) → "devices #4: another user's token …". The web app never
-//    hands that token in for Bob (the copy's life follows the session's), so the contact it would make is sent from
-//    the page with Bob's session, as the second line behind it.
+//    The same signed out (§4.4 "signed in or not"): a user who signed out before the deactivation; opening the sign-in
+//    page asks after the copies kept here and removes theirs → "devices #5: signed out before the deactivation …".
+// 4. Another user's copy in the same browser (ADR 0020, §4.11): a copy made by Alice, then Bob's session there. The main
+//    protection, the client's: Bob's sign-in, the sign-in page's sweep and a reload never make a contact with Alice's
+//    token, and don't wipe her copy, which still opens for her offline. The second line, the server's: that contact
+//    (sent from the page with Bob's session, as the app never sends it) is refused with a 403 without a code, and the
+//    slot stays listed → "devices #4: another user's copy …". No Vitest covers the client's handling of a 403 contact
+//    (it never happens through the app), and this test can't either.
 // Left out: the device list's "had N changes waiting" from a real browser's offline edits (the contact that reports
 // them needs the browser online again, which uploads them first); #2 reports them through the contact route instead.
-// Chromium only (desktop): the list and dialogs are the web app's own, and Firefox's offline runs are offline.spec.ts's.
+// Chromium only (desktop): the run's spec (docs/superpowers/specs/2026-11-23-tests-0-7-0-design.md §1) leaves Firefox
+// beyond @offline out.
+// The users made for #3 and #5 are deleted at the end (support/users.ts removeUser), not reactivated and left as the
+// plan's Task 6 said: its review (point 12) gave the suite a cheap deletion, and a user left behind would show in
+// Admin, Users for every later test and run.
 // Each test's slots are deleted after it, as an account keeps at most 20; device-list assertions look at the test's
 // own row only, so the tests run beside the others.
 import type { Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { dismissInstallHint, notePage } from "../calendar/helpers";
 import { baseURL, secrets, usernames } from "../support/env";
-import { limitWindow, reservePassword, signIn } from "../support/session";
+import { limitWindow, reserve, reservePassword, signIn } from "../support/session";
 import { expect, shot, shotsDir070, test } from "../support/test";
 import { invitedUser, removeUser, type TestUser } from "../support/users";
 
@@ -233,8 +241,8 @@ async function toggle(page: Page, user: TestUser, action: "Deactivate" | "Reacti
 
 test("devices #3: deactivating a user wipes their copy at their next request, and reactivating doesn't bring it back @devices", async ({ browser, projectContextOptions, page }) => {
   test.setTimeout(240_000);
-  // Password checks: the user's 2 (turning offline on, signing in again), Alice's up to 3 (deactivate and reactivate
-  // if her window has closed, the deletion).
+  // Password checks: the user's 1 (turning offline on) and 1 sign-in, each on its own ledger; Alice's up to 3
+  // (deactivate and reactivate if her window has closed, the deletion).
   const user = await invitedUser(browser, projectContextOptions, "e2e-devices");
   try {
     const who = asUser(user);
@@ -253,18 +261,20 @@ test("devices #3: deactivating a user wipes their copy at their next request, an
     // with the copy's token, and is answered "wipe". The copy goes, and the sign-in page says so.
     await expect(user.page).toHaveURL(/\/signin/, { timeout: 30_000 });
     await expect(user.page.getByText("The offline copy on this device was removed.")).toBeVisible();
-    expect(await slotIds(user.page), "no copy left in this browser").toEqual([]);
+    // The message shows before the IndexedDB wipe has finished (mode.ts wipeCopy).
+    await expect.poll(() => slotIds(user.page), { message: "no copy left in this browser" }).toEqual([]);
 
     // Offline nothing opens: the form finds no copy of theirs.
     await signInOffline(user.page, who);
     await expect(bar(user.page)).toContainText("This device keeps no copy of your notes.");
     await expect(user.page.getByText("this device keeps no notes of this user")).toBeVisible({ timeout: 30_000 });
+    await expect(user.page).toHaveURL(/\/signin/);
     await user.context.setOffline(false);
 
     await toggle(page, user, "Reactivate");
 
     // Signed in again: no copy came back, on this device or on the server.
-    await user.reservePassword();
+    await reserve(`sign-in-${user.username}`);
     await user.page.goto("/signin");
     await user.page.getByLabel("Username").fill(user.username);
     await user.page.getByLabel("Password", { exact: true }).fill(user.password);
@@ -277,13 +287,56 @@ test("devices #3: deactivating a user wipes their copy at their next request, an
     const slots = (await (await user.context.request.get("/api/account/mirror-slots")).json()) as Slot[];
     expect(slots, "no slot on the server after the reactivation").toEqual([]);
   } finally {
-    await user.page.goto("about:blank").catch(() => undefined);
-    await user.context.close();
-    await removeUser(user.username);
+    await remove(user);
   }
 });
 
-test("devices #4: another user's token is refused with a 403, and that copy is kept, not wiped @devices", async ({ freshSession, aliceApi, folder }) => {
+/** The test user's context closed and the user deleted; a failed deletion is noted, never in place of the test's own error. */
+async function remove(user: TestUser) {
+  await user.page.goto("about:blank").catch(() => undefined);
+  await user.context.close();
+  try {
+    await removeUser(user.username);
+  } catch (error) {
+    test.info().annotations.push({ type: "cleanup", description: `the test user wasn't deleted: ${(error as Error).message}` });
+  }
+}
+
+test("devices #5: signed out before the deactivation, the sign-in page removes the copy @devices", async ({ browser, projectContextOptions, page }) => {
+  test.setTimeout(240_000);
+  // Password checks: the user's 1 (turning offline on); Alice's up to 2 (deactivate if her window has closed, the deletion).
+  const user = await invitedUser(browser, projectContextOptions, "e2e-devices");
+  try {
+    const who = asUser(user);
+    await prepare(user.page);
+    const send = (method: string, url: string, data?: unknown) => user.context.request.fetch(url, { method, data, headers: { Origin: baseURL } });
+    expect((await send("POST", "/api/vaults", { name: "Notes" })).ok(), "the user's vault").toBe(true);
+    expect((await send("PUT", "/api/notes/Notes/Plan.md", { content: "# Plan\n\nMine.\n" })).ok(), "the user's note").toBe(true);
+    const mine = await turnOn(user.page, who, "Notes");
+    made = made.filter((id) => id !== mine);
+
+    // Signed out online with nothing waiting: the copy stays here, locked.
+    await user.page.getByRole("button", { name: "Sign out" }).click();
+    await expect(user.page).toHaveURL(/\/signin/);
+    expect(await slotIds(user.page), "signing out keeps the copy").toEqual([mine]);
+    await user.page.goto("about:blank");
+
+    await toggle(page, user, "Deactivate");
+
+    // Back at the sign-in page: it asks after each copy kept here with its token, and removes theirs.
+    await user.page.goto("/signin");
+    await expect.poll(() => slotIds(user.page), { message: "the sign-in page removed the copy", timeout: 30_000 }).toEqual([]);
+    await signInOffline(user.page, who);
+    await expect(bar(user.page)).toContainText("This device keeps no copy of your notes.");
+    await expect(user.page.getByText("this device keeps no notes of this user")).toBeVisible({ timeout: 30_000 });
+    await expect(user.page).toHaveURL(/\/signin/);
+    await user.context.setOffline(false);
+  } finally {
+    await remove(user);
+  }
+});
+
+test("devices #4: another user's copy: Bob's session never contacts with its token and doesn't wipe it; the server refuses that contact with a 403 @devices", async ({ freshSession, aliceApi, folder }) => {
   const { page } = await freshSession("alice");
   await prepare(page);
   await aliceApi.putNote(`/Work/${folder}/Plan.md`, "# Plan\n\nAlice's, kept.\n");
@@ -294,22 +347,31 @@ test("devices #4: another user's token is refused with a 403, and that copy is k
   await page.goto(notePage(`/Work/${folder}/Plan.md`));
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/\/signin/);
+  // Every contact from here to Bob's reload: none may hand in Alice's token (§4.11, the client's protection).
+  const contacts: string[] = [];
+  const listen = (request: import("@playwright/test").Request) => {
+    if (request.method() === "POST" && request.url().endsWith("/api/account/mirror-slots/contact")) contacts.push(request.postData() ?? "");
+  };
+  page.on("request", listen);
   test.info().setTimeout(test.info().timeout + limitWindow);
   await signIn(page, "bob");
   expect(await slotIds(page), "Bob's sign-in sets Alice's copy aside, it doesn't wipe it").toContain(mine);
 
-  // The contact a browser would make for Bob with Alice's token: refused, with no wipe code.
+  // Bob's next page load keeps it too, and the app made no contact with her token meanwhile.
+  await page.reload();
+  await expect(page).not.toHaveURL(/\/signin/);
+  expect(await slotIds(page), "Alice's copy stays in this browser").toContain(mine);
+  page.off("request", listen);
+  expect(contacts.filter((body) => body.includes(slot.token)), "Bob's session made no contact with Alice's token").toEqual([]);
+
+  // The server's second line: the contact the app never makes for Bob, sent from the page with his session, is
+  // refused without a wipe code, and her slot stays listed.
   const answer = await page.evaluate(async (token) => {
     const response = await fetch("/api/account/mirror-slots/contact", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
     return { status: response.status, code: ((await response.json().catch(() => ({}))) as { code?: string }).code ?? null };
   }, slot.token);
   expect(answer, "another user's token: 403 without a code").toEqual({ status: 403, code: null });
-
-  // Kept: on the server, and in this browser after Bob's next page load.
   expect((await aliceApi.json<Slot[]>("GET", "/api/account/mirror-slots")).map((s) => s.id), "Alice's slot stays").toContain(mine);
-  await page.reload();
-  await expect(page).not.toHaveURL(/\/signin/);
-  expect(await slotIds(page), "Alice's copy stays in this browser").toContain(mine);
 
   // And it still opens for Alice, offline, with her password.
   await signInOffline(page, alice(), notePage(`/Work/${folder}/Plan.md`));
