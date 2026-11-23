@@ -18,7 +18,8 @@
 // Left out:
 // - The password window (`PUT /api/account/embeddings-key` needs it): a joined user's session is a normal one, whose
 //   window is always open; a remembered session's closes after 30 minutes, longer than a test.
-// - "Move these N vaults to TensorX too?" beyond Not now: the new user owns no vault to move until the dialog's own.
+// - "Move these N vaults to TensorX too?" beyond Not now (asserted to move nothing): Move would send the new account's
+//   Welcome vault, eight notes, to the paid service.
 // - A refused key (401/403 from TensorX) and "TensorX refused the key": the proxy replaces every key, so none is refused.
 // - Replace, discreet vaults, shared vaults on the owner's key, BYOK switched off: xUnit (the BYOK spec's tests) and
 //   other stacks.
@@ -28,7 +29,7 @@ import { baseURL, secrets, type User } from "../support/env";
 import { nextIndex, waitIndexed } from "../support/search";
 import { reservePassword } from "../support/session";
 import { expect, shot, shotsDir070, test } from "../support/test";
-import { invitedUser, type TestUser } from "./users-tmp";
+import { invitedUser, type TestUser } from "../support/users";
 
 test.use({ shotsDir: shotsDir070 });
 
@@ -74,13 +75,12 @@ test("BYOK: a saved key is checked and kept, a new vault starts on it, removing 
     await expect(section.getByText("TensorX key: saved, ends in …-key", { exact: true })).toBeVisible();
     await expect(section.getByLabel("TensorX key", { exact: true }), "the field goes once the key is saved").toHaveCount(0);
     await expect(section.getByRole("button", { name: "Replace key" })).toBeVisible();
-    if (movable.length > 0) {
-      // The first save asks once which vaults go along; none moves without a tick and Move.
-      const offer = page.getByRole("dialog", { name: /^Move (this vault|these \d+ vaults) to TensorX too\?$/ });
-      await expect(offer).toBeVisible();
-      await offer.getByRole("button", { name: "Not now" }).click();
-      await expect(offer).toHaveCount(0);
-    }
+    // The first save asks once which of her vaults go along (a new account owns Welcome), all ticked; Not now moves none.
+    expect(movable.map((v) => v.name)).toContain("Welcome");
+    const offer = page.getByRole("dialog", { name: /^Move (this vault|these \d+ vaults) to TensorX too\?$/ });
+    await expect(offer.getByRole("checkbox", { name: "Welcome" })).toBeChecked();
+    await offer.getByRole("button", { name: "Not now" }).click();
+    await expect(offer).toHaveCount(0);
     // Read back: saved, its last four characters only, and the key itself in no answer.
     const saved = await api.send("GET", "/api/account/embeddings-key");
     expect(await saved.json()).toEqual({ offered: true, keySaved: true, last4: "-key", refusedAt: null });
@@ -99,6 +99,8 @@ test("BYOK: a saved key is checked and kept, a new vault starts on it, removing 
     const box = dialog.getByRole("checkbox", { name: "Search by meaning with TensorX (your own key)" });
     await expect(box).toBeChecked();
     await expect(dialog.getByText("Its text and the searches that include it go to TensorX. Unticked, it stays on this server.", { exact: true })).toBeVisible();
+    // The sheet fades in: the screenshot once it has.
+    await expect.poll(() => page.evaluate(() => document.getAnimations().filter((a) => a.playState === "running").length)).toBe(0);
     await shot(page, testInfo, "tensorx");
     await dialog.getByRole("button", { name: "Create vault" }).click();
     await expect(dialog).toHaveCount(0);

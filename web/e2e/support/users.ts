@@ -5,7 +5,8 @@
 import { expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { Api } from "./api";
-import { reserve } from "./session";
+import { secrets } from "./env";
+import { reserve, reservePassword } from "./session";
 
 export type TestUser = {
   username: string;
@@ -38,17 +39,27 @@ export async function invitedUser(browser: Browser, options: BrowserContextOptio
     await alice.dispose();
   }
   const context = await browser.newContext({ ...options, storageState: { cookies: [], origins: [] } });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const page = await context.newPage();
-  await page.goto(link).catch(() => {
-    throw new Error("the join link did not open");
-  });
-  await page.getByLabel("Username").fill(username);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page.getByLabel("Recovery key", { exact: true })).toBeVisible();
-  await page.getByLabel(/I have stored my recovery key/).check();
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect.poll(() => new URL(page.url()).pathname, { message: "the join ends on the vault list" }).toBe("/");
+  try {
+    await page.goto(link).catch(() => {
+      throw new Error("the join link did not open");
+    });
+    await page.getByLabel("Username").fill(username);
+    await page.getByLabel("Password", { exact: true }).fill(password);
+    await page.getByRole("button", { name: "Create account" }).click();
+    await expect(page.getByLabel("Recovery key", { exact: true })).toBeVisible();
+    // Continue needs Copy or Download first; copied into this context's clipboard, never read back.
+    await page.getByRole("button", { name: "Copy" }).click();
+    await page.getByLabel(/I have stored my recovery key/).check();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect.poll(() => new URL(page.url()).pathname, { message: "the join ends on the vault list" }).toBe("/");
+  } catch (error) {
+    // The failure's screenshot would show the recovery key, and a half-made user would stay: neither.
+    await context.close();
+    await removeUser(username);
+    throw error;
+  }
 
   const admin = await Api.as("alice");
   try {
@@ -66,4 +77,22 @@ export async function confirmAs(user: TestUser) {
   await user.reservePassword();
   const response = await user.context.request.post("/api/session/confirm", { data: { password: user.password }, headers: { Origin: new URL(user.page.url()).origin } });
   if (!response.ok()) throw new Error(`POST /api/session/confirm: ${response.status()}`);
+}
+
+/**
+ * Alice deletes the user through Admin → Users (`POST /api/admin/users/{id}/delete`, her password), if they exist:
+ * for a test's cleanup, and for a join that failed half-way.
+ */
+export async function removeUser(username: string) {
+  const admin = await Api.as("alice");
+  try {
+    const users = await admin.json<{ id: string; username: string }[]>("GET", "/api/admin/users");
+    const id = users.find((u) => u.username === username)?.id;
+    if (!id) return;
+    await reservePassword("alice");
+    const response = await admin.send("POST", `/api/admin/users/${encodeURIComponent(id)}/delete`, { data: { password: secrets().passwords.alice, confirm: username } });
+    if (!response.ok()) throw new Error(`POST /api/admin/users/…/delete: ${response.status()}`);
+  } finally {
+    await admin.dispose();
+  }
 }
