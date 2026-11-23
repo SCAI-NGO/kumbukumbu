@@ -3,6 +3,7 @@ import { Link2 } from "lucide-react";
 import { useBacklinks } from "../api/notes";
 import { crumbOf, titleOf } from "../api/paths";
 import { useOpenNote } from "../shell/openInPane";
+import SimilarNotes from "./SimilarNotes";
 import UnlinkedMentions from "./UnlinkedMentions";
 
 /**
@@ -13,7 +14,13 @@ export default function BacklinksList({ path, panel = false }: { path: string; p
   const backlinks = useBacklinks(path);
   const openNote = useOpenNote();
   const sources = [...new Map((backlinks.data ?? []).map((b) => [b.path, b])).values()];
-  const mentions = <UnlinkedMentions path={path} linked={sources.length > 0} panel={panel} />;
+  // Below the mentions, as what links here by meaning rather than by name.
+  const mentions = (
+    <>
+      <UnlinkedMentions path={path} linked={sources.length > 0} panel={panel} />
+      <SimilarNotes path={path} />
+    </>
+  );
   if (sources.length === 0) return mentions;
 
   return (

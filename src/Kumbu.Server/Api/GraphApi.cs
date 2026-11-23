@@ -4,6 +4,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Graph;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Microsoft.AspNetCore.Http.HttpResults;
 
@@ -38,6 +39,15 @@ public sealed record GraphNodeDetailView(
 public sealed record GraphPathsView(
     IReadOnlyList<GraphNodeView> Nodes, IReadOnlyList<int[]> Edges, IReadOnlyList<int[]> Paths, bool More, string Why);
 
+/// <summary>How close the two notes of an edge are in meaning, 0 to 1 (<see cref="PairSimilarity"/>); null while one of
+/// them isn't embedded by its vault's current model.</summary>
+public sealed record GraphSimilarityPair(string From, string To, double? Score);
+
+/// <summary>The similarity of a local graph's edges between two notes. <c>state</c> <c>ready</c>, <c>preparing</c> or
+/// <c>off</c>, with <c>reason</c> where it isn't ready (or, when ready, a vault left out and why); <c>pairs</c> is empty unless
+/// ready.</summary>
+public sealed record GraphSimilarityView(string State, IReadOnlyList<GraphSimilarityPair> Pairs, string? Reason);
+
 /// <summary>The graph of links between notes (graph backend spec §7.2), over the vaults the caller has: a hidden discreet vault
 /// answers 404 like an unknown one. The global and the local graph carry an <c>ETag</c> of the vaults' names and their graphs'
 /// versions (several vaults: in the order asked), which changes with a link or a rename and not with prose.</summary>
@@ -53,6 +63,7 @@ public static class GraphApi
         api.MapGet("/local", LocalAsync).Errors(400, 401, 404, 503);
         api.MapGet("/node", NodeAsync).Errors(400, 401, 404, 503);
         api.MapGet("/paths", PathsAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/similarity", SimilarityAsync).Errors(400, 401, 404, 503);
     }
 
     /// <summary><c>vault</c>, repeated: the vaults to draw (default: all the caller has). <c>path</c> (repeated, folders or notes) and <c>tag</c>
@@ -104,22 +115,12 @@ public static class GraphApi
         string? path, int? depth, string? dir, int? cap, string[]? tag, bool? days, bool? attachments, bool? ghosts, bool? archive,
         HttpContext http, INoteStore store, CancellationToken ct)
     {
-        var note = Target(path);
-        var d = depth ?? 1;
-        var c = cap ?? 20;
-        if (d is < 1 or > 3) throw ApiErrors.BadRequest("depth is 1 to 3.");
-        if (c is < 1 or > 100) throw ApiErrors.BadRequest("cap is 1 to 100.");
-        var direction = Direction(dir);
-        // No path filter: `path` names the note, and the walk is its neighbourhood anyway.
-        var filter = Filter(null, tag, days, attachments, ghosts, archive, scope: note);
-
-        var g = await GraphOfAsync(store, note, ct);
-        if (g.IndexOf(note) is null) throw await NotInGraphAsync(store, note, ct);
+        var (g, query) = await LocalQueryAsync(path, depth, dir, cap, tag, days, attachments, ghosts, archive, store, ct);
         var etag = ETag([g]);
         http.Response.Headers.ETag = etag;
         if (EntityTags.NoneMatchNames(http.Request, new(etag))) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
 
-        var local = GraphQueries.Local(g, note, d, direction, c, filter);
+        var local = query();
         var shown = new Dictionary<int, int>();
         var nodes = new List<GraphNodeView>();
         foreach (var (node, level) in local.Nodes)
@@ -131,6 +132,57 @@ public static class GraphApi
         return TypedResults.Ok(new LocalGraphView(
             nodes, [.. local.Edges.Select(e => Edge(g.Edges[e], shown))],
             local.LeftOut.ToDictionary(l => shown[l.Key].ToString(System.Globalization.CultureInfo.InvariantCulture), l => l.Value)));
+    }
+
+    /// <summary>The parameters as for the local graph: its edges between two notes (a day note is a note), each pair once, with
+    /// how close the two are in meaning, from the vectors the server holds (spec 2026-11-22-graph-out-of-preview §1). Nothing is
+    /// embedded, so nothing goes to an embedding provider. No <c>ETag</c>: the scores change with the prose, the graph's tag doesn't.</summary>
+    private static async Task<Ok<GraphSimilarityView>> SimilarityAsync(
+        string? path, int? depth, string? dir, int? cap, string[]? tag, bool? days, bool? attachments, bool? ghosts, bool? archive,
+        INoteStore store, ISearchIndex index, CancellationToken ct)
+    {
+        var (g, query) = await LocalQueryAsync(path, depth, dir, cap, tag, days, attachments, ghosts, archive, store, ct);
+        var local = query();
+        var pairs = new List<(VaultPath A, VaultPath B)>();
+        var seen = new HashSet<(int, int)>();
+        foreach (var e in local.Edges)
+        {
+            var edge = g.Edges[e];
+            if (edge.From == edge.To || !IsNote(g.Nodes[edge.From]) || !IsNote(g.Nodes[edge.To])) continue;
+            if (!seen.Add((Math.Min(edge.From, edge.To), Math.Max(edge.From, edge.To)))) continue;
+            pairs.Add((g.Nodes[edge.From].Path!, g.Nodes[edge.To].Path!));
+        }
+
+        var vault = VaultPath.Root.Child(Target(path).Segments[0]);
+        var stored = await index.VectorsAsync(vault, ct);
+        var state = stored.State.ToString().ToLowerInvariant();
+        if (stored.State != SemanticState.Ready) return TypedResults.Ok(new GraphSimilarityView(state, [], stored.Reason));
+
+        var scores = PairSimilarity.Score(stored, pairs);
+        return TypedResults.Ok(new GraphSimilarityView(
+            state, [.. pairs.Select((p, i) => new GraphSimilarityPair(p.A.Value, p.B.Value, scores[i] is { } s ? Math.Round(s, 4) : null))], stored.Reason));
+
+        static bool IsNote(GraphNode node) => node.Kind is NodeKind.Note or NodeKind.Day && node.Path is not null;
+    }
+
+    /// <summary>The local graph's parameters checked, its vault's graph, and the walk, for <see cref="LocalAsync"/> and
+    /// <see cref="SimilarityAsync"/>, so the two always walk alike.</summary>
+    private static async Task<(LinkGraph Graph, Func<LocalGraph> Query)> LocalQueryAsync(
+        string? path, int? depth, string? dir, int? cap, string[]? tag, bool? days, bool? attachments, bool? ghosts, bool? archive,
+        INoteStore store, CancellationToken ct)
+    {
+        var note = Target(path);
+        var d = depth ?? 1;
+        var c = cap ?? 20;
+        if (d is < 1 or > 3) throw ApiErrors.BadRequest("depth is 1 to 3.");
+        if (c is < 1 or > 100) throw ApiErrors.BadRequest("cap is 1 to 100.");
+        var direction = Direction(dir);
+        // No path filter: `path` names the note, and the walk is its neighbourhood anyway.
+        var filter = Filter(null, tag, days, attachments, ghosts, archive, scope: note);
+
+        var g = await GraphOfAsync(store, note, ct);
+        if (g.IndexOf(note) is null) throw await NotInGraphAsync(store, note, ct);
+        return (g, () => GraphQueries.Local(g, note, d, direction, c, filter));
     }
 
     private static async Task<Ok<GraphNodeDetailView>> NodeAsync(string? path, INoteStore store, CancellationToken ct)
