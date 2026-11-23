@@ -190,8 +190,13 @@ export function useSyncSocket() {
       };
     };
 
+    // Without a network the socket is dead, but may not hear of it for minutes (no packet says so): closed at once,
+    // so the offline mode, which waits for the socket to be down, switches (offline mode design §3a).
+    const lost = () => socket?.close();
+    window.addEventListener("offline", lost);
     void connect();
     return () => {
+      window.removeEventListener("offline", lost);
       stopped = true;
       clearTimeout(timer);
       const s = socket;

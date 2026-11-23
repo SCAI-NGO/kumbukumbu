@@ -16,7 +16,11 @@ router.subscribe((state) => {
 
 export const queryClient = new QueryClient({
   defaultOptions: {
+    // The offline mode decides where reads and writes go (offline/host.ts): a query or mutation held back while the
+    // browser says it is offline would never reach the copy on this device.
+    mutations: { networkMode: "always" },
     queries: {
+      networkMode: "always",
       // A refusal (4xx) won't change on its own; a fault or a dropped connection may.
       retry: (failures, error) => !(error instanceof HttpError && error.status < 500) && failures < 2,
     },

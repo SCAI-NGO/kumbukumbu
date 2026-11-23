@@ -84,12 +84,12 @@ function RequireSession({ children }: { children?: ReactNode }) {
     if (session.data) followSession(queryClient, navigate, pathname(), session.data.discreet);
   }, [session.data, session.dataUpdatedAt, queryClient, navigate, pathname]);
 
+  // Offline, the copy on this device stands in for the session: at once rather than after the session's retries, and
+  // when the session read again fails while offline (a refetch keeps its old data, but reports the error); without
+  // the copy unlocked, the sign-in form opens it (§3a).
+  if (offline && copyOpen) return children ?? <Outlet />;
   if (session.isPending) return null;
-  if (session.isError && !session.data && offline) {
-    // Offline, the copy on this device stands in for the session; without it unlocked, the sign-in form opens it (§3a).
-    if (copyOpen) return children ?? <Outlet />;
-    return <Navigate to={`/signin?next=${encodeURIComponent(pathname())}`} replace />;
-  }
+  if (session.isError && !session.data && offline) return <Navigate to={`/signin?next=${encodeURIComponent(pathname())}`} replace />;
   // A 401 has already sent the app to sign-in; anything else is shown.
   if (session.isError) return <p className="p-4 text-text">{errorText(session.error)}</p>;
   return children ?? <Outlet />;

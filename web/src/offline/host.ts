@@ -7,7 +7,7 @@ import type { SealedMirror } from "eidolon-core/store/mirror";
 import { api, call } from "../api/client";
 import { useOfflineCopy } from "./copy";
 import { enginesLocalChanged, listenToEngines } from "./engines";
-import { onBeforeLock, onContacted, useOfflineMode } from "./mode";
+import { mirrorCopies, onBeforeLock, onContacted, useOfflineMode } from "./mode";
 import { nameVaults, OfflineSource, setOfflineSource } from "./source";
 import { flushOfflineEditors, onOfflineWrite, setOfflineWrites } from "./writing";
 
@@ -33,11 +33,24 @@ function follow(queryClient: QueryClient): void {
   for (const key of READ_AGAIN) void queryClient.invalidateQueries({ queryKey: [key] });
 }
 
+/** Whether this device keeps any copy: offline after a reload, the bar says so before the sign-in form opens it. */
+function lookForCopies(): void {
+  if (typeof indexedDB === "undefined") return;
+  void mirrorCopies()
+    .then((copies) => copies.headers())
+    .then((headers) => useOfflineCopy.setState({ stored: headers.length > 0 || useOfflineCopy.getState().header !== null }))
+    .catch(() => {});
+}
+
 /** Once, at the app's start. Returns a function that undoes it, for the tests. */
 export function runOfflineHost(queryClient: QueryClient): () => void {
   const stops = [
     useOfflineMode.subscribe(() => follow(queryClient)),
-    useOfflineCopy.subscribe(() => follow(queryClient)),
+    useOfflineCopy.subscribe((s, before) => {
+      follow(queryClient);
+      // Removed or wiped: another user's copy may still be here.
+      if (s.header === null && before.header !== null) lookForCopies();
+    }),
     listenToEngines({
       conflict: (vault, original, copy) => useOfflineMode.getState().conflict({ vault, original, copy }),
       sessionLost: () => useOfflineMode.getState().sessionLost(),
@@ -50,6 +63,7 @@ export function runOfflineHost(queryClient: QueryClient): () => void {
     onContacted((mirror) => void call(api.GET("/api/vaults")).then((vaults) => nameVaults(mirror, vaults)).catch(() => {})),
   ];
   follow(queryClient);
+  lookForCopies();
   return () => {
     for (const stop of stops) stop();
     reading = null;
