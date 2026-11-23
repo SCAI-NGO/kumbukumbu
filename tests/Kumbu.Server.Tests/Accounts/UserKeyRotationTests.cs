@@ -740,7 +740,8 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
     {
         var (bob, vaultId, _) = await SharedAsync();
         var before = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).SingleAsync(Ct);
-        await Slots.UpdateOneAsync(s => s.Id == before.Id, Builders<SlotDocument>.Update.Set(s => s.Alias, (byte[])[.. before.Alias!.Take(before.Alias!.Length - 1), 0]), cancellationToken: Ct);
+        // Flipped, not zeroed: a last byte that was already 0 would leave the alias opening, once in 256 runs.
+        await Slots.UpdateOneAsync(s => s.Id == before.Id, Builders<SlotDocument>.Update.Set(s => s.Alias, (byte[])[.. before.Alias!.Take(before.Alias!.Length - 1), (byte)(before.Alias![^1] ^ 0xFF)]), cancellationToken: Ct);
 
         Assert.NotNull(await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct));
 
