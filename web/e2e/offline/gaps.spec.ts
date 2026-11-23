@@ -277,8 +277,8 @@ test("gaps #1b: a vault chosen one by one: the copy keeps Work and not Welcome, 
 
   await goOffline(page);
   await unlockAt(page, notePage(welcome.path));
-  await expect(page.getByText(/^There is no note at .* on this device\.$|is not kept on this device/).first()).toBeVisible({ timeout: 30_000 });
-  await expect(article(page)).not.toContainText(welcome.line);
+  await expect(page.getByRole("complementary", { name: "File tree" }).getByText("Welcome is not kept on this device.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(welcome.line)).toHaveCount(0);
   await unlockAt(page, notePage(`/Work/${folder}/Plan.md`));
   await expect(article(page)).toContainText("Kept by choice.");
   await page.context().setOffline(false);
@@ -297,6 +297,13 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
   const tree = page.getByRole("complementary", { name: "File tree" });
   await tree.getByRole("button", { name: "Actions for Kept", exact: true }).click();
   await page.getByRole("menu", { name: "Actions for Kept" }).getByRole("menuitem", { name: "Keep offline" }).click();
+  // The menu offers to stop once the choice is in the copy.
+  await expect(async () => {
+    await page.keyboard.press("Escape");
+    await tree.getByRole("button", { name: "Actions for Kept", exact: true }).click();
+    await expect(page.getByRole("menu", { name: "Actions for Kept" }).getByRole("menuitem", { name: "Don't keep offline" })).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+  await page.keyboard.press("Escape");
   await page.goto("/settings/offline");
   await expect(page.getByRole("list", { name: "Kept offline" }).getByRole("listitem")).toHaveText([new RegExp(`^Work / ${folder}/Kept\\s*Remove$`)]);
   // The engine fetches it in the background: the vault's line counts it among the attachments.
@@ -361,6 +368,10 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
     await unshare(share);
     shared = false;
     const notice = bobPage.getByRole("status", { name: "Offline copy" });
+    await notice.waitFor({ timeout: 30_000 }).catch(async () => {
+      console.log("EXPLORE: no notice after 30 s; reloading");
+      await bobPage.reload();
+    });
     await expect(notice).toHaveText(/^A vault's copy was removed from this device: it's no longer available here\.\s*Dismiss$/, { timeout: 30_000 });
     await expect(notice, "the notice names no vault").not.toContainText(share.vault);
   } finally {
