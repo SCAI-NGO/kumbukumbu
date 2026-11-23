@@ -31,7 +31,7 @@
 // Admin, Users for every later test and run.
 // Each test's slots are deleted after it, as an account keeps at most 20; device-list assertions look at the test's
 // own row only, so the tests run beside the others.
-import type { Page } from "@playwright/test";
+import type { Page, Request } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { dismissInstallHint, notePage } from "../calendar/helpers";
 import { baseURL, secrets, usernames } from "../support/env";
@@ -350,7 +350,7 @@ test("devices #4: another user's copy: Bob's session never contacts with its tok
   await expect(page).toHaveURL(/\/signin/);
   // Every contact from here to Bob's reload: none may hand in Alice's token (§4.11, the client's protection).
   const contacts: string[] = [];
-  const listen = (request: import("@playwright/test").Request) => {
+  const listen = (request: Request) => {
     if (request.method() === "POST" && request.url().endsWith("/api/account/mirror-slots/contact")) contacts.push(request.postData() ?? "");
   };
   page.on("request", listen);
@@ -358,10 +358,15 @@ test("devices #4: another user's copy: Bob's session never contacts with its tok
   await signIn(page, "bob");
   expect(await slotIds(page), "Bob's sign-in sets Alice's copy aside, it doesn't wipe it").toContain(mine);
 
-  // Bob's next page load keeps it too, and the app made no contact with her token meanwhile.
+  // Bob's next page load keeps it too, and the app made no contact with her token meanwhile. Its contact goes out when
+  // the socket opens (useSyncSocket.ts), after the reload: the listener stays until the socket is there, the app's
+  // copy lookup in IndexedDB is behind a read of ours, and a request of ours has gone through after it.
+  const socket = page.waitForEvent("websocket", { timeout: 30_000 });
   await page.reload();
+  await socket;
   await expect(page).not.toHaveURL(/\/signin/);
   expect(await slotIds(page), "Alice's copy stays in this browser").toContain(mine);
+  expect(await page.evaluate(() => fetch("/api/session").then((r) => r.status)), "Bob is signed in").toBe(200);
   page.off("request", listen);
   expect(contacts.filter((body) => body.includes(slot.token)), "Bob's session made no contact with Alice's token").toEqual([]);
 

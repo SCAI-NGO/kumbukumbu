@@ -147,7 +147,6 @@ test("sw #2: the kept app page changed in the cache is never shown at an offline
   // The changed page was deleted: the next online start keeps nothing of it.
   await page.goto("/");
   await expect(page).toHaveTitle("Kumbu²");
-  expect(await keptHash(page, name, "/index.html"), "the changed page is deleted").not.toBe(
-    createHash("sha256").update(`<!doctype html><title>Changed</title><p>${CHANGED}</p>`).digest("hex"),
-  );
+  // Pages come from the network first (worker.ts), so nothing online puts it back.
+  expect(await keptHash(page, name, "/index.html"), "the changed page is deleted").toBeNull();
 });
