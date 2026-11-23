@@ -324,6 +324,8 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
   await article(page).getByRole("link", { name: "Open the image kept.png" }).click();
   await expect(viewer("kept.png").getByRole("img", { name: "kept.png" })).toBeVisible();
   await page.goBack();
+  await expect(article(page)).toBeVisible();
+  console.log("EXPLORE html:", (await article(page).innerHTML()).replace(/class="[^"]*"/g, "").slice(0, 3000));
   await article(page).getByRole("link", { name: "Open the image rest.png" }).click();
   await expect(viewer("rest.png").getByRole("alert")).toHaveText("Opens when you're online.");
   await page.context().setOffline(false);
@@ -368,9 +370,18 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
     await unshare(share);
     shared = false;
     const notice = bobPage.getByRole("status", { name: "Offline copy" });
-    await notice.waitFor({ timeout: 30_000 }).catch(async () => {
-      console.log("EXPLORE: no notice after 30 s; reloading");
-      await bobPage.reload();
+    await notice.waitFor({ timeout: 30_000 }).then(() => console.log("EXPLORE: notice by frame"), async () => {
+      console.log("EXPLORE: no notice after 30 s; reconnecting");
+      await goOffline(bobPage);
+      await bobPage.context().setOffline(false);
+      await notice.waitFor({ timeout: 60_000 }).then(() => console.log("EXPLORE: notice after reconnect"), async () => {
+        console.log("EXPLORE: none after reconnect either");
+        await goOffline(bobPage);
+        await unlockAt(bobPage, notePage(`/${share.vault}/Plan.md`), "bob");
+        console.log("EXPLORE tree:", JSON.stringify(await bobPage.getByRole("complementary", { name: "File tree" }).innerText()));
+        console.log("EXPLORE main:", await bobPage.getByRole("main").innerText());
+        await bobPage.context().setOffline(false);
+      });
     });
     await expect(notice).toHaveText(/^A vault's copy was removed from this device: it's no longer available here\.\s*Dismiss$/, { timeout: 30_000 });
     await expect(notice, "the notice names no vault").not.toContainText(share.vault);

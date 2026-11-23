@@ -315,7 +315,8 @@ test("devices #5: signed out before the deactivation, the sign-in page removes t
     const mine = await turnOn(user.page, who, "Notes");
     made = made.filter((id) => id !== mine);
 
-    // Signed out online with nothing waiting: the copy stays here, locked.
+    // Signed out online with nothing waiting: the copy stays here, locked. (Settings is a window over the shell.)
+    await user.page.goto("/");
     await user.page.getByRole("button", { name: "Sign out" }).click();
     await expect(user.page).toHaveURL(/\/signin/);
     expect(await slotIds(user.page), "signing out keeps the copy").toEqual([mine]);
