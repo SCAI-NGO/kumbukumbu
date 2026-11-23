@@ -5,11 +5,14 @@
 //
 // Records, under the copy's prefix (`c/<copy>/`), every name an HMAC (crypto.ts), so storage shows no vault id or path:
 //   m/<vault>         the vault's meta (id, tag, rights, whether its note texts are all here)
+//   v/<vault>/h       the head: which generation of the state and of each entry is the current one
 //   v/<vault>/s       the engine's SyncState
 //   v/<vault>/e/<p>   a path's entry: what Kumbu² lists for it, and what this device holds
-//   v/<vault>/b/<p>   a path's bytes
+//   v/<vault>/b/<p>   a path's bytes, bound to the version its entry names
 // Every write takes the copy's lock across tabs and reads the entry afresh inside it, so two tabs never write on a
-// stale check; afterwards the other tabs are told which paths changed.
+// stale check; afterwards the other tabs are told which paths changed. Each write stamps its records with a new
+// generation and moves the head to it in the same transaction: an older record put back in its place (by someone
+// without the key, who can still copy records) no longer matches the head, and is read as damage, never acted on.
 import type {
   FetchPolicy, FileKind, FileStat, LocalFiles, RemoteApi, RemoteEntry, StateStore, SyncState, Version, VersionsAnswer,
 } from "../engine/ports";
@@ -97,12 +100,13 @@ export class Records {
 
   name(label: string): Promise<string> { return nameOf(this.p.crypto, this.k.name, label); }
 
-  seal(key: string, plain: Bytes): Promise<Bytes> { return seal(this.p.crypto, this.k.seal, plain, key); }
+  /** `bind`: what else the record belongs to (a body: its entry's version), so it opens only with that. */
+  seal(key: string, plain: Bytes, bind?: string): Promise<Bytes> { return seal(this.p.crypto, this.k.seal, plain, aad(key, bind)); }
 
-  /** Null for a record that is missing or doesn't open under this key at this key (moved or changed on disk). */
-  async open(key: string, sealed: Bytes | null): Promise<Bytes | null> {
+  /** Null for a record that is missing or doesn't open under this key (moved or changed on disk, or bound elsewhere). */
+  async open(key: string, sealed: Bytes | null, bind?: string): Promise<Bytes | null> {
     if (sealed === null) return null;
-    const plain = await open(this.p.crypto, this.k.seal, sealed, key);
+    const plain = await open(this.p.crypto, this.k.seal, sealed, aad(key, bind));
     if (plain === null) console.warn("A record of the offline copy doesn't open; it is left out.");
     return plain;
   }
@@ -122,11 +126,19 @@ export class Records {
   }
 }
 
+const aad = (key: string, bind: string | undefined) => (bind === undefined ? key : `${key}\0${bind}`);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/** Which generation of each record is current. A record of another generation is an older one put back. */
+interface Head { g: number; state: number | null; seqs: Record<string, number> }
+const emptyHead = (): Head => ({ g: 0, state: null, seqs: {} });
+
 const emptyState = (): SyncState => ({ bases: {}, cursor: null, lastFullAt: null, lastSyncAt: null });
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+/** A record as stored: its value, and the generation it was written in. */
+type Stamped<K extends string, T> = { g?: number } & { [k in K]?: T };
 
 export class VaultMirror {
   private readonly entries = new Map<string, Entry>();
@@ -142,12 +154,16 @@ export class VaultMirror {
   /** Reads the vault's records into memory; a new vault starts with none. */
   static async open(r: Records, meta: VaultMeta): Promise<VaultMirror> {
     const v = new VaultMirror(r, meta, await r.vaultNames(meta.id));
-    // Entries only: the bodies, attachments among them, stay on disk until asked for.
-    for (const [key, sealed] of await r.p.storage.scan(`${v.keys.data}e/`)) {
-      const entry = await r.openJson<Entry>(key, sealed);
-      if (entry !== null) v.remember(entry);
-    }
-    v.state = (await r.openJson<SyncState>(v.stateKey, await r.p.storage.get(v.stateKey))) ?? emptyState();
+    // Under the lock, so the head and the records are of one moment.
+    await r.p.locks.run(r.lockName, async () => {
+      const head = await v.readHead();
+      // Entries only: the bodies, attachments among them, stay on disk until asked for.
+      for (const [key, sealed] of await r.p.storage.scan(`${v.keys.data}e/`)) {
+        const entry = v.current(head, await r.openJson<Stamped<"entry", Entry>>(key, sealed));
+        if (entry !== undefined) v.remember(entry);
+      }
+      v.state = (await v.readState(head)) ?? emptyState();
+    });
     return v;
   }
 
@@ -170,6 +186,7 @@ export class VaultMirror {
   get metaKey(): string { return this.keys.meta; }
   get dataPrefix(): string { return this.keys.data; }
   private get stateKey(): string { return `${this.keys.data}s`; }
+  private get headKey(): string { return `${this.keys.data}h`; }
 
   /** A vault taken into the copy: its meta, and nothing else under its name, whatever an earlier mirror left there. */
   static async writeMeta(r: Records, meta: VaultMeta): Promise<void> {
@@ -196,9 +213,10 @@ export class VaultMirror {
   async bytes(path: string): Promise<Bytes | null> {
     this.assertHeld();
     if (this.entries.get(path)?.local === undefined) return null;
+    const local = this.entries.get(path)!.local!;
     const body = await this.bodyKey(path);
-    const bytes = await this.r.open(body, await this.r.p.storage.get(body));
-    // The entry says the bytes are here: missing or unopenable, they were damaged, not deleted.
+    const bytes = await this.r.open(body, await this.r.p.storage.get(body), local.version);
+    // The entry says the bytes are here: missing, unopenable or of another version, they were damaged, not deleted.
     if (bytes === null) throw new DamagedRecordError(path);
     return bytes;
   }
@@ -223,13 +241,16 @@ export class VaultMirror {
 
   /** Another tab changed these paths: read them, and the state, again. */
   async refresh(paths: readonly string[]): Promise<void> {
-    for (const path of paths) {
-      const key = await this.entryKey(path);
-      const entry = await this.r.openJson<Entry>(key, await this.r.p.storage.get(key));
-      if (entry === null) this.entries.delete(path);
-      else this.entries.set(path, entry);
-    }
-    this.state = (await this.r.openJson<SyncState>(this.stateKey, await this.r.p.storage.get(this.stateKey))) ?? this.state;
+    await this.r.p.locks.run(this.r.lockName, async () => {
+      if (this.dropped) return;
+      const head = await this.readHead();
+      for (const path of paths) {
+        const entry = await this.readEntry(head, path);
+        if (entry === undefined) this.entries.delete(path);
+        else this.entries.set(path, entry);
+      }
+      this.state = (await this.readState(head)) ?? this.state;
+    });
   }
 
   // The engine's ports.
@@ -242,15 +263,21 @@ export class VaultMirror {
       },
       save: async (state) => {
         this.assertHeld();
-        this.state = clone(state);
-        const put = [await this.r.sealJson(this.stateKey, state)];
         // A check that went through to the end has every note's text here: the small attachments' turn (design §3a).
-        const notesNowDone = !this.meta.notesDone && state.lastSyncAt !== null;
-        if (notesNowDone) {
-          this.meta = { ...this.meta, notesDone: true };
-          put.push(await this.r.sealJson(this.keys.meta, this.meta));
-        }
-        await this.r.p.storage.write({ put });
+        const notesNowDone = await this.r.p.locks.run(this.r.lockName, async () => {
+          this.assertHeld();
+          const head = await this.readHead();
+          head.state = ++head.g;
+          this.state = clone(state);
+          const put = [await this.r.sealJson(this.stateKey, { g: head.g, state }), await this.r.sealJson(this.headKey, head)];
+          const done = !this.meta.notesDone && state.lastSyncAt !== null;
+          if (done) {
+            this.meta = { ...this.meta, notesDone: true };
+            put.push(await this.r.sealJson(this.keys.meta, this.meta));
+          }
+          await this.r.p.storage.write({ put });
+          return done;
+        });
         this.r.channel.post({ type: "changed", vault: this.id, paths: [] });
         if (notesNowDone) this.onNotesDone?.();
       },
@@ -332,13 +359,14 @@ export class VaultMirror {
     this.assertHeld();
     return this.r.p.locks.run(this.r.lockName, async () => {
       this.assertHeld();
+      const head = await this.readHead();
       const put: [string, Bytes][] = [];
       const remove: string[] = [];
       const done: boolean[] = [];
       const after = new Map<string, Entry | null>();
       for (const path of paths) {
         const key = await this.entryKey(path);
-        const now = (await this.r.openJson<Entry>(key, await this.r.p.storage.get(key))) ?? undefined;
+        const now = await this.readEntry(head, path);
         const outcome = await decide(path, now);
         if (outcome === false) {
           done.push(false);
@@ -348,14 +376,19 @@ export class VaultMirror {
         done.push(true);
         let entry = outcome.entry;
         if (entry !== null && entry.local === undefined && entry.remote === undefined && !(entry.deleted && this.state.bases[path] !== undefined)) entry = null;
-        if (entry === null) remove.push(key);
-        else put.push(await this.r.sealJson(key, entry));
+        if (entry === null) {
+          remove.push(key);
+          delete head.seqs[path];
+        } else {
+          head.seqs[path] = ++head.g;
+          put.push(await this.r.sealJson(key, { g: head.g, entry }));
+        }
         const body = await this.bodyKey(path);
         if (outcome.body === null || entry === null) remove.push(body);
-        else if (outcome.body !== undefined) put.push([body, await this.r.seal(body, outcome.body)]);
+        else if (outcome.body !== undefined) put.push([body, await this.r.seal(body, outcome.body, entry.local?.version)]);
         after.set(path, entry);
       }
-      if (put.length > 0 || remove.length > 0) await this.r.p.storage.write({ put, remove });
+      if (put.length > 0 || remove.length > 0) await this.r.p.storage.write({ put: [...put, await this.r.sealJson(this.headKey, head)], remove });
       for (const [path, entry] of after) {
         if (entry === null) this.entries.delete(path);
         else this.entries.set(path, entry);
@@ -369,6 +402,32 @@ export class VaultMirror {
   nextMtime(): number {
     this.lastMtime = Math.max(this.r.p.clock.now(), this.lastMtime + 1);
     return this.lastMtime;
+  }
+
+  private async readHead(): Promise<Head> {
+    return (await this.r.openJson<Head>(this.headKey, await this.r.p.storage.get(this.headKey))) ?? emptyHead();
+  }
+
+  private async readEntry(head: Head, path: string): Promise<Entry | undefined> {
+    const key = await this.entryKey(path);
+    return this.current(head, await this.r.openJson<Stamped<"entry", Entry>>(key, await this.r.p.storage.get(key)));
+  }
+
+  private async readState(head: Head): Promise<SyncState | null> {
+    const stamped = await this.r.openJson<Stamped<"state", SyncState>>(this.stateKey, await this.r.p.storage.get(this.stateKey));
+    if (stamped === null) return null;
+    if (stamped.g === head.state && stamped.state !== undefined) return stamped.state;
+    console.warn("An older state of the offline copy was put back; it is left out.");
+    return null;
+  }
+
+  /** The entry of a record, if it is the generation the head names for its path. */
+  private current(head: Head, stamped: Stamped<"entry", Entry> | null): Entry | undefined {
+    if (stamped === null) return undefined;
+    const entry = stamped.entry;
+    if (entry !== undefined && typeof entry.path === "string" && stamped.g === head.seqs[entry.path]) return entry;
+    console.warn("An older record of the offline copy was put back; it is left out.");
+    return undefined;
   }
 
   private remember(entry: Entry): void {

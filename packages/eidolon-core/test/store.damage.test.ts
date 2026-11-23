@@ -147,3 +147,81 @@ describe("a header that doesn't parse", () => {
     expect(browser.slots.slots.size).toBe(2);
   });
 });
+
+describe("older records put back in their place", () => {
+  /** a.md synced at "the old text", the records of that moment kept aside, then a newer text synced over it. */
+  async function replayable() {
+    const s = await setup();
+    await s.server.seed("a.md", "the old text");
+    await s.server.seed("b.md", "to be deleted here");
+    let engines = s.enginesOf(s.mirror);
+    await engines.start();
+    await vi.waitFor(() => expect(heldPaths(s.mirror)).toEqual(["a.md", "b.md"]));
+    await engines.stop();
+    const at = (part: string) => new Map([...s.browser.storage.records].filter(([k]) => k.includes(part)).map(([k, v]) => [k, v.slice()]));
+    const old = { entries: at("/e/"), bodies: at("/b/"), state: at("/v/") };
+
+    await s.server.agentWrite("a.md", "the new text, written elsewhere");
+    engines = s.enginesOf(s.mirror);
+    await engines.start();
+    await vi.waitFor(async () => expect(new TextDecoder().decode((await s.mirror.vault(work.id)!.bytes("a.md"))!)).toBe("the new text, written elsewhere"));
+    await engines.stop();
+    s.mirror.lock();
+    const puts = () => s.server.count("put");
+    return { ...s, old, puts, before: puts() };
+  }
+
+  const putBack = (browser: FakeBrowser, records: Map<string, Uint8Array<ArrayBuffer>>) => { for (const [k, v] of records) browser.storage.records.set(k, v); };
+
+  test("an older entry and body: the old text is never uploaded over the new", async () => {
+    const { browser, copies, server, enginesOf, old, puts, before } = await replayable();
+    putBack(browser, old.entries);
+    putBack(browser, old.bodies);
+    await runOnce(enginesOf(await reload(browser, copies)));
+    expect(server.notes.get("a.md")?.content).toBe("the new text, written elsewhere");
+    expect(puts()).toBe(before);
+  });
+
+  test("an older body under the current entry: not uploaded either", async () => {
+    const { browser, copies, server, enginesOf, old, puts, before } = await replayable();
+    putBack(browser, old.bodies);
+    await runOnce(enginesOf(await reload(browser, copies)));
+    expect(server.notes.get("a.md")?.content).toBe("the new text, written elsewhere");
+    expect(puts()).toBe(before);
+  });
+
+  test("an older deletion made here, put back over a note that is here again: nothing is removed", async () => {
+    const { browser, copies, server, enginesOf } = await synced();
+    let mirror = await reload(browser, copies);
+    await mirror.vault(work.id)!.files().trashToLocal("a.md");
+    const deleted = new Map([...browser.storage.records].filter(([k]) => k.includes("/e/")).map(([k, v]) => [k, v.slice()]));
+    // Not uploaded: the copy is opened again, the deletion is undone by writing the note back as it was.
+    await mirror.vault(work.id)!.files().writeIf("a.md", null, "text of a.md");
+    mirror.lock();
+    putBack(browser, deleted);
+    mirror = await reload(browser, copies);
+    await runOnce(enginesOf(mirror));
+    expect(removals(server)).toEqual([]);
+  });
+
+  test("the whole vault put back as it was: the newer text comes down, nothing old goes up", async () => {
+    const { browser, copies, server, enginesOf, old, puts, before } = await replayable();
+    putBack(browser, old.state);
+    const mirror = await reload(browser, copies);
+    await runOnce(enginesOf(mirror));
+    expect(server.notes.get("a.md")?.content).toBe("the new text, written elsewhere");
+    expect(puts()).toBe(before);
+    expect(new TextDecoder().decode((await mirror.vault(work.id)!.bytes("a.md"))!)).toBe("the new text, written elsewhere");
+  });
+
+  test("a change made here and not uploaded yet still goes up after a reload", async () => {
+    const { browser, copies, server, enginesOf } = await synced();
+    let mirror = await reload(browser, copies);
+    const files = mirror.vault(work.id)!.files();
+    await files.writeIf("a.md", mirror.vault(work.id)!.entry("a.md")!.local!.version, "edited offline");
+    mirror.lock();
+    mirror = await reload(browser, copies);
+    await runOnce(enginesOf(mirror));
+    expect(server.notes.get("a.md")?.content).toBe("edited offline");
+  });
+});
