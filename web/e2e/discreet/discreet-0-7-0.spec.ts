@@ -31,18 +31,23 @@
 // 3. The graph with its suggestions (graph out of preview spec): while hidden, `/api/graph/similarity` and
 //    `/api/graph/local` on the Home note answer as for a made-up vault; the other vault's note's graph with its
 //    Suggestions layer shows its neighbour and nothing of Home → "discreet-0-7-0 graph: …"
-// Left out here: the Published window (`@overview`) and the offline copy's vault list (`@offline`), written on the stack
-// with search off; the phone (these places' hiding is the server's, which knows no viewport).
+// 4. The Published window (published overview spec; no `@search`: it runs in the phase with search off): a Home note
+//    published while shown is a row; hidden, it has no row, nothing of Home is on the page or in GET
+//    /api/publications, and the count line and the rows are the server's hidden list → "discreet-0-7-0 published: …".
+//    Its reader link is kept in a variable and never read or shown; no screenshot, as in overview.spec.ts.
+// Left out here: the offline copy's vault list (`@offline`), in the offline tests; the phone (these places' hiding is
+// the server's, which knows no viewport).
 import { request, type BrowserContext, type Page, type Response } from "@playwright/test";
 import { randomBytes } from "node:crypto";
-import { Api, Mcp } from "../support/api";
+import { Api, Mcp, encodePath } from "../support/api";
 import { baseURL, secrets } from "../support/env";
 import { firstIndex, nextIndex, similarNotes, waitIndexed } from "../support/search";
 import { endHidden, hideDiscreet, reservePassword, reservePin, revealDiscreet } from "../support/session";
 import { expect, shot, shotsDir070, test } from "../support/test";
 import { dismissInstallHint } from "../calendar/helpers";
 
-test.use({ shotsDir: shotsDir070 });
+// No failure screenshots: one could show a dialog with a link (the Published test; overview.spec.ts does the same).
+test.use({ shotsDir: shotsDir070, screenshot: "off" });
 
 // The file's own vault, for the notes beside Home's.
 let vault = "";
@@ -128,18 +133,18 @@ async function expectAsMissing(api: Api, url: (vault: string) => string, made: s
   expect(hidden, `${url("Home").split("?")[0]} while Home is hidden`).toEqual({ status: missing.status, body: missing.body.replaceAll(made, "Home") });
 }
 
-/** The page's answers from the similar, graph and console endpoints, for "nothing of Home in what the page got". */
+/** The page's answers from the similar, graph, console and publications endpoints, for "nothing of Home in what the page got". */
 function answersOf(page: Page) {
   const bodies: Promise<string>[] = [];
   page.on("response", (r: Response) => {
     const path = new URL(r.url()).pathname;
-    if (/^\/api\/(similar|graph|console)/.test(path)) bodies.push(r.text().catch(() => ""));
+    if (/^\/api\/(similar|graph|console|publications)/.test(path)) bodies.push(r.text().catch(() => ""));
   });
   return async () => (await Promise.all(bodies)).join("\n");
 }
 
 /** What a test made, for `finish`: the session, the Home notes written, an agent's key. */
-type Run = { page?: Page; session?: Api; written: string[]; agent?: Mcp };
+type Run = { page?: Page; session?: Api; written: string[]; agent?: Mcp; published?: string[] };
 
 /**
  * A fresh session of Alice's on the note Hive inspection (written first, with Brood frames, in the file's vault).
@@ -185,6 +190,10 @@ async function finish(run: Run, aliceApi: Api, n: Notes, folder: string) {
     await reservePin();
     const shown = await session.send("POST", "/api/account/discreet/reveal", { data: { pin: secrets().pin, minutes: null } }).catch(() => undefined);
     if (shown?.status() !== 200) cleanup(`Home not shown again to remove the test's notes: ${shown?.status()}`);
+    for (const path of run.published ?? []) {
+      const gone = await session.send("DELETE", `/api/publications/${encodePath(path)}`).catch(() => undefined);
+      if (gone?.ok() !== true) cleanup(`Home note not unpublished: ${gone?.status()}`);
+    }
     for (const path of written) await session.deleteNote(path).catch((e: Error) => cleanup(`Home note not removed: ${e.message}`));
     const left = await session.console("ls /Home").catch(() => undefined);
     if (left?.text.split("\n").some((line) => line.replace(/\/$/, "").trim() === folder)) cleanup(`/Home/${folder}/ survives as an empty folder`);
@@ -332,6 +341,67 @@ test("discreet-0-7-0 graph: hidden, /api/graph/similarity and /api/graph/local o
     const labels = await drawing.getByRole("button").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
     expect(labels.filter((l) => ofHome(n).test(l)), "hidden: no node or suggestion of Home in the drawing").toEqual([]);
     expect(await got(), "hidden: nothing of Home in the page's answers").not.toMatch(ofHome(n));
+  } finally {
+    await finish(run, aliceApi, n, folder);
+  }
+});
+
+type Publication = { path: string; older: boolean };
+
+/** The window's count line for a list (PublishedPage.tsx), or null where it shows none: no copy older. */
+function countLine(list: Publication[]) {
+  const older = list.filter((p) => p.older).length;
+  if (older === 0) return null;
+  return `${older} of ${list.length} ${list.length === 1 ? "copy is" : older === 1 ? "copies is" : "copies are"} older than ${older === 1 ? "its note" : "their notes"}.`;
+}
+
+/** The window as the server's list has it: the count line (or none), the rows' paths in the list's order. */
+async function expectWindowOf(page: Page, list: Publication[], what: string) {
+  const window = page.getByRole("dialog", { name: "Published", exact: true });
+  const line = window.getByText(/ older than (its|their) notes?\.$/);
+  const expected = countLine(list);
+  if (expected) await expect(line, `${what}: the count line`).toHaveText(expected);
+  else await expect(line, `${what}: no count line`).toHaveCount(0);
+  if (list.length === 0) await expect(window.getByText("No published notes.")).toBeVisible();
+  else await expect(window.getByRole("list", { name: "Published notes" }).getByRole("link"), `${what}: the rows`).toHaveText(list.map((p) => p.path));
+}
+
+test("discreet-0-7-0 published: hidden, the Published window has no row, count or word of Home, as GET /api/publications through the session has it @overview @serial @discreet", async ({ freshSession, aliceApi, folder }) => {
+  test.setTimeout(300_000);
+  const n = notesOf(folder);
+  const lantern = `/Home/${folder}/Lantern ${n.hid}.md`;
+  const run: Run = { written: [], published: [] };
+  try {
+    const { page, session } = await start(freshSession, aliceApi, n, run);
+    await revealDiscreet(page);
+    await expect(page.getByRole("dialog", { name: "More vaults" })).toHaveCount(0);
+    await session.putNote(lantern, "# Lantern\n\nThe lantern on the porch.\n");
+    run.written.push(lantern);
+    // Published as the dialog does (the fresh sign-in opened the password window); the link stays in this answer.
+    const made = await session.send("POST", `/api/publications/${encodePath(lantern)}`, { data: { depth: 0 } });
+    expect(made.status(), "the Home note published").toBe(201);
+    run.published!.push(lantern);
+    // Changed after, so its copy is older and counts in the count line too.
+    await session.putNote(lantern, "# Lantern\n\nThe lantern on the porch, lit.\n");
+
+    // Shown: a row of its own, and the window is the server's list.
+    const shown = await session.json<Publication[]>("GET", "/api/publications");
+    expect(shown.find((p) => p.path === lantern), "shown: the Home note's copy, older than its note").toMatchObject({ older: true });
+    await page.goto("/published");
+    await expectWindowOf(page, shown, "shown");
+
+    // Hidden, as ✕ does (the pill is under the window); the window opened again.
+    const hiding = await session.send("POST", "/api/account/discreet/hide");
+    expect(hiding.ok(), "hidden").toBe(true);
+    const got = answersOf(page);
+    await page.goto("/published");
+    const hidden = await session.json<Publication[]>("GET", "/api/publications");
+    expect(hidden.map((p) => p.path), "hidden: GET /api/publications is the shown list without Home's copy").toEqual(shown.map((p) => p.path).filter((p) => p !== lantern));
+    await expectWindowOf(page, hidden, "hidden");
+    const window = page.getByRole("dialog", { name: "Published", exact: true });
+    await expect(window, "hidden: nothing of Home in the window").not.toContainText(new RegExp(`/Home/|\\bHome\\b|Lantern|${n.hid}`));
+    expect(JSON.stringify(hidden), "hidden: nothing of Home in GET /api/publications").not.toMatch(new RegExp(`/Home/|Lantern|${n.hid}`));
+    expect(await got(), "hidden: nothing of Home in the page's answers").not.toMatch(new RegExp(`/Home/|Lantern|${n.hid}`));
   } finally {
     await finish(run, aliceApi, n, folder);
   }
