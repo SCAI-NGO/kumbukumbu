@@ -20,7 +20,7 @@ const vaults = [{ id: "v1", tag: "t1", canWrite: true, pending: false }];
 async function adasCopy(idleMs = 60_000) {
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s1", token: "tok", key, vaults }))));
   const copies = new MirrorCopies(await browserPorts());
-  const mirror = await copies.create({ userId: "u1", username: "Ada", password: "pw", label: "Test", idleMs, iterations: 1000 });
+  const mirror = await copies.create({ userId: "u1", username: "Ada", password: "pw", label: "Test", idleMs });
   mirror.lock();
   vi.unstubAllGlobals();
 }

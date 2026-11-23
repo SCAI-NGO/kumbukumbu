@@ -7,6 +7,7 @@ import { vaultHinted } from "../api/history";
 import { useVaults } from "../api/notes";
 import { followRename } from "../api/sharing";
 import { leaveVaults } from "../discreet/leftElsewhere";
+import { enginesHinted, enginesReconnected } from "../offline/engines";
 import { contact, useOfflineMode } from "../offline/mode";
 import { presenceKey, useSyncStatus } from "../state/sync";
 import { useShellNavigate } from "../windows/context";
@@ -69,7 +70,11 @@ function onFrame(queryClient: QueryClient, navigate: NavigateFunction, data: unk
   if (!("vault" in frame) || typeof frame.vault !== "string") return;
   // One naming no move (the server's catalog forgot the vault meanwhile) would only forget what the tab holds under it.
   if (frame.type === "renamed" && "from" in frame && typeof frame.from === "string" && frame.from !== frame.vault) followRename(queryClient, navigate, frame.from, frame.vault);
-  if (frame.type === "changed") vaultHinted(queryClient, frame.vault);
+  if (frame.type === "changed") {
+    vaultHinted(queryClient, frame.vault);
+    // The offline copy's engine downloads what changed (another device's edit) while the tab is open.
+    enginesHinted(frame.vault);
+  }
   if (frame.type === "presence" && "path" in frame && typeof frame.path === "string" && "editors" in frame && Array.isArray(frame.editors)) {
     const key = presenceKey(frame.vault, frame.path);
     const shown = frame.editors.filter((e): e is string => typeof e === "string");
@@ -155,6 +160,7 @@ export function useSyncSocket() {
         useOfflineMode.getState().socket(true);
         // Every (re)connect is a contact: what changed for the offline copy while the socket was down.
         void contact();
+        enginesReconnected();
         // Hints sent while there was no socket are lost: everything they would have asked again is.
         if (before.current) before.current.since = Date.now();
         if (opened.current) for (const key of ["session", "tree", "vaults", "history", "trash", "archive", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });

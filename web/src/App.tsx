@@ -14,7 +14,7 @@ router.subscribe((state) => {
   if (state.navigation.state === "idle" && !state.errors) forgetReload();
 });
 
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       // A refusal (4xx) won't change on its own; a fault or a dropped connection may.

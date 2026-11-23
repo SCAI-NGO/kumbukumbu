@@ -45,7 +45,10 @@ export class MirrorEngines {
       createEngine: (vault) => this.engineFor(vault),
       onLeft: (id) => void m.purge(id),
     });
+    // The host may listen too (the mode counts the changes waiting): both hear it.
+    const heard = m.onChanged;
     m.onChanged = (vault, paths) => {
+      heard?.(vault, paths);
       const engine = this.engines.get(vault);
       const held = m.vault(vault);
       if (engine === undefined || held === undefined) return;
@@ -82,6 +85,14 @@ export class MirrorEngines {
     for (const vault of m.held()) if (!mirrors(m.choice, vault.id)) await m.purge(vault.id);
     if (recheck) await Promise.all([...this.engines.values()].map((e) => e.check(true)));
     await this.keepBudget();
+  }
+
+  /** A path written in this tab (another tab's writes come over the copy's channel, `onChanged`). */
+  localChanged(vaultId: string, path: string): void {
+    const engine = this.engines.get(vaultId);
+    if (engine === undefined || this.stopped) return;
+    if (this.o.mirror.vault(vaultId)?.entry(path)?.local !== undefined) engine.localChanged(path);
+    else engine.localDeleted(path);
   }
 
   /** A "changed" hint, naming the vault as the caller sees it now. */
