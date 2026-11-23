@@ -60,10 +60,14 @@ export async function invitedUser(browser: Browser, options: BrowserContextOptio
   } catch (error) {
     // A failure's screenshot, taken when the context closes, would show the recovery key: the page leaves it first.
     // A half-made user would stay: removed.
-    await page.goto("about:blank").catch(() => undefined);
-    await context.close();
-    await removeUser(username);
-    throw error;
+    try {
+      await page.goto("about:blank").catch(() => undefined);
+      await context.close();
+      await removeUser(username);
+    } finally {
+      // The join's own error, not a cleanup's.
+      throw error;
+    }
   }
 }
 
