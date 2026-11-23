@@ -12,7 +12,7 @@ import type { SlotAnswer, SlotVault, StorePorts, TabMessage } from "./ports";
 import { MirrorLockedError, Records, VaultMirror, type VaultMeta } from "./vault";
 
 export interface CopyHeader {
-  schema: 1;
+  schema: 2;
   copy: string;
   /** SHA-256 of the user id, Base64Url: finds the copy when signed in. */
   user: string;
@@ -61,7 +61,7 @@ export class MirrorCopies {
       } catch {
         continue;
       }
-      if (header !== null && typeof header === "object" && header.schema === 1) found.push(header);
+      if (header !== null && typeof header === "object" && header.schema === 2) found.push(header);
     }
     return found;
   }
@@ -80,7 +80,7 @@ export class MirrorCopies {
    * Turns offline on for a signed-in user: a new mirror slot, its key wrapped under the password. A copy of this user
    * already here is replaced, its unsynced changes with it: the caller looks for one first and unlocks it instead.
    */
-  async create(o: { userId: string; username: string; password: string; label: string; idleMs: number; iterations?: number }): Promise<SealedMirror> {
+  async create(o: { userId: string; username: string; password: string; label: string; idleMs: number }): Promise<SealedMirror> {
     // Before the slot: a failure here leaves none behind on the server.
     const old = await this.forUser(o.userId);
     const answer = await this.p.slots.create(o.label);
@@ -88,9 +88,9 @@ export class MirrorCopies {
     if (old !== null) await this.wipe(old.copy);
     const copy = toBase64Url(this.p.crypto.randomBytes(16));
     const header: CopyHeader = {
-      schema: 1, copy, user: await userHash(o.userId), login: await loginHash(o.username),
+      schema: 2, copy, user: await userHash(o.userId), login: await loginHash(o.username),
       slot: { id: answer.id, token: answer.token },
-      password: await wrapWithPassword(this.p.crypto, raw, o.password, wrapAad(copy), o.iterations), idleMs: o.idleMs,
+      password: await wrapWithPassword(this.p.crypto, raw, o.password, wrapAad(copy)), idleMs: o.idleMs,
     };
     await this.writeHeader(header);
     return SealedMirror.unlocked(this.p, header, raw, answer.vaults);
@@ -101,7 +101,7 @@ export class MirrorCopies {
    * come too: the key is wrapped again under the password (a changed password needs nothing else, §4.2). "wiped":
    * the slot was removed, and the copy with it.
    */
-  async unlockOnline(header: CopyHeader, signIn?: { username: string; password: string; idleMs: number; iterations?: number }): Promise<SealedMirror | "wiped"> {
+  async unlockOnline(header: CopyHeader, signIn?: { username: string; password: string; idleMs: number }): Promise<SealedMirror | "wiped"> {
     const answer = await this.p.slots.contact(header.slot.token, 0);
     if (answer === "gone") {
       await this.wipe(header.copy);
@@ -111,7 +111,7 @@ export class MirrorCopies {
     if (signIn !== undefined) {
       header = {
         ...header, login: await loginHash(signIn.username), idleMs: signIn.idleMs,
-        password: await wrapWithPassword(this.p.crypto, raw, signIn.password, wrapAad(header.copy), signIn.iterations),
+        password: await wrapWithPassword(this.p.crypto, raw, signIn.password, wrapAad(header.copy)),
       };
       await this.writeHeader(header);
     }

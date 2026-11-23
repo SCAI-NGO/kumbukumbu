@@ -9,7 +9,7 @@ import { FakeServer } from "./fakes/fakeServer";
 import { delivered, FakeBrowser, realClock } from "./fakeStore";
 
 const work = { id: "vault-1f3a", tag: "tag-a", canWrite: true, pending: false };
-const signIn = { userId: "user-8d1e", username: "Ada", password: "correct horse battery", label: "Firefox on Linux", idleMs: IDLE_MS, iterations: 1000 };
+const signIn = { userId: "user-8d1e", username: "Ada", password: "correct horse battery", label: "Firefox on Linux", idleMs: IDLE_MS };
 const png = (size: number, fill = 0) => { const b = new Uint8Array(size).fill(fill); b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]); return b; };
 const bytes = (text: string) => new TextEncoder().encode(text);
 
