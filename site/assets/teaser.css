@@ -163,7 +163,7 @@ html.sheet-open { overflow: hidden; }
 .roadmap { max-width: 900px; margin: 72px auto 0; text-align: center; }
 .roadmap h2 { font: 600 33px/1.2 Fraunces, Georgia, serif; margin: 0; }
 .roadmap .hand { font: 700 27px/1.25 Caveat, cursive; color: var(--soft); margin: 4px 0 22px; }
-.road { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(7, 1fr); }
+.road { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, 1fr); }
 .road li { position: relative; }
 /* Each piece of vine is stretched only along its length, so its stroke keeps its width; the pieces meet at the
    cell edges. --i is the stop's place in the row: the pieces draw one after another, then the stop opens. */
@@ -198,7 +198,7 @@ html.sheet-open { overflow: hidden; }
 .moment.pop .stop-art { display: none; }
 .moment.pop .aside { font: 700 26px/1.2 Caveat, cursive; color: var(--soft); margin: 6px 0 0; }
 
-/* Six in a row need about 140 px each; below that the vine turns and runs down the left. */
+/* Five in a row need about 175 px each; below that the vine turns and runs down the left. */
 @media (max-width: 879px) {
   .road { grid-template-columns: 1fr; max-width: 460px; margin: 0 auto; }
   .vine-h { display: none; }
