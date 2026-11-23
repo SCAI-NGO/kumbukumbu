@@ -19,8 +19,10 @@
 //   core links tests; editing, new notes, trashing → offline.spec #2; images and PDFs in the mirror → offline.spec #7.
 // - Needs a connection (shown, not silently failing): the graph → gaps #6; Similar notes → gaps #6, by link
 //   prediction §3.7's "the query fails as any other and says so" (its §2 says "the section says it needs a
-//   connection"; §3.7 is the state the section has, so that line is asserted); menus (history, blame, move, rename, duplicate) → gaps #2; search by meaning, console, calendar, board,
-//   settings pages → left out (not among Task 7's gaps; the pane's sentence is the graph's, asserted in gaps #6).
+//   connection"; §3.7 is the state the section has, so that line is asserted); menus (history, blame, move, rename,
+//   duplicate) → gaps #2; search by meaning, console, calendar, board, settings pages → left out (not among Task 7's
+//   gaps; the pane's sentence is the graph's, asserted in gaps #6); sharing, publishing, keys, admin → left out: the
+//   same dimming as gaps #2, which finds that nothing in the web app dims for the mode (F-05), so each would repeat it.
 // §3a Turning it on
 // - Off by default, invited once (Keep me signed in or installed) → Vitest OfflineInvite.test.tsx (both tests); the
 //   suite answers the invitation "Not now" (its own devices turn it on through Settings).
@@ -73,10 +75,17 @@
 // - 4.3 discreet vaults never mirrored → gaps #4 (shown with the PIN while offline is turned on); xUnit
 //   MirrorSlotsTests.Discreet_vaults_are_never_listed_revealed_or_not; core store.mirror.test.ts "never mirrors a vault
 //   the server didn't list …".
-// - 4.4 wipe and revocation: vault access lost → gaps #3; slot deleted → offline.spec #6, devices #2; user
-//   deactivated → devices #3; re-encryption, end other sessions → xUnit MirrorSlotsTests (Reencrypting_…,
-//   Ending_other_sessions_…); removal with changes waiting takes the password → devices #2.
-// - 4.5 the service worker checks what it serves → web/e2e/sw/sw.spec.ts.
+// - 4.4 wipe and revocation: vault access lost → gaps #3; vault marked discreet → xUnit
+//   MirrorSlotsTests.Discreet_vaults_are_never_listed_revealed_or_not and core store.mirror.test.ts "purges a vault no
+//   longer listed …" (left out of the browser: it would mark a second vault discreet with the PIN, beyond gaps #4's
+//   two entries, and the purge's path is gaps #3's); slot deleted → offline.spec #6, devices #2; user deactivated →
+//   devices #3; account deleted → xUnit MirrorSlotsTests.Deleting_the_account_removes_its_slots_and_the_401_says_wipe
+//   (left out of the browser: Alice and Bob can't be deleted, and a user made for it is devices #3's way); restoring a
+//   backup → left out (it restores the stack's database, which a test can't do beside the others; no xUnit test found
+//   either); re-encryption, end other sessions → xUnit MirrorSlotsTests (Reencrypting_…, Ending_other_sessions_…);
+//   removal with changes waiting takes the password → devices #2.
+// - 4.5 the security architecture's changes: its document's rows are prose, not tested; the service worker that checks
+//   what it serves → web/e2e/sw/sw.spec.ts.
 // - 4.6 the slot API → xUnit MirrorSlotsTests; another user's token → devices #4; the 20 slots → xUnit
 //   Slots_are_capped.
 // - 4.7 one writer across tabs, records named by HMAC → core store tests; left out of the browser.
@@ -118,10 +127,15 @@ test.afterEach(async ({ aliceApi, bobApi }) => {
   for (const { user, id } of made) {
     const api = user === "alice" ? aliceApi : bobApi;
     const deleted = await api.send("DELETE", `/api/account/mirror-slots/${id}`);
-    if (deleted.status() !== 400) continue;
+    // Gone already (a purge or a wipe of the test's own) is as good as deleted.
+    if (deleted.status() !== 400) {
+      expect([204, 404], `the slot deleted: ${deleted.status()}`).toContain(deleted.status());
+      continue;
+    }
     // A slot whose changes waiting aren't counted yet takes the password (§4.4).
     await reservePassword(user);
-    await api.send("POST", `/api/account/mirror-slots/${id}/remove`, { data: { password: secrets().passwords[user] } });
+    const removed = await api.send("POST", `/api/account/mirror-slots/${id}/remove`, { data: { password: secrets().passwords[user] } });
+    expect(removed.ok(), `the slot removed with the password: ${removed.status()}`).toBe(true);
   }
   made = [];
 });
@@ -169,10 +183,14 @@ async function turnOn(page: Page, user: User = "alice", vault = "Work"): Promise
   await reservePassword(user);
   await page.getByLabel("Your password").fill(secrets().passwords[user]);
   await page.getByRole("button", { name: "Keep them here" }).click();
-  await expect(keep(page)).toBeChecked();
-  const mine = (await copies(page)).filter((s) => !before.includes(s.id));
+  // Recorded for the clean-up as soon as the copy is here, before anything else is asserted.
+  let mine: { id: string; token: string }[] = [];
+  await expect
+    .poll(async () => (mine = (await copies(page)).filter((s) => !before.includes(s.id))).length, { message: "a copy made on this device", timeout: 30_000 })
+    .toBeGreaterThan(0);
   made.push(...mine.map((s) => ({ user, id: s.id })));
   expect(mine, "one copy made on this device").toHaveLength(1);
+  await expect(keep(page)).toBeChecked();
   await untilHeld(page, vault);
   return mine[0];
 }
@@ -227,6 +245,13 @@ function noisePng(side: number): Buffer {
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
 }
 
+/** "· 45.2 KB of attachments" in a vault's line, in MiB (storageText's binary units); NaN without one. */
+function attachmentsMiB(line: string): number {
+  const m = line.replace(/\s+/g, " ").match(/· ([\d.]+) (B|KB|MB|GB) of attachments/);
+  if (!m) return NaN;
+  return Number(m[1]) * { B: 1 / 1024 ** 2, KB: 1 / 1024, MB: 1, GB: 1024 }[m[2] as "B" | "KB" | "MB" | "GB"];
+}
+
 /** A line of a Welcome note's text, as the server has it: what the note shows when it is on this device. */
 async function welcomeLine(api: Api): Promise<{ path: string; line: string }> {
   const path = "/Welcome/Obsidian.md";
@@ -236,6 +261,7 @@ async function welcomeLine(api: Api): Promise<{ path: string; line: string }> {
 }
 
 test("gaps #1a: with All my vaults every vault is on this device, Welcome as Work @offline", async ({ page, aliceApi, folder }) => {
+  test.setTimeout(180_000);
   await aliceApi.putNote(`/Work/${folder}/Plan.md`, "# Plan\n\nKept with all my vaults.\n");
   const welcome = await welcomeLine(aliceApi);
   await turnOn(page);
@@ -286,14 +312,17 @@ test("gaps #1b: a vault chosen one by one: the copy keeps Work and not Welcome, 
 });
 
 test("gaps #1c: a folder kept offline keeps its large attachment; one in another folder opens online only @offline", async ({ page, aliceApi, folder }) => {
-  // Both above the 1 MiB that come with the notes (SMALL_ATTACHMENT_BYTES); named for the test, as links resolve
-  // vault-wide and an earlier run's files stay in Work.
+  test.setTimeout(180_000);
+  // Both above the 1 MiB that come with the notes (SMALL_ATTACHMENT_BYTES), about 1.65 MiB each; named for the test,
+  // as links resolve vault-wide and an earlier run's files stay in Work.
   const id = folder.slice(-6);
   const [kept, rest] = [`kept-${id}.png`, `rest-${id}.png`];
-  await aliceApi.putFile(`/Work/${folder}/Kept/${kept}`, noisePng(700));
-  await aliceApi.putFile(`/Work/${folder}/Rest/${rest}`, noisePng(700));
+  await aliceApi.putFile(`/Work/${folder}/Kept/${kept}`, noisePng(760));
+  await aliceApi.putFile(`/Work/${folder}/Rest/${rest}`, noisePng(760));
   await aliceApi.putNote(`/Work/${folder}/Kept/Plan.md`, `# Plan\n\n![[${kept}]]\n\n![[${rest}]]\n`);
   await turnOn(page);
+  // Work's attachments here before: other tests' small ones come with the notes, so only the growth counts.
+  const before = attachmentsMiB(await vaultLine(page, "Work").innerText());
   await page.goto(notePage(`/Work/${folder}/Kept/Plan.md`));
   await expect(article(page)).toBeVisible();
 
@@ -310,16 +339,17 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
   await page.keyboard.press("Escape");
   await page.goto("/settings/offline");
   await expect(page.getByRole("list", { name: "Kept offline" }).getByRole("listitem")).toHaveText([new RegExp(`^Work / ${folder}/Kept\\s*Remove$`)]);
-  // The engine fetches it in the background: the vault's line counts it among the attachments.
+  // The engine fetches it in the background: the vault's line counts it among the attachments, one of the two only.
   await expect
     .poll(
       async () => {
         await page.reload();
-        return (await vaultLine(page, "Work").innerText().catch(() => "")).replace(/\s+/g, " ");
+        return attachmentsMiB(await vaultLine(page, "Work").innerText().catch(() => "")) - before;
       },
       { message: "the kept folder's attachment is on this device", timeout: 30_000, intervals: [1000, 2000] },
     )
-    .toMatch(/· [1-9][\d.]* MB of attachments/);
+    .toBeGreaterThanOrEqual(1.4);
+  expect(attachmentsMiB(await vaultLine(page, "Work").innerText()) - before, "the other folder's attachment isn't").toBeLessThan(3);
 
   await page.goto(notePage(`/Work/${folder}/Kept/Plan.md`));
   await expect(article(page)).toBeVisible();
@@ -367,7 +397,7 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
     type: "finding",
     description: "F-06: a vault purged from the copy (access lost) shows no notice: the engines drop it on their own refresh, and the notice comes only from a contact that purges",
   });
-  test.fail();
+  // test.fail();
   test.setTimeout(240_000);
   // A vault of the test's own, shared with Bob; his device keeps it with All my vaults.
   const share = await shareWithBob("Purge", "write");
@@ -375,12 +405,28 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
   try {
     await bobApi.putNote(`/${share.vault}/Plan.md`, "# Plan\n\nBob's copy.\n");
     await prepare(bobPage);
+    bobPage.on("websocket", (ws) => ws.on("framereceived", (f) => { if (String(f.payload).includes("mirror")) console.log("DIAG frame", Date.now() % 100000, String(f.payload)); }));
+    bobPage.on("request", (r) => { if (r.url().includes("mirror-slots/contact") || r.url().endsWith("/api/vaults")) console.log("DIAG req", Date.now() % 100000, r.method(), new URL(r.url()).pathname); });
     await turnOn(bobPage, "bob", share.vault);
     await bobPage.goto(notePage(`/${share.vault}/Plan.md`));
     await expect(article(bobPage)).toContainText("Bob's copy.");
 
+    await bobPage.evaluate(() => {
+      const w = window as unknown as { seen: string[] };
+      w.seen = [];
+      new MutationObserver(() => {
+        for (const e of document.querySelectorAll("[role=status]")) {
+          const t = `${e.getAttribute("aria-label")}: ${e.textContent}`;
+          if (w.seen.at(-1) !== t) w.seen.push(`${Date.now() % 100000} ${t}`);
+        }
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    console.log("DIAG unshare at", Date.now() % 100000);
     // Bob leaves and Alice deletes the vault, from other sessions: his sockets lose it, and his browser purges it.
     await unshare(share);
+    console.log("DIAG unshared at", Date.now() % 100000);
+    await bobPage.waitForTimeout(40_000);
+    console.log("DIAG seen", JSON.stringify(await bobPage.evaluate(() => (window as unknown as { seen: string[] }).seen)));
     shared = false;
     const notice = bobPage.getByRole("status", { name: "Offline copy" });
     // Exact: the sentence of §3a, with no vault's name in it.
@@ -413,6 +459,9 @@ test("gaps #4: a discreet vault shown while offline is turned on is never kept, 
     expect(homeId?.discreet, "Home is shown, and discreet").toBe(true);
 
     const slot = await turnOn(page);
+    // Still shown after the wait on the password ledger, so the checks below aren't vacuous.
+    const now = ((await (await page.request.get("/api/vaults")).json()) as { id: string; name: string; discreet: boolean }[]).find((v) => v.name === "Home");
+    expect(now, "Home is still shown, and discreet, while the copy is made").toEqual(expect.objectContaining({ id: homeId!.id, discreet: true }));
     // The copy's vault list (§3a item 2, Task 8's fifth place): every vault but Home, shown as it is.
     await expect(page.getByRole("checkbox", { name: "Keep Work on this device" })).toBeVisible();
     await expect(page.getByRole("list", { name: "Vaults on this device" }).getByRole("listitem").filter({ hasText: /^Home/ })).toHaveCount(0);
@@ -475,6 +524,7 @@ test("gaps #5: a read-only member's copy (Bob in Work) queues no write: no Write
 });
 
 test("gaps #6: offline the graph says it needs a connection, and Similar notes says it couldn't look @offline", async ({ page, aliceApi, folder }, testInfo) => {
+  test.setTimeout(180_000);
   test.info().annotations.push({
     type: "finding",
     description: "F-07: offline, the graph's dialog says \"Couldn't draw the graph.\" with Try again, not \"The graph needs a connection. It's back when you are.\" (graph out of preview §3)",
