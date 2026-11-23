@@ -56,8 +56,9 @@ export default defineConfig({
     { name: "desktop", dependencies: ["setup"], testIgnore: notMcp, grepInvert: /@serial/, use: desktop },
     { name: "phone", dependencies: ["setup"], testIgnore: notMcp, grep: /@phone/, grepInvert: /@serial/, use: phone },
     // The offline mode in Firefox too: a Firefox-only bug of its storage bit once already. Not in WebKit: it sends no
-    // Secure cookie to http://localhost, so the suite's plain-HTTP stack can't sign it in.
-    { name: "offline-firefox", dependencies: ["setup"], grep: /@offline/, use: { ...devices["Desktop Firefox"], viewport: desktop.viewport, colorScheme: "light", storageState: alice } },
+    // Secure cookie to http://localhost, so the suite's plain-HTTP stack can't sign it in. Not the @serial ones: this
+    // project runs in the parallel phase.
+    { name: "offline-firefox", dependencies: ["setup"], grep: /@offline/, grepInvert: /@serial/, use: { ...devices["Desktop Firefox"], viewport: desktop.viewport, colorScheme: "light", storageState: alice } },
     { name: "serial", dependencies: ["desktop", "phone", "mcp"], testIgnore: notMcp, grep: /@serial/, workers: 1, use: desktop },
     { name: "serial-phone", dependencies: ["serial"], testIgnore: notMcp, grep: /(?=.*@serial)(?=.*@phone)/, workers: 1, use: phone },
   ],

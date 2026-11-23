@@ -25,10 +25,23 @@ fi
 # The model's volume outlives the stack (compose.search.yaml): created once, kept between runs.
 if [ "${E2E_SEARCH:-}" = 1 ]; then docker volume create kumbu-e2e-models >/dev/null; fi
 compose up -d --build --wait
+healthy=
 for _ in $(seq 1 60); do
-  [ "$(curl -fsS http://localhost:8080/healthz 2>/dev/null)" = ok ] && exit 0
+  if [ "$(curl -fsS http://localhost:8080/healthz 2>/dev/null)" = ok ]; then healthy=1; break; fi
   sleep 1
 done
+# With search on, once the model is loaded (downloaded first on a fresh volume, about 630 MB): every run's first test
+# then starts from the same point, whatever the download took.
+if [ -n "$healthy" ] && [ "${E2E_SEARCH:-}" = 1 ] && [ "${E2E_EMBEDDINGS_DEFAULT:-internal}" = internal ]; then
+  for _ in $(seq 1 900); do
+    compose logs --no-color kumbu 2>/dev/null | grep -q "Embedding model loaded" && exit 0
+    sleep 1
+  done
+  echo "The embedding model wasn't loaded within 15 minutes." >&2
+  compose logs --tail 50 kumbu >&2
+  exit 1
+fi
+[ -n "$healthy" ] && exit 0
 echo "The server didn't answer /healthz within a minute." >&2
 compose logs --tail 50 kumbu >&2
 exit 1

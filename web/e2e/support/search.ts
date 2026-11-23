@@ -21,11 +21,13 @@ export async function waitIndexed(api: Api, notes: string[], timeout = firstInde
     await expect
       .poll(
         async () => {
-          const { text } = await api.console(`similar "${note}" "${parent(note)}"`);
-          // The heading or error line and the counts line only: a note's own text may say anything.
+          const { text, isError } = await api.console(`similar "${note}" "${parent(note)}"`);
+          // The error line (SimilarSearch.cs) or the counts line in parentheses (Similar.cs) only: a note's own text,
+          // which the hits quote, may say anything.
           const lines = text.trim().split("\n");
-          const said = `${lines[0]}\n${lines[lines.length - 1]}`;
-          return /isn't indexed yet|has no indexed text yet|indexed yet and not compared|getting ready/.test(said) ? "waiting" : "indexed";
+          if (/isn't indexed yet|has no indexed text yet/.test(lines[0])) return "waiting";
+          if (isError) return `error: ${lines[0]}`;
+          return /indexed yet and not compared/.test(lines[lines.length - 1]) ? "waiting" : "indexed";
         },
         { message: `${note} and its folder are embedded`, timeout, intervals: [1000] },
       )
