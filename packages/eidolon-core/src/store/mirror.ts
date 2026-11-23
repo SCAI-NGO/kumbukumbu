@@ -6,12 +6,13 @@
 // the mirror slot's id and token (the token is kept in the clear by design, §4.6: the server's key needs the user key
 // too), the mirror key wrapped under the password, and the idle limit of the last sign-in. Everything else is sealed
 // (vault.ts). The key is only ever in the tab's memory.
+import { DEFAULT_CHOICE, type OfflineChoice } from "./choice";
 import { fromBase64Url, toBase64Url, unwrapWithPassword, wrapWithPassword, type PasswordWrap } from "./crypto";
 import type { SlotAnswer, SlotVault, StorePorts, TabMessage } from "./ports";
 import { MirrorLockedError, Records, VaultMirror, type VaultMeta } from "./vault";
 
 export interface CopyHeader {
-  schema: 1;
+  schema: 2;
   copy: string;
   /** SHA-256 of the user id, Base64Url: finds the copy when signed in. */
   user: string;
@@ -53,8 +54,14 @@ export class MirrorCopies {
   async headers(): Promise<CopyHeader[]> {
     const found: CopyHeader[] = [];
     for (const [, value] of await this.p.storage.scan(HEADERS)) {
-      const header = JSON.parse(new TextDecoder().decode(value)) as CopyHeader;
-      if (header.schema === 1) found.push(header);
+      // The one record in the clear, so anyone with the disk can change it: one that doesn't parse is passed over.
+      let header: CopyHeader | null = null;
+      try {
+        header = JSON.parse(new TextDecoder().decode(value)) as CopyHeader | null;
+      } catch {
+        continue;
+      }
+      if (header !== null && typeof header === "object" && header.schema === 2) found.push(header);
     }
     return found;
   }
@@ -73,16 +80,17 @@ export class MirrorCopies {
    * Turns offline on for a signed-in user: a new mirror slot, its key wrapped under the password. A copy of this user
    * already here is replaced, its unsynced changes with it: the caller looks for one first and unlocks it instead.
    */
-  async create(o: { userId: string; username: string; password: string; label: string; idleMs: number; iterations?: number }): Promise<SealedMirror> {
+  async create(o: { userId: string; username: string; password: string; label: string; idleMs: number }): Promise<SealedMirror> {
+    // Before the slot: a failure here leaves none behind on the server.
+    const old = await this.forUser(o.userId);
     const answer = await this.p.slots.create(o.label);
     const raw = mirrorKey(answer);
-    const old = await this.forUser(o.userId);
     if (old !== null) await this.wipe(old.copy);
     const copy = toBase64Url(this.p.crypto.randomBytes(16));
     const header: CopyHeader = {
-      schema: 1, copy, user: await userHash(o.userId), login: await loginHash(o.username),
+      schema: 2, copy, user: await userHash(o.userId), login: await loginHash(o.username),
       slot: { id: answer.id, token: answer.token },
-      password: await wrapWithPassword(this.p.crypto, raw, o.password, wrapAad(copy), o.iterations), idleMs: o.idleMs,
+      password: await wrapWithPassword(this.p.crypto, raw, o.password, wrapAad(copy)), idleMs: o.idleMs,
     };
     await this.writeHeader(header);
     return SealedMirror.unlocked(this.p, header, raw, answer.vaults);
@@ -93,7 +101,7 @@ export class MirrorCopies {
    * come too: the key is wrapped again under the password (a changed password needs nothing else, §4.2). "wiped":
    * the slot was removed, and the copy with it.
    */
-  async unlockOnline(header: CopyHeader, signIn?: { username: string; password: string; idleMs: number; iterations?: number }): Promise<SealedMirror | "wiped"> {
+  async unlockOnline(header: CopyHeader, signIn?: { username: string; password: string; idleMs: number }): Promise<SealedMirror | "wiped"> {
     const answer = await this.p.slots.contact(header.slot.token, 0);
     if (answer === "gone") {
       await this.wipe(header.copy);
@@ -103,7 +111,7 @@ export class MirrorCopies {
     if (signIn !== undefined) {
       header = {
         ...header, login: await loginHash(signIn.username), idleMs: signIn.idleMs,
-        password: await wrapWithPassword(this.p.crypto, raw, signIn.password, wrapAad(header.copy), signIn.iterations),
+        password: await wrapWithPassword(this.p.crypto, raw, signIn.password, wrapAad(header.copy)),
       };
       await this.writeHeader(header);
     }
@@ -140,9 +148,17 @@ export class SealedMirror {
   private listed: Map<string, SlotVault> | null = null;
   private stopListening: (() => void) | null = null;
   private engines: { release(): void } | null = null;
+  private chosen: OfflineChoice = DEFAULT_CHOICE;
   /** Another tab changed paths of a vault, or purged one (vault null: the whole copy). */
   onChanged: ((vault: string, paths: string[]) => void) | null = null;
   onPurged: ((vault: string | null) => void) | null = null;
+  /**
+   * A vault's mirror is going (purged here or in another tab): the host stops what runs on it. Awaited before the
+   * records go when the purge is this tab's.
+   */
+  onDrop: ((vault: string) => Promise<void>) | null = null;
+  /** Another tab changed what this device keeps offline. */
+  onChoice: (() => void) | null = null;
   /**
    * Another tab signed out: the host writes what its editors hold into the copy and locks. Without a host's answer
    * the copy locks at once.
@@ -159,6 +175,7 @@ export class SealedMirror {
       const meta = await r.openJson<VaultMeta>(key, sealed);
       if (meta !== null) mirror.vaults.set(meta.id, await VaultMirror.open(r, meta));
     }
+    mirror.chosen = (await r.openJson<OfflineChoice>(await mirror.choiceKey(), await p.storage.get(await mirror.choiceKey()))) ?? DEFAULT_CHOICE;
     if (vaults !== null) await mirror.align(vaults);
     mirror.stopListening = r.channel.listen((m) => void mirror.heard(m));
     return mirror;
@@ -194,6 +211,26 @@ export class SealedMirror {
     return vault;
   }
 
+  /** What this device keeps offline (Settings, Offline). */
+  get choice(): OfflineChoice {
+    this.assertOpen();
+    return this.chosen;
+  }
+
+  /** Changes the choice, on the copy's latest across tabs, and tells the other tabs. */
+  async choose(change: (choice: OfflineChoice) => OfflineChoice): Promise<OfflineChoice> {
+    this.assertOpen();
+    const key = await this.choiceKey();
+    return this.p.locks.run(this.r.lockName, async () => {
+      const now = (await this.r.openJson<OfflineChoice>(key, await this.p.storage.get(key))) ?? DEFAULT_CHOICE;
+      const next = change(now);
+      await this.p.storage.write({ put: [await this.r.sealJson(key, next)] });
+      this.chosen = next;
+      this.r.channel.post({ type: "choice" });
+      return next;
+    });
+  }
+
   /** The changes waiting to upload, across the copy's vaults. */
   waiting(): number {
     return [...this.vaults.values()].reduce((n, v) => n + v.waiting(), 0);
@@ -220,8 +257,10 @@ export class SealedMirror {
     const vault = this.vaults.get(id);
     if (vault === undefined) return 0;
     const lost = vault.waiting();
-    await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ remove: [vault.metaKey], removePrefix: [vault.dataPrefix] }));
+    vault.drop();
     this.vaults.delete(id);
+    await this.onDrop?.(id);
+    await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ remove: [vault.metaKey], removePrefix: [vault.dataPrefix] }));
     this.r.channel.post({ type: "purged", vault: id });
     return lost;
   }
@@ -254,6 +293,7 @@ export class SealedMirror {
     this.stopListening = null;
     this.engines?.release();
     this.engines = null;
+    for (const vault of this.vaults.values()) vault.drop();
     this.vaults.clear();
     this.r.lock();
   }
@@ -282,6 +322,13 @@ export class SealedMirror {
 
   private async heard(m: TabMessage): Promise<void> {
     if (this.locked) return;
+    if (m.type === "choice") {
+      const key = await this.choiceKey();
+      const chosen = await this.r.openJson<OfflineChoice>(key, await this.p.storage.get(key));
+      if (chosen !== null && !this.locked) this.chosen = chosen;
+      this.onChoice?.();
+      return;
+    }
     if (m.type === "locked") {
       if (this.onLockAsked !== null) this.onLockAsked();
       else this.lock();
@@ -289,7 +336,11 @@ export class SealedMirror {
     }
     if (m.type === "purged") {
       if (m.vault === null) this.lock();
-      else this.vaults.delete(m.vault);
+      else {
+        this.vaults.get(m.vault)?.drop();
+        this.vaults.delete(m.vault);
+        await this.onDrop?.(m.vault);
+      }
       this.onPurged?.(m.vault);
       return;
     }
@@ -301,6 +352,10 @@ export class SealedMirror {
       await vault.refresh(m.paths);
     }
     this.onChanged?.(m.vault, m.paths);
+  }
+
+  private async choiceKey(): Promise<string> {
+    return `${this.r.prefix}o/${await this.r.name("choice")}`;
   }
 
   private async reopen(id: string): Promise<void> {

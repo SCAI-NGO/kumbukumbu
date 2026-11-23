@@ -6,11 +6,13 @@ import "./index.css";
 import { endPendingSignOut } from "./offline/unlock";
 import { initScheme } from "./theme/apply";
 import { registerShell } from "./update/serviceWorker";
+import { runEngines } from "./offline/engines";
 import { keepStrayDrops } from "./upload/strayDrops";
 
 initScheme();
 keepStrayDrops();
 void registerShell();
+runEngines();
 
 // A sign-out made offline ends its session before anything else reaches the server (offline mode design §3a).
 void endPendingSignOut().then(() =>

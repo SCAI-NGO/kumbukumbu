@@ -42,7 +42,7 @@ const slot = () => json(200, { id: "s1", key, vaults });
 async function adasCopy(idleMs = 60_000) {
   server({ "POST /api/account/mirror-slots": () => json(201, { id: "s1", token: "tok-ada", key, vaults }) });
   const copies = new MirrorCopies(await browserPorts());
-  (await copies.create({ userId: user.id, username: "ada", password: "pw", label: "Test", idleMs, iterations: 1000 })).lock();
+  (await copies.create({ userId: user.id, username: "ada", password: "pw", label: "Test", idleMs })).lock();
 }
 
 async function openedOnline(idleMs = 60_000) {

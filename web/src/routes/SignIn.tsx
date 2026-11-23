@@ -11,6 +11,7 @@ import { openCopy, useOfflineMode } from "../offline/mode";
 import { endPendingSignOut, sweepRemovedCopies, unlockOffline } from "../offline/unlock";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { rememberSignIn } from "../offline/turnOn";
 
 /**
  * Where to go after signing in: `next` only if it is a path on this site. "//host" and "/\host" are
@@ -86,6 +87,8 @@ export default function SignIn() {
         useEditor.getState().reset();
         if (next.startsWith("/notes/") || next.startsWith("/n/")) next = "/";
       }
+      // The offline copy's idle limit follows it (offline mode design §3a).
+      rememberSignIn(remember);
       signedIn(view);
       // The contact at sign-in: the offline copy on this device opens, wrapped again under this password (design §4.2).
       void openCopy(view.user.id, { username, password, remember });

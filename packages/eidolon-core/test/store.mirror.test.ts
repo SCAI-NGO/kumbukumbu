@@ -13,8 +13,7 @@ import { delivered, FakeBrowser, realClock } from "./fakeStore";
 
 const work = { id: "vault-1f3a", tag: "tag-a", canWrite: true, pending: false };
 const team = { id: "vault-77c2", tag: "tag-b", canWrite: false, pending: false };
-const ITER = 1000;
-const signIn = { userId: "user-8d1e", username: "Ada", password: "correct horse battery", label: "Firefox on Linux", idleMs: IDLE_MS, iterations: ITER };
+const signIn = { userId: "user-8d1e", username: "Ada", password: "correct horse battery", label: "Firefox on Linux", idleMs: IDLE_MS };
 
 async function setup(vaults = [work, team]) {
   const browser = new FakeBrowser();
@@ -81,7 +80,7 @@ describe("a copy", () => {
     expect(online).not.toBe("wiped");
     expect((online as SealedMirror).vault(work.id)).toBeDefined();
 
-    const changed = await copies.unlockOnline(mirror.header, { username: "Ada", password: "a new password", idleMs: 7 * 24 * 3600_000, iterations: ITER });
+    const changed = await copies.unlockOnline(mirror.header, { username: "Ada", password: "a new password", idleMs: 7 * 24 * 3600_000 });
     (changed as SealedMirror).lock();
     const header = (await copies.forUser(signIn.userId))!;
     expect(header.idleMs).toBe(7 * 24 * 3600_000);
@@ -221,7 +220,8 @@ describe("the engine over the mirror", () => {
     browser.storage.records.set(bodies[0]!, two!);
     browser.storage.records.set(bodies[1]!, one!);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(await vault.files().read("a.md")).toBeNull();
+    // Damage, not a deletion: the engine must never read it as one.
+    await expect(vault.files().read("a.md")).rejects.toThrow(/damaged/);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

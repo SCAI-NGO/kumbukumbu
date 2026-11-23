@@ -42,6 +42,7 @@ export interface TabLocks {
 export type TabMessage =
   | { type: "changed"; vault: string; paths: string[] }
   | { type: "purged"; vault: string | null }
+  | { type: "choice" }
   /** Signed out: every tab of the copy locks. */
   | { type: "locked" };
 
