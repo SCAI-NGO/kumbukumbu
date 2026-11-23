@@ -149,6 +149,8 @@ export const routes: RouteObject[] = [
               { path: "/whats-on", handle: { window: true }, lazy: lazyPage(() => import("./calendar/WhatsOnPage")) },
               // Across the vaults the session shows: no vault in the address, so none of a discreet one reaches it.
               { path: "/recent", handle: { window: true }, lazy: lazyPage(() => import("./recent/RecentPage")) },
+              // What she published, across her own vaults: no vault in the address, as Recent.
+              { path: "/published", handle: { window: true }, lazy: lazyPage(() => import("./published/PublishedPage")) },
               { path: "/console", handle: { window: true }, lazy: lazyPage(() => import("./console/ConsolePage")) },
               // A vault's route: a discreet note's address stays `/discreet` (neutralWindow.ts).
               { path: "/blame/:vault/*", handle: { window: true }, lazy: lazyPage(() => import("./blame/BlamePage")) },

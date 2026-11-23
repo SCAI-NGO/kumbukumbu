@@ -27,6 +27,8 @@ type Props = {
   versionLabel?: string;
   /** What the server says it is, where the caller has it; else the path tells. */
   kind?: FileKind;
+  /** Only the first comparison, without the switch: a published copy against now has no "version before". */
+  fixed?: boolean;
 };
 
 const tabClass = (on: boolean) =>
@@ -54,7 +56,7 @@ export default function CompareVersions(props: Props) {
   return (props.kind ? props.kind !== "note" : isAttachment(props.path)) ? <CompareFileVersions {...props} /> : <CompareNoteVersions {...props} />;
 }
 
-function CompareNoteVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change" }: Props) {
+function CompareNoteVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change", fixed = false }: Props) {
   const [mode, setMode] = useState<CompareMode>(initial);
   const againstNow = mode === "now";
   const left = useNoteVersion(path, againstNow ? version : before);
@@ -64,8 +66,9 @@ function CompareNoteVersions({ path, version, before, trashed, beforeLost, initi
   const gone = againstNow && (trashed || (now.error instanceof HttpError && now.error.status === 404));
 
   // Every column either shows lines or says why not: never "Loading" for a version nobody will fetch.
-  const unread = (q: { error: unknown }) => (q.error ? "This version couldn't be read" : null);
   const notKept = "This version is no longer kept";
+  // A published copy's version that the history no longer holds answers 404; elsewhere the version was just listed.
+  const unread = (q: { error: unknown }) => (fixed && q.error instanceof HttpError && q.error.status === 404 ? notKept : q.error ? "This version couldn't be read" : null);
   const leftMissing = againstNow
     ? version === null
       ? notKept
@@ -90,7 +93,7 @@ function CompareNoteVersions({ path, version, before, trashed, beforeLost, initi
 
   return (
     <>
-      <ModeSwitch mode={mode} onMode={setMode} />
+      {!fixed && <ModeSwitch mode={mode} onMode={setMode} />}
       {error && <FormError>{errorText(error)}</FormError>}
       {unchanged && <p className="text-sm text-text-body">The text didn't change in this change.</p>}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

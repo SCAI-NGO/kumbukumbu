@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Columns2, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users, Waypoints } from "lucide-react";
+import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Columns2, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Share2, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users, Waypoints } from "lucide-react";
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
@@ -439,6 +439,8 @@ function ResizeHandle({ sidebar, onDragging }: { sidebar: ReturnType<typeof useS
 
 function AccountRow() {
   const role = useSession((s) => s.user?.role);
+  // Off, nothing can be published; what is out is still in the Published window (palette, /published) to withdraw.
+  const publishEnabled = usePublishEnabled();
   const navigate = useNavigate();
   // The drawer's state outlives the page: left open, it would be open again on the way back to the notes.
   const close = () => useEditor.getState().setOverlay("none");
@@ -503,6 +505,12 @@ function AccountRow() {
         <KeyRound size={16} aria-hidden className="text-muted" />
         Access
       </Link>
+      {publishEnabled && (
+        <Link to="/published" onClick={close} className={link}>
+          <Share2 size={16} aria-hidden className="text-muted" />
+          Published
+        </Link>
+      )}
       <Link to="/settings/appearance" onClick={close} className={link}>
         <Settings size={16} aria-hidden className="text-muted" />
         Settings

@@ -507,6 +507,15 @@ describe("the shell", () => {
     expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings/appearance");
     expect(within(account).getByRole("link", { name: "Console" })).toHaveAttribute("href", "/console");
     expect(within(account).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
+    // Publishing isn't on in this session: the Published window stays off the drawer.
+    expect(within(account).queryByRole("link", { name: "Published" })).not.toBeInTheDocument();
+  });
+
+  it("links to what she published while the server publishes", async () => {
+    signedInApi({ "GET /api/session": () => json(200, { user, previousSignInAt: null, publishEnabled: true }) });
+    renderApp("/notes/Work/inbox.md");
+    const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
+    expect(await within(account).findByRole("link", { name: "Published" })).toHaveAttribute("href", "/published");
   });
 
   it.each([
