@@ -41,4 +41,9 @@ As CLAUDE.md asks for a new functional block of the UI; each finding with its re
 - `GET /api/publications` (the overview) now also carries each publication's walk, `notes`, `depth` and `without`, as the note's own read does, so that Update copy can show a bundle's list from the overview. Still never the link (`src/Kumbu.Server/Publishing/PublicationApi.cs`, `PublicationOverviewView`).
 - `web/src/routes/settings/Published.tsx` replaces `PublicationsSection.tsx`; the bar's `ConfirmWithdraw` is shared.
 
-Decision record: `docs/adr/0017-published-is-a-settings-page.md`.
+Step 2, Compare (its own commit, so that it can be reverted to move it to 0.8.0):
+
+- The owner's reads of a publication (`GET /api/publications`, `GET /api/publications/{vault}/{path}`) carry `copied`, each note of the copy with the version it was made from, the start first.
+- `web/src/note/CompareCopy.tsx`, a sheet over `CompareVersions` (with `fixed`: no mode switch, and a version no longer kept says so). **Compare** sits on the row and on the note's bar wherever the copy is older.
+
+Decision records: `docs/adr/0017-published-is-a-settings-page.md`, `docs/adr/0018-compare-a-copy-by-its-note-version.md`.

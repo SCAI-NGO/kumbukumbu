@@ -9,6 +9,7 @@ import { useNoteHref } from "../../shell/openInPane";
 import { useSession } from "../../state/session";
 import { useInWindow } from "../../windows/context";
 const PublishDialog = lazy(() => import("../../shell/PublishDialog"));
+const CompareCopy = lazy(() => import("../../note/CompareCopy"));
 
 const snapshotTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -55,6 +56,7 @@ function Row({ publication: p, enabled }: { publication: PublicationOverviewView
   const withdraw = useWithdraw(p.path);
   const [asking, setAsking] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const depth = Number(p.depth ?? 0);
   const notes = Number(p.notes ?? 1);
   const older = p.older && enabled;
@@ -89,6 +91,11 @@ function Row({ publication: p, enabled }: { publication: PublicationOverviewView
             Update copy
           </button>
         )}
+        {p.older && p.copied && p.copied.length > 0 && (
+          <button type="button" aria-label={`Compare copy of ${p.path}`} onClick={() => setComparing(true)} className={secondaryButtonClass}>
+            Compare
+          </button>
+        )}
         <button type="button" aria-label={`Unpublish ${p.path}`} onClick={() => setAsking(true)} className={secondaryButtonClass}>
           Unpublish
         </button>
@@ -97,6 +104,11 @@ function Row({ publication: p, enabled }: { publication: PublicationOverviewView
       {updating && (
         <Suspense fallback={null}>
           <PublishDialog path={p.path} update={{ depth, without: p.without ?? [] }} onClose={() => setUpdating(false)} />
+        </Suspense>
+      )}
+      {comparing && p.copied && (
+        <Suspense fallback={null}>
+          <CompareCopy start={p.path} copied={p.copied} onClose={() => setComparing(false)} />
         </Suspense>
       )}
       {asking && (

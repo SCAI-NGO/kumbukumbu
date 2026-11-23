@@ -13372,6 +13372,10 @@ export interface components {
         ProviderSeenRequest: {
             provider: string;
         };
+        CopiedNoteView: {
+            path: string;
+            version: string;
+        };
         PublicationOverviewView: {
             path: string;
             /** Format: date-time */
@@ -13385,6 +13389,7 @@ export interface components {
             /** Format: int32 */
             depth?: null | number | string;
             without?: null | string[];
+            copied?: null | components["schemas"]["CopiedNoteView"][];
         };
         PublicationView: {
             path: string;
@@ -13400,6 +13405,7 @@ export interface components {
             /** Format: int32 */
             depth?: null | number | string;
             without?: null | string[];
+            copied?: null | components["schemas"]["CopiedNoteView"][];
         };
         PublicationPreviewView: {
             notes: components["schemas"]["PreviewNoteView"][];

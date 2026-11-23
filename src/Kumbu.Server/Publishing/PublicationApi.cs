@@ -43,10 +43,14 @@ public sealed record BundledView(string Path, string? Start);
 /// <c>plain</c>, the embeds that became plain text.</summary>
 public sealed record PublishedView(string Link, DateTime SnapshotAt, string[] Plain, string[]? Notes = null, string[]? Added = null, string[]? Removed = null);
 
+/// <summary>A note of a publication's copy and the version of it the copy was made from.</summary>
+public sealed record CopiedNoteView(string Path, string Version);
+
 /// <summary>A published note. For a member only <c>path</c>, the rest null (publish spec §3.10); <c>link</c> only on
 /// the owner's read of the one note.</summary>
 public sealed record PublicationView(
-    string Path, DateTime? SnapshotAt, bool? Older, DateTime? ChangedAt, string? PublishedBy, string? Link, int? Notes = null, int? Depth = null, string[]? Without = null);
+    string Path, DateTime? SnapshotAt, bool? Older, DateTime? ChangedAt, string? PublishedBy, string? Link, int? Notes = null, int? Depth = null, string[]? Without = null,
+    CopiedNoteView[]? Copied = null);
 
 /// <summary>A vault's publications and, for its owner, its unpublishable notes and folders.</summary>
 public sealed record VaultPublicationsView(PublicationView[] Publications, string[] Unpublishable, BundledView[]? Bundled = null);
@@ -54,7 +58,8 @@ public sealed record VaultPublicationsView(PublicationView[] Publications, strin
 /// <summary>A publication of one of the owner's own vaults, for the overview; never the link. Its walk (<c>notes</c>,
 /// <c>depth</c>, <c>without</c>) as on the note's own read, so that Update copy can show a bundle's list from there.</summary>
 public sealed record PublicationOverviewView(
-    string Path, DateTime SnapshotAt, bool Older, DateTime? ChangedAt, string PublishedBy, int? Notes = null, int? Depth = null, string[]? Without = null);
+    string Path, DateTime SnapshotAt, bool Older, DateTime? ChangedAt, string PublishedBy, int? Notes = null, int? Depth = null, string[]? Without = null,
+    CopiedNoteView[]? Copied = null);
 
 /// <summary>
 /// The owner's publications in the REST API (publish spec §3.5, §3.11): sessions only, over <see cref="Publications"/>,
@@ -85,7 +90,7 @@ public static class PublicationApi
         {
             views.AddRange((await publications.ListAsync(access, store, VaultPath.Root.Child(access.Name), null, ct))
                 .Select(s => new PublicationOverviewView(
-                    s.Note.Value, s.SnapshotAt!.Value, s.Older!.Value, s.ChangedAt, s.PublishedBy!, s.Notes, s.Depth, s.Without is null ? null : [.. s.Without.Select(w => w.Value)])));
+                    s.Note.Value, s.SnapshotAt!.Value, s.Older!.Value, s.ChangedAt, s.PublishedBy!, s.Notes, s.Depth, s.Without is null ? null : [.. s.Without.Select(w => w.Value)], Copied(s))));
         }
 
         return TypedResults.Ok(views.OrderBy(v => v.Path, StringComparer.Ordinal).ToArray());
@@ -278,7 +283,9 @@ public static class PublicationApi
         access.Membership is null ? (caller.WriterIn(access.Name), caller.ReferenceIn(access.Name)) : ("", caller.Reference);
 
     private static PublicationView View(PublicationState s) =>
-        new(s.Note.Value, s.SnapshotAt, s.Older, s.ChangedAt, s.PublishedBy, s.Link, s.Notes, s.Depth, s.Without is null ? null : [.. s.Without.Select(w => w.Value)]);
+        new(s.Note.Value, s.SnapshotAt, s.Older, s.ChangedAt, s.PublishedBy, s.Link, s.Notes, s.Depth, s.Without is null ? null : [.. s.Without.Select(w => w.Value)], Copied(s));
+
+    private static CopiedNoteView[]? Copied(PublicationState s) => s.Copied is null ? null : [.. s.Copied.Select(c => new CopiedNoteView(c.Note.Value, c.Version))];
 
     private static PublishedView View(PublishedNote p) => new(
         p.Link, p.SnapshotAt, [.. p.Plain], p.Notes is null ? null : [.. p.Notes.Select(n => n.Path.Value)],

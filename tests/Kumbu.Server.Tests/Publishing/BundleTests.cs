@@ -648,6 +648,11 @@ public sealed class BundleTests(KumbuAppFactory app)
             Assert.Equal(1, json["depth"]!.GetValue<int>());
             Assert.Equal(["/Work/C.md"], json["without"]!.AsArray().Select(n => n!.GetValue<string>()));
             Assert.True(json["link"] is null, "the overview holds a link");
+            // The versions the copy was made from, the start first, for Compare.
+            var copied = json["copied"]!.AsArray();
+            Assert.Equal(["/Work/A.md", "/Work/B.md"], copied.Select(c => c!["path"]!.GetValue<string>()));
+            var a = await RestClient.JsonAsync(await alice.GetAsync("/api/notes/Work/A.md"));
+            Assert.Equal(a["version"]!.GetValue<string>(), copied[0]!["version"]!.GetValue<string>());
         }
 
         using (var updated = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { depth = 0, expected = new[] { "A.md" } }))

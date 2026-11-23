@@ -95,6 +95,49 @@ describe("Published", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
+  describe("Compare", () => {
+    const note = (r: Request) => {
+      const version = new URL(r.url).searchParams.get("version");
+      if (version === "gone") return json(404, { error: "no such version" });
+      return json(200, { path: "/Work/plan.md", content: version === "v1" ? "The plan.\nOld line." : "The plan.\nNew line.", version: version ?? "v2", lastWriter: "ada", lastWriteAt: "2026-11-17T09:00:00Z" });
+    };
+
+    it("shows the copy's version beside the note now, only where the copy is older", async () => {
+      api([
+        { ...fresh, copied: [{ path: fresh.path, version: "v9" }] },
+        { ...stale, copied: [{ path: stale.path, version: "v1" }] },
+      ], { "GET /api/notes/Work/plan.md": note });
+      renderApp("/settings/published");
+      const items = await rows();
+      expect(within(items[0]).queryByRole("button", { name: /Compare/ })).toBeNull();
+      await userEvent.click(within(items[1]).getByRole("button", { name: "Compare copy of /Work/plan.md" }));
+      const sheet = await screen.findByRole("dialog", { name: "Compare plan" });
+      expect(within(sheet).queryByRole("button", { name: "Against the version before" })).toBeNull();
+      expect(await within(sheet).findByRole("list", { name: "Published copy" })).toHaveTextContent("Old line.");
+      expect(await within(sheet).findByRole("list", { name: "Now" })).toHaveTextContent("New line.");
+    });
+
+    it("says so when the version the copy was made from is no longer kept", async () => {
+      api([{ ...stale, copied: [{ path: stale.path, version: "gone" }] }], { "GET /api/notes/Work/plan.md": note });
+      renderApp("/settings/published");
+      await userEvent.click(within((await rows())[0]).getByRole("button", { name: "Compare copy of /Work/plan.md" }));
+      expect(await within(await screen.findByRole("dialog", { name: "Compare plan" })).findByText("This version is no longer kept")).toBeInTheDocument();
+    });
+
+    it("picks a note of a bundle", async () => {
+      api([{ ...stale, notes: 2, depth: 1, without: [], copied: [{ path: stale.path, version: "v1" }, { path: "/Work/b.md", version: "b1" }] }], {
+        "GET /api/notes/Work/plan.md": note,
+        "GET /api/notes/Work/b.md": (r) =>
+          json(200, { path: "/Work/b.md", content: new URL(r.url).searchParams.get("version") ? "B then." : "B now.", version: "b2", lastWriter: "ada", lastWriteAt: "2026-11-17T09:00:00Z" }),
+      });
+      renderApp("/settings/published");
+      await userEvent.click(within((await rows())[0]).getByRole("button", { name: "Compare copy of /Work/plan.md" }));
+      const sheet = await screen.findByRole("dialog", { name: "Compare plan" });
+      await userEvent.selectOptions(within(sheet).getByLabelText("Note of the copy"), "/Work/b.md");
+      expect(await within(sheet).findByRole("list", { name: "Published copy" })).toHaveTextContent("B then.");
+    });
+  });
+
   it("unpublishes after asking", async () => {
     let listed = [fresh, stale];
     const remove = vi.fn(() => {

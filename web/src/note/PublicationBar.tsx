@@ -5,6 +5,7 @@ import { errorText } from "../api/error-text";
 import { useNoteHref } from "../shell/openInPane";
 import { useBundleCopies, useBundledIn, useNotePublication, usePublishEnabled, useUpdatePublication, useWithdraw } from "../api/publications";
 const PublishDialog = lazy(() => import("../shell/PublishDialog"));
+const CompareCopy = lazy(() => import("./CompareCopy"));
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
@@ -38,6 +39,7 @@ export default function PublicationBar({ path, owner, lastWriteAt }: { path: str
   const withdraw = useWithdraw(path);
   const [asking, setAsking] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const starts = useBundledIn(path);
 
@@ -92,6 +94,11 @@ export default function PublicationBar({ path, owner, lastWriteAt }: { path: str
             Update copy
           </button>
         )}
+        {older && p.copied && p.copied.length > 0 && (
+          <button type="button" onClick={() => setComparing(true)} className={buttonClass}>
+            Compare
+          </button>
+        )}
         {enabled && p.link && <CopyButton value={p.link} label="Copy link" className={buttonClass} onResult={(ok) => setCopyFailed(!ok)} />}
         <button type="button" onClick={() => setAsking(true)} className={buttonClass}>
           Unpublish
@@ -100,6 +107,11 @@ export default function PublicationBar({ path, owner, lastWriteAt }: { path: str
       {updating && (
         <Suspense fallback={null}>
           <PublishDialog path={path} update={{ depth, without: p.without ?? [] }} onClose={() => setUpdating(false)} />
+        </Suspense>
+      )}
+      {comparing && p.copied && (
+        <Suspense fallback={null}>
+          <CompareCopy start={path} copied={p.copied} onClose={() => setComparing(false)} />
         </Suspense>
       )}
       {asking && (
