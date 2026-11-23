@@ -349,12 +349,18 @@ test("similar #11: a row answered Not related stays where it stood @similar @sea
 });
 
 test("similar #9: with search by meaning off, the section says so @similar", async ({ page, aliceApi, folder }) => {
+  test.info().annotations.push({
+    type: "finding",
+    description:
+      "F-09: with search by meaning off on the server, Similar notes doesn't say \"Similar notes need search by meaning, which is off for this vault.\" (§3.7): the server answers unindexed (M-07)",
+  });
+  test.fail();
   const path = `/Work/${folder}/Decompression.md`;
   await aliceApi.putNote(path, "# Decompression stops\n\nThe diver ascends slowly.\n");
   try {
     await openNote(page, path);
     const s = await openSimilar(page);
-    await expect(s.section.getByText("Similar notes need search by meaning, which is off for this vault.", { exact: true })).toBeVisible();
+    await expect(s.section.getByText("Similar notes need search by meaning, which is off for this vault.", { exact: true }), "F-09: the section says search by meaning is off").toBeVisible();
     await expect(s.section.getByRole("button", { name: "Try again" })).toHaveCount(0);
     await expect(s.rows).toHaveCount(0);
   } finally {

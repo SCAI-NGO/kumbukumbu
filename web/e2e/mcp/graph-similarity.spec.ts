@@ -191,11 +191,17 @@ test("graph-similarity #4: a vault Bob hasn't answers 404 as one that doesn't ex
 });
 
 test("graph-similarity #5: with search by meaning off, state off with the reason and no pairs @graph @since-0-7-0", async ({ aliceApi, folder }) => {
+  test.info().annotations.push({
+    type: "finding",
+    description:
+      "M-06: with search by meaning off on the server, /api/graph/similarity answers state ready with every pair null, not off with a reason (spec §1): SearchIndex is always registered (Program.cs:107), so EncryptedNoteStore's off branch (around :1018) is never reached and VectorsAsync answers Ready without chunks",
+  });
+  test.fail();
   const n = await graphIn(aliceApi, folder);
   const answer = await similarityOf(aliceApi, { path: n.tables });
-  expect(answer.state, "M-xx: state off with search by meaning off").toBe("off");
-  expect(answer.pairs, "M-xx: no pairs with search by meaning off").toEqual([]);
-  expect(typeof answer.reason === "string" && answer.reason.length > 0, "M-xx: a reason with search by meaning off").toBe(true);
+  expect(answer.state, "M-06: state off with search by meaning off").toBe("off");
+  expect(answer.pairs, "M-06: no pairs with search by meaning off").toEqual([]);
+  expect(typeof answer.reason === "string" && answer.reason.length > 0, "M-06: a reason with search by meaning off").toBe(true);
   // In the words the search already uses (spec §1); the exact tail is not the spec's to settle.
   expect(answer.reason, "the reason's words").toMatch(/^search by meaning is off\b/);
 });
