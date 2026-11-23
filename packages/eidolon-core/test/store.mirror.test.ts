@@ -310,6 +310,18 @@ describe("tabs", () => {
     expect(leads).toEqual(["a", "b"]);
   });
 
+  test("a sign-out in one tab locks the others, through their host when it listens", async () => {
+    const { browser, mirror: a } = await setup();
+    const b = (await new MirrorCopies(browser.tab()).unlockOffline(a.header, signIn.password))!;
+    const c = (await new MirrorCopies(browser.tab()).unlockOffline(a.header, signIn.password))!;
+    let asked = 0;
+    c.onLockAsked = () => { asked++; c.lock(); };
+    a.lockEverywhere();
+    await delivered();
+    expect([a.locked, b.locked, c.locked]).toEqual([true, true, true]);
+    expect(asked).toBe(1);
+  });
+
   test("a wipe in one tab locks the others", async () => {
     const { browser, mirror: a } = await setup();
     const b = (await new MirrorCopies(browser.tab()).unlockOffline(a.header, signIn.password))!;
@@ -338,5 +350,30 @@ describe("the idle lock", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("a use after the limit has passed, unseen by the timer (a sleeping laptop), locks instead of starting again", () => {
+    let now = 0;
+    const frozen = { now: () => now, setTimeout: () => 1, clearTimeout: () => {} };
+    let idle = 0;
+    const lock = new IdleLock(frozen, 30 * 60_000, () => { idle++; });
+    now = 8 * 3600_000;
+    lock.touch();
+    expect(idle).toBe(1);
+    lock.touch();
+    expect(idle).toBe(1);
+  });
+
+  test("a check on waking locks once the limit has passed", () => {
+    let now = 0;
+    const frozen = { now: () => now, setTimeout: () => 1, clearTimeout: () => {} };
+    let idle = 0;
+    const lock = new IdleLock(frozen, 30 * 60_000, () => { idle++; });
+    now = 29 * 60_000;
+    lock.check();
+    expect(idle).toBe(0);
+    now = 31 * 60_000;
+    lock.check();
+    expect(idle).toBe(1);
   });
 });

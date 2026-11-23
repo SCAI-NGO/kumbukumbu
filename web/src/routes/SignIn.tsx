@@ -2,11 +2,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api, call } from "../api/client";
+import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { AuthScreen, FormError, primaryButtonClass, TextField } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { NEUTRAL } from "../discreet/neutralWindow";
+import { openCopy, useOfflineMode } from "../offline/mode";
+import { endPendingSignOut, sweepRemovedCopies, unlockOffline } from "../offline/unlock";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { rememberSignIn } from "../offline/turnOn";
@@ -42,9 +44,39 @@ export default function SignIn() {
     if (useSession.getState().signedOut) queryClient.clear();
   }, [queryClient]);
 
+  const offline = useOfflineMode((s) => s.offline);
+
+  // A copy whose slot is gone goes from this device now, not only once its owner signs in here again.
+  useEffect(() => {
+    if (!offline) void sweepRemovedCopies();
+  }, [offline]);
+
+  /** Offline the form opens the copy on this device instead (offline mode design §3a): "offline" when it did. */
+  const openHere = async (): Promise<"offline"> => {
+    if (await unlockOffline(username, password)) return "offline";
+    throw new HttpError(401, "The username or password is wrong, or this device keeps no notes of this user.");
+  };
+
   const signIn = useMutation({
-    mutationFn: () => call(api.POST("/api/session", { body: { username, password, remember } })),
+    mutationFn: async () => {
+      if (offline) return openHere();
+      // A sign-out made offline ends its session first: afterwards it would end this new one.
+      await endPendingSignOut();
+      try {
+        return await call(api.POST("/api/session", { body: { username, password, remember } }));
+      } catch (e) {
+        // No answer at all: the copy on this device, if there is one.
+        if (e instanceof TypeError) return openHere();
+        throw e;
+      }
+    },
     onSuccess: (view) => {
+      if (view === "offline") {
+        // Who signed in is all this device knows offline; the session view comes once it is back online.
+        signedIn({ user: { id: "", username, display: username, role: "user" }, previousSignInAt: null });
+        navigate(safeNext(params.get("next")), { replace: true });
+        return;
+      }
       // Nothing cached from an earlier session (maybe another user's) outlives this sign-in.
       queryClient.clear();
       queryClient.setQueryData(["session"], view);
@@ -58,6 +90,8 @@ export default function SignIn() {
       // The offline copy's idle limit follows it (offline mode design §3a).
       rememberSignIn(remember);
       signedIn(view);
+      // The contact at sign-in: the offline copy on this device opens, wrapped again under this password (design §4.2).
+      void openCopy(view.user.id, { username, password, remember });
       navigate(next, { replace: true });
     },
   });
@@ -74,14 +108,22 @@ export default function SignIn() {
           {notice}
         </p>
       )}
+      {offline && (
+        <p role="status" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-text">
+          You're offline. Signing in opens the notes kept on this device.
+        </p>
+      )}
       <form onSubmit={submit} className="flex flex-col gap-4">
         <TextField label="Username" value={username} onChange={setUsername} autoComplete="username" />
         <PasswordField label="Password" value={password} onChange={setPassword} autoComplete="current-password" />
-        <label className="flex min-h-11 items-center gap-3 text-text">
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="size-5 accent-accent" />
-          Keep me signed in on this device
-        </label>
-        {remember && (
+        {/* Offline it would do nothing: the copy keeps the idle limit of the last sign-in online. */}
+        {!offline && (
+          <label className="flex min-h-11 items-center gap-3 text-text">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="size-5 accent-accent" />
+            Keep me signed in on this device
+          </label>
+        )}
+        {remember && !offline && (
           <p role="note" className="rounded-[10px] bg-red-700 px-3 py-2 text-white">
             Comfortable, but less safe: anyone who gets into this device or browser gets into your notes until you sign out or 30 days are up. Use it only on a device of your own, with a screen lock.
           </p>
