@@ -314,6 +314,7 @@ function noisePng(side: number): Buffer {
 }
 
 test("offline: a large attachment opens offline once it was opened online; a small one comes with the notes @offline", async ({ page, aliceApi, folder }) => {
+  test.setTimeout(180_000);
   // The line between them is 1 MiB (SMALL_ATTACHMENT_BYTES).
   await aliceApi.putFile(`/Work/${folder}/small.png`, noisePng(100));
   await aliceApi.putFile(`/Work/${folder}/never.png`, noisePng(700));
@@ -342,7 +343,8 @@ test("offline: a large attachment opens offline once it was opened online; a sma
         await page.goto("/settings/offline");
         return (await page.getByRole("list", { name: "Vaults on this device" }).getByRole("listitem").filter({ hasText: /^Work/ }).innerText()).replace(/\s+/g, " ");
       },
-      { message: "the opened attachment is on this device", timeout: 30_000, intervals: [1000, 2000] },
+      // 90 s: with the 0.7.0 run's other offline tests beside it, the background fetch once took longer than 30 s.
+      { message: "the opened attachment is on this device", timeout: 90_000, intervals: [1000, 2000] },
     )
     .toMatch(/· [1-9][\d.]* MB of attachments/);
   await page.goto(notePage(`/Work/${folder}/Plan.md`));
