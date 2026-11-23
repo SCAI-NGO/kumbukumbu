@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A vault of a spec's own that Alice shares with Bob, for tests where Bob must write (spec §3). Through the calls the
-// web app makes, with API contexts only, so the `mcp` project stays without a browser. In beforeAll/afterAll only.
+// web app makes, with API contexts only, so the `mcp` project stays without a browser. In beforeAll/afterAll, or in a
+// test whose timeout leaves room for two waits on the password ledger.
 import { randomBytes } from "node:crypto";
 import { Api } from "./api";
 import { secrets } from "./env";
