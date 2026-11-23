@@ -23,8 +23,9 @@
 //     the pair out for an agent; undo takes it out again (§3.6) → "similar-api #9"
 //  9. Only where the caller may change the note: a read member gets the suggestions, the answers are refused (§3.3,
 //     §4) → "similar-api #10"
-// 10. The states: `unindexed` for a note not indexed yet (§3.7, §4) → "similar-api #11"; `off` → "similar-api #12" (no
-//     `@search`: runs in the phase with search off, and fails on a stack with it on)
+// 10. The states: `unindexed` for a note not indexed yet (§3.7, §4) → "similar-api #11" (asked right after the write:
+//     a race the request wins, see there); `off` → "similar-api #12" (no `@search`: runs in the phase with search off,
+//     and fails on a stack with it on)
 // Left out: `preparing` (the model is loaded before the tests run, plan review point 5; unreachable without a stack of
 // its own); the rights checked before the other note's existence (the read member's refusal covers the rights).
 import { randomBytes } from "node:crypto";
@@ -352,7 +353,7 @@ test("similar-api #11: a note not indexed yet answers unindexed, then ready @sim
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
 
   // Asked right after its write: the index embeds it in the background, after the write has answered. A race the
-  // request wins (seen in 14 of 14 runs on the search stack, arctic-m on the CPU), not a guarantee.
+  // request wins (seen in 15 of 15 runs on the search stack, arctic-m on the CPU), not a guarantee.
   const fresh = `/${vault}/Diving/Ascent.md`;
   const decompression = (await aliceApi.getNote(n.decompression)).content;
   await aliceApi.putNote(fresh, decompression.replace("# Decompression stops", "# Ascent"));
