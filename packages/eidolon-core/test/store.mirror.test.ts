@@ -13,8 +13,7 @@ import { delivered, FakeBrowser, realClock } from "./fakeStore";
 
 const work = { id: "vault-1f3a", tag: "tag-a", canWrite: true, pending: false };
 const team = { id: "vault-77c2", tag: "tag-b", canWrite: false, pending: false };
-const ITER = 1000;
-const signIn = { userId: "user-8d1e", username: "Ada", password: "correct horse battery", label: "Firefox on Linux", idleMs: IDLE_MS, iterations: ITER };
+const signIn = { userId: "user-8d1e", username: "Ada", password: "correct horse battery", label: "Firefox on Linux", idleMs: IDLE_MS };
 
 async function setup(vaults = [work, team]) {
   const browser = new FakeBrowser();
@@ -81,7 +80,7 @@ describe("a copy", () => {
     expect(online).not.toBe("wiped");
     expect((online as SealedMirror).vault(work.id)).toBeDefined();
 
-    const changed = await copies.unlockOnline(mirror.header, { username: "Ada", password: "a new password", idleMs: 7 * 24 * 3600_000, iterations: ITER });
+    const changed = await copies.unlockOnline(mirror.header, { username: "Ada", password: "a new password", idleMs: 7 * 24 * 3600_000 });
     (changed as SealedMirror).lock();
     const header = (await copies.forUser(signIn.userId))!;
     expect(header.idleMs).toBe(7 * 24 * 3600_000);
@@ -221,7 +220,8 @@ describe("the engine over the mirror", () => {
     browser.storage.records.set(bodies[0]!, two!);
     browser.storage.records.set(bodies[1]!, one!);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(await vault.files().read("a.md")).toBeNull();
+    // Damage, not a deletion: the engine must never read it as one.
+    await expect(vault.files().read("a.md")).rejects.toThrow(/damaged/);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -310,6 +310,18 @@ describe("tabs", () => {
     expect(leads).toEqual(["a", "b"]);
   });
 
+  test("a sign-out in one tab locks the others, through their host when it listens", async () => {
+    const { browser, mirror: a } = await setup();
+    const b = (await new MirrorCopies(browser.tab()).unlockOffline(a.header, signIn.password))!;
+    const c = (await new MirrorCopies(browser.tab()).unlockOffline(a.header, signIn.password))!;
+    let asked = 0;
+    c.onLockAsked = () => { asked++; c.lock(); };
+    a.lockEverywhere();
+    await delivered();
+    expect([a.locked, b.locked, c.locked]).toEqual([true, true, true]);
+    expect(asked).toBe(1);
+  });
+
   test("a wipe in one tab locks the others", async () => {
     const { browser, mirror: a } = await setup();
     const b = (await new MirrorCopies(browser.tab()).unlockOffline(a.header, signIn.password))!;
@@ -338,5 +350,30 @@ describe("the idle lock", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("a use after the limit has passed, unseen by the timer (a sleeping laptop), locks instead of starting again", () => {
+    let now = 0;
+    const frozen = { now: () => now, setTimeout: () => 1, clearTimeout: () => {} };
+    let idle = 0;
+    const lock = new IdleLock(frozen, 30 * 60_000, () => { idle++; });
+    now = 8 * 3600_000;
+    lock.touch();
+    expect(idle).toBe(1);
+    lock.touch();
+    expect(idle).toBe(1);
+  });
+
+  test("a check on waking locks once the limit has passed", () => {
+    let now = 0;
+    const frozen = { now: () => now, setTimeout: () => 1, clearTimeout: () => {} };
+    let idle = 0;
+    const lock = new IdleLock(frozen, 30 * 60_000, () => { idle++; });
+    now = 29 * 60_000;
+    lock.check();
+    expect(idle).toBe(0);
+    now = 31 * 60_000;
+    lock.check();
+    expect(idle).toBe(1);
   });
 });

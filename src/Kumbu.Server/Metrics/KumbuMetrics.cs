@@ -532,7 +532,7 @@ public static class KumbuMetrics
     public static readonly IReadOnlyList<string> KnownCommands =
     [
         "ls", "cat", "outline", "rg", "links", "backlinks", "graph", "tags", "board", "calendar", "head", "tail", "wc", "sort",
-        "csv", "html", "xml", "semsearch", "img", "pdf", "pdfimages", "history", "blame", "diff", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "mkcp", "lscp", "rmcp", "publish", "skills", "uname", "help",
+        "csv", "html", "xml", "semsearch", "similar", "img", "pdf", "pdfimages", "history", "blame", "diff", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "mkcp", "lscp", "rmcp", "publish", "skills", "uname", "help",
     ];
 
     /// <summary>The label values for the commands of a line: distinct, a known name as itself, anything else "other", first seen first.</summary>

@@ -8,8 +8,11 @@ import { isNotFound, isVaultBusy } from "./error-text";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt, type FileKind } from "./paths";
 import { textOrder } from "./textOrder";
 import { copyName, copyText } from "../note/duplicate";
+import { createOffline, createUntitledOffline, offlineWrites, saveOffline, trashOffline } from "../offline/writing";
 import type { FlagName } from "../flags/api";
 import type { components } from "./schema";
+import { offlineSource } from "../offline/source";
+import { mediaTypeOf } from "eidolon-core/links/formats";
 
 type Gen = components["schemas"];
 // The tree's flag and folder times, by hand until the generated schema has them.
@@ -166,7 +169,10 @@ const whileBusy = (query: { state: { error: unknown } }) => (isVaultBusy(query.s
 /** A vault's tree, for `useTree` and for reading the trees of several vaults at once (`useQueries`). */
 export const treeQuery = (vault: string | null) => ({
   queryKey: ["tree", vault],
-  queryFn: (): Promise<TreeView> => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } })),
+  queryFn: (): Promise<TreeView> => {
+    const offline = offlineSource();
+    return offline ? Promise.resolve().then(() => offline.tree(vault!)) : call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: vault! } } }));
+  },
   enabled: vault !== null,
   refetchInterval: whileBusy,
 });
@@ -185,6 +191,7 @@ export function findFolder(root: TreeFolder, path: string): TreeFolder | undefin
 
 /** An empty note at `path`; one that is there already (its link was stale) is simply opened. */
 async function createEmpty(path: string) {
+  if (offlineWrites()) return createOffline(path, "").catch((e: unknown) => (e instanceof HttpError && e.status === 409 ? path : Promise.reject(e)));
   const { error, response } = await api.PUT("/api/notes/{vault}/{path}", { params: params(path), body: { content: "" } });
   if (!response.ok && response.status !== 409) await call(Promise.resolve({ error, response }));
   return path;
@@ -195,6 +202,7 @@ export function useCreateUntitled() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (folder: string) => {
+      if (offlineWrites()) return createUntitledOffline(folder);
       const [vault, ...rest] = folder.split("/").slice(1);
       const tree = await queryClient.ensureQueryData({
         queryKey: ["tree", vault],
@@ -267,7 +275,7 @@ export function useDuplicateNote() {
 export const useNote = (path: string | null, { refetchOnMount = true, cached = false }: { refetchOnMount?: boolean; cached?: boolean } = {}) =>
   useQuery({
     queryKey: ["note", path],
-    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path!) })),
+    queryFn: () => offlineSource()?.note(path!) ?? call(api.GET("/api/notes/{vault}/{path}", { params: params(path!) })),
     enabled: path !== null,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -305,7 +313,11 @@ export function useNoteText(path: string | null): string | undefined {
 export const useLinks = (path: string, version: string | undefined) =>
   useQuery({
     queryKey: ["links", path, version],
-    queryFn: () => call(api.GET("/api/links/{vault}/{path}", { params: params(path) })),
+    queryFn: () => {
+      // Offline, the text the links are of is the copy's, which the note's read brought in (the same version).
+      const offline = offlineSource();
+      return offline ? offline.note(path).then((note) => offline.linksOf(path, note.content)) : call(api.GET("/api/links/{vault}/{path}", { params: params(path) }));
+    },
     enabled: version !== undefined,
     placeholderData: (previous) => previous,
   });
@@ -360,6 +372,13 @@ export function useSaveNote(path: string) {
     // save would wait behind it. Failing at once, the editor keeps the text and saves the latest when it can.
     networkMode: "always",
     mutationFn: async ({ content, version, keepalive = false }: { content: string; version: string; keepalive?: boolean }): Promise<SaveResult> => {
+      // Offline, into the copy on this device: the engine uploads it once online (offline/writing.ts).
+      if (offlineWrites()) {
+        const answer = await saveOffline(path, content, version);
+        if ("conflict" in answer) return answer;
+        const note = queryClient.getQueryData<NoteView>(["note", path]);
+        return { saved: { ...(note ?? ({ path } as NoteView)), content, version: answer.saved.version } };
+      }
       const body = { content, version };
       const small = new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_LIMIT;
       const { data, error, response } = await api.PUT("/api/notes/{vault}/{path}", { params: params(path), body, keepalive: keepalive && small });
@@ -434,6 +453,7 @@ export function useDeleteNote() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (path: string) => {
+      if (offlineWrites()) return trashOffline(path);
       const vault = vaultOf(path);
       const tree = await queryClient.ensureQueryData({
         queryKey: ["tree", vault],
@@ -464,10 +484,28 @@ export function useDeleteNote() {
  * An attachment's bytes (`path` within `vault`) at `at`: today's, an earlier version's or a checkpoint's; with the
  * session (the server serves files to signed-in users and API keys only, so never by a plain URL).
  */
-export function fetchFile<As extends "blob" | "arrayBuffer">(vault: string, path: string, at: FileAt, parseAs: As, signal: AbortSignal) {
+export function fetchFile(vault: string, path: string, at: FileAt, parseAs: "blob" | "arrayBuffer", signal: AbortSignal): Promise<FileAnswer> {
+  // Offline, today's bytes come from the copy; an earlier version or a checkpoint needs a connection (design §3).
+  const offline = offlineSource();
+  if (offline) return fromCopy(offline, `/${vault}/${path}`, at, parseAs);
   return at.checkpoint
     ? api.GET("/api/vaults/{vault}/checkpoints/{name}/files/{path}", { params: { path: { vault, name: at.checkpoint, path } }, parseAs, signal })
     : api.GET("/api/files/{vault}/{path}", { params: { path: { vault, path }, query: at.version ? { version: at.version } : {} }, parseAs, signal });
+}
+
+/** An attachment's bytes, as `parseAs` asked for them, when the response is ok. */
+export interface FileAnswer { data?: Blob | ArrayBuffer; response: Response }
+
+/** `fetchFile`'s answer from the copy, in the shape of the API client's: a 404 for what the copy can't give. */
+async function fromCopy(offline: NonNullable<ReturnType<typeof offlineSource>>, path: string, at: FileAt, parseAs: "blob" | "arrayBuffer"): Promise<FileAnswer> {
+  const failed = { response: new Response(null, { status: 404 }) };
+  if (at.version || at.checkpoint) return failed;
+  try {
+    const blob = await offline.file(path, mediaTypeOf(path));
+    return { data: parseAs === "blob" ? blob : await blob.arrayBuffer(), response: new Response(null, { status: 200 }) };
+  } catch {
+    return failed;
+  }
 }
 
 /**

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The sealed store's cryptography (offline mode design §4.2).
 import { describe, expect, test } from "vitest";
-import { deriveKeys, fromBase64Url, nameOf, open, seal, toBase64Url, unwrapWithPassword, wrapWithPassword } from "../src/store/crypto";
+import { deriveKeys, fromBase64Url, KDF_PARAMS, nameOf, open, seal, toBase64Url, unwrapWithPassword, validKdf, wrapWithPassword } from "../src/store/crypto";
 import { nodeCrypto } from "./fakeStore";
 
 const c = nodeCrypto;
@@ -65,8 +65,8 @@ describe("records", () => {
 describe("the password wrap", () => {
   test("opens with the password and its copy only", async () => {
     const raw = c.randomBytes(32);
-    const wrap = await wrapWithPassword(c, raw, "correct horse", "wrap\0copy1", 1000);
-    expect(wrap.iterations).toBe(1000);
+    const wrap = await wrapWithPassword(c, raw, "correct horse", "wrap\0copy1");
+    expect(wrap.kdf).toEqual({ name: "argon2id", m: 65_536, t: 3, p: 1 });
     expect(await unwrapWithPassword(c, wrap, "correct horse", "wrap\0copy1")).toEqual(raw);
     expect(await unwrapWithPassword(c, wrap, "correct hors", "wrap\0copy1")).toBeNull();
     expect(await unwrapWithPassword(c, wrap, "correct horse", "wrap\0copy2")).toBeNull();
@@ -74,15 +74,38 @@ describe("the password wrap", () => {
 
   test("the password is taken in NFC, as a password manager or another keyboard may type it", async () => {
     const raw = c.randomBytes(32);
-    const wrap = await wrapWithPassword(c, raw, "Kaffeé", "a", 1000);
+    const wrap = await wrapWithPassword(c, raw, "Kaffeé", "a");
     expect(await unwrapWithPassword(c, wrap, "Kaffeé", "a")).toEqual(raw);
   });
 
   test("takes a fresh salt each time", async () => {
     const raw = c.randomBytes(32);
-    const a = await wrapWithPassword(c, raw, "pw", "a", 1000);
-    const b = await wrapWithPassword(c, raw, "pw", "a", 1000);
+    const a = await wrapWithPassword(c, raw, "pw", "a");
+    const b = await wrapWithPassword(c, raw, "pw", "a");
     expect(a.salt).not.toBe(b.salt);
+  });
+});
+
+describe("the password hash's parameters", () => {
+  test("the header keeps them, and a wrap made with others opens with those", async () => {
+    const raw = c.randomBytes(32);
+    const later = { name: "argon2id" as const, m: 131_072, t: 4, p: 1 };
+    const wrap = await wrapWithPassword(c, raw, "pw", "a", later);
+    expect(wrap.kdf).toEqual(later);
+    expect(await unwrapWithPassword(c, wrap, "pw", "a")).toEqual(raw);
+    // Parameters changed in the header give another key: the wrap doesn't open.
+    expect(await unwrapWithPassword(c, { ...wrap, kdf: KDF_PARAMS }, "pw", "a")).toBeNull();
+  });
+
+  test("a header asking for more than a browser can give, or for another hash, doesn't open", async () => {
+    const raw = c.randomBytes(32);
+    const wrap = await wrapWithPassword(c, raw, "pw", "a");
+    for (const kdf of [{ ...KDF_PARAMS, m: 4_194_304 }, { ...KDF_PARAMS, t: 1000 }, { ...KDF_PARAMS, p: 0 }, { ...KDF_PARAMS, name: "pbkdf2" }, null, { ...KDF_PARAMS, m: 1.5 }]) {
+      expect(validKdf(kdf)).toBe(false);
+      expect(await unwrapWithPassword(c, { ...wrap, kdf: kdf as never }, "pw", "a")).toBeNull();
+    }
+    // An earlier copy's wrap, before the hash was named, doesn't either.
+    expect(await unwrapWithPassword(c, { salt: wrap.salt, wrapped: wrap.wrapped, iterations: 1000 } as never, "pw", "a")).toBeNull();
   });
 });
 

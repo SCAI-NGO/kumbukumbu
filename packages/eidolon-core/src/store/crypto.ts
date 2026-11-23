@@ -14,9 +14,9 @@ type Bytes = Uint8Array<ArrayBuffer>;
 type Usage = "encrypt" | "decrypt" | "sign" | "deriveKey";
 
 export interface Subtle {
-  importKey(format: "raw", keyData: Bytes, algorithm: "HKDF" | "PBKDF2", extractable: false, usages: Usage[]): Promise<Key>;
+  importKey(format: "raw", keyData: Bytes, algorithm: "HKDF" | "AES-GCM", extractable: false, usages: Usage[]): Promise<Key>;
   deriveKey(
-    algorithm: { name: "HKDF"; hash: "SHA-256"; salt: Bytes; info: Bytes } | { name: "PBKDF2"; hash: "SHA-256"; salt: Bytes; iterations: number },
+    algorithm: { name: "HKDF"; hash: "SHA-256"; salt: Bytes; info: Bytes },
     baseKey: Key, derivedKeyType: { name: "AES-GCM"; length: 256 } | { name: "HMAC"; hash: "SHA-256"; length: 256 },
     extractable: false, usages: Usage[]): Promise<Key>;
   encrypt(algorithm: { name: "AES-GCM"; iv: Bytes; additionalData: Bytes }, key: Key, data: Bytes): Promise<ArrayBuffer>;
@@ -28,10 +28,34 @@ export interface CryptoPort {
   readonly subtle: Subtle;
   /** Bytes from the host's secure random source (`crypto.getRandomValues`). */
   randomBytes(length: number): Bytes;
+  /** The password hash: the host brings it, as WebCrypto has none that is memory-hard (design §4.2). */
+  readonly kdf: PasswordKdf;
 }
 
-/** About a second on a mid-range phone (design §4.2); the header keeps the count, so it can be raised later. */
-export const PBKDF2_ITERATIONS = 1_000_000;
+/** Argon2id's parameters as RFC 9106 names them: memory in KiB, passes, lanes. */
+export interface KdfParams { name: "argon2id"; m: number; t: number; p: number; }
+
+/**
+ * 64 MiB and 3 passes, RFC 9106's second recommendation, with one lane: WebAssembly runs on one thread, so more lanes
+ * only cost time. The header keeps them, so later copies can take more without breaking earlier ones.
+ */
+export const KDF_PARAMS: KdfParams = { name: "argon2id", m: 65_536, t: 3, p: 1 };
+
+/** Argon2id, by the host's implementation: 32 bytes from the password, NFC already, and the salt. */
+export interface PasswordKdf {
+  derive(password: string, salt: Bytes, params: KdfParams): Promise<Bytes>;
+}
+
+/**
+ * Parameters a header may carry: a header changed on the device mustn't make the next unlock take all memory or
+ * hours. Weaker ones than ours open as well; they would only come from a wrap made with them, which needs the key.
+ */
+export function validKdf(k: unknown): k is KdfParams {
+  if (k === null || typeof k !== "object") return false;
+  const { name, m, t, p } = k as Record<string, unknown>;
+  const int = (v: unknown, min: number, max: number) => typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
+  return name === "argon2id" && int(p, 1, 8) && int(m, 8 * (p as number), 1_048_576) && int(t, 1, 16);
+}
 
 const NONCE_BYTES = 12;
 const encoder = new TextEncoder();
@@ -76,26 +100,31 @@ export async function nameOf(c: CryptoPort, key: Key, label: string): Promise<st
 }
 
 /** The mirror key sealed under a key from the password, for unlocking offline (design §4.2). Base64Url throughout. */
-export interface PasswordWrap { salt: string; iterations: number; wrapped: string; }
+export interface PasswordWrap { kdf: KdfParams; salt: string; wrapped: string; }
 
-async function passwordKey(c: CryptoPort, password: string, salt: Bytes, iterations: number): Promise<Key> {
-  const base = await c.subtle.importKey("raw", encoder.encode(password.normalize("NFC")), "PBKDF2", false, ["deriveKey"]);
-  return c.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+async function passwordKey(c: CryptoPort, password: string, salt: Bytes, params: KdfParams): Promise<Key> {
+  const bytes = await c.kdf.derive(password.normalize("NFC"), salt, params);
+  if (bytes.byteLength !== 32) throw new Error("The password hash gave a key of the wrong size.");
+  try {
+    return await c.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 /** `aad` binds the wrap to its copy, so a wrap copied into another copy's header doesn't open. A fresh salt each time. */
-export async function wrapWithPassword(c: CryptoPort, raw: Bytes, password: string, aad: string, iterations = PBKDF2_ITERATIONS): Promise<PasswordWrap> {
+export async function wrapWithPassword(c: CryptoPort, raw: Bytes, password: string, aad: string, params = KDF_PARAMS): Promise<PasswordWrap> {
   const salt = c.randomBytes(16);
-  const key = await passwordKey(c, password, salt, iterations);
-  return { salt: toBase64Url(salt), iterations, wrapped: toBase64Url(await seal(c, key, raw, aad)) };
+  const key = await passwordKey(c, password, salt, params);
+  return { kdf: params, salt: toBase64Url(salt), wrapped: toBase64Url(await seal(c, key, raw, aad)) };
 }
 
-/** The raw mirror key, or null for a wrong password. */
+/** The raw mirror key, or null for a wrong password, or a wrap this version can't open. */
 export async function unwrapWithPassword(c: CryptoPort, wrap: PasswordWrap, password: string, aad: string): Promise<Bytes | null> {
   const salt = fromBase64Url(wrap.salt);
   const wrapped = fromBase64Url(wrap.wrapped);
-  if (salt === null || wrapped === null) return null;
-  return open(c, await passwordKey(c, password, salt, wrap.iterations), wrapped, aad);
+  if (salt === null || wrapped === null || salt.byteLength !== 16 || !validKdf(wrap.kdf)) return null;
+  return open(c, await passwordKey(c, password, salt, wrap.kdf), wrapped, aad);
 }
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";

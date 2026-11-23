@@ -8,7 +8,7 @@ import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { atLeast, fileKindOfEntry, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
-import { boardUrl, calendarUrl, folderOf, galleryUrl, markerOf, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { boardUrl, calendarUrl, folderOf, galleryUrl, inVault, markerOf, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { storageText } from "../api/storage";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -16,6 +16,10 @@ import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
 import { LeaveDialog } from "../components/shownOnce";
+import { useOfflineCopy } from "../offline/copy";
+import { lockEverywhere, uploaded, useOfflineMode } from "../offline/mode";
+import SignOutDialog from "../offline/SignOutDialog";
+import { PENDING_NOTICE, signOutOffline } from "../offline/unlock";
 import { topDialog, useDialog } from "../hooks/useDialog";
 import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
 import { useTruncated } from "../hooks/useTruncated";
@@ -53,6 +57,7 @@ import { flaggable } from "../flags/FlagMenu";
 import FlagIcon from "../flags/FlagIcon";
 import VaultSwitcher from "./VaultSwitcher";
 import { forgetLastNote } from "./lastNote";
+import { useKeepOffline } from "../offline/keepOffline";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
 
@@ -126,6 +131,8 @@ type FolderActions = {
   /** The caller's level in the vault: below `write` a folder has no actions, and the board's folder wants `maintain`. */
   level: Level;
   publishing: Publishing | null;
+  /** Keep offline for a folder (its path in the vault, "" the vault): only with a copy on this device. */
+  keepOffline(folder: string): MenuItem[];
 };
 
 /**
@@ -133,7 +140,7 @@ type FolderActions = {
  * entries to them). An empty folder shown in the tree is there only by its marker, so it can be removed: without
  * asking, as the trash keeps it.
  */
-function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing }: FolderActions): MenuItem[] {
+function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing, keepOffline }: FolderActions): MenuItem[] {
   const inner = folder.path.split("/").length > 2;
   const writes = atLeast(level, "write");
   const moves = inner && mayChange(level, folder.path);
@@ -151,6 +158,7 @@ function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRem
     ...(moves && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
     // The vault itself is no folder to mark.
     ...(inner ? entriesOf(publishing, folder.path, false) : []),
+    ...keepOffline(inVault(folder.path)),
   ];
 }
 
@@ -438,23 +446,43 @@ function AccountRow() {
   const [failed, setFailed] = useState(false);
   const badge = useBadge();
 
-  /** The open editor saves first; text it can't save (a conflict, a failure) is given up only when the user says so. */
-  const signOut = async (anyway = false) => {
+  const [waitingAsk, setWaitingAsk] = useState<number | null>(null);
+
+  /**
+   * The open editor saves first; text it can't save (a conflict, a failure) is given up only when the user says so.
+   * Changes waiting for the offline copy upload first online; offline they stay sealed, or go with the copy as the
+   * user says (offline mode design §3a), and the server hears of the sign-out once the device is back online.
+   */
+  const signOut = async (anyway = false, copy?: "keep" | "remove") => {
     setAsking(false);
     setFailed(false);
+    setWaitingAsk(null);
     const save = useEditor.getState().beforeRead;
     // No read of the note afterwards: it would race the DELETE below, and a 401 for it would report a lost session.
     if (!anyway && save && !(await save({ reread: false }))) return setAsking(true);
-    try {
-      const { response } = await api.DELETE("/api/session");
-      // A 401: the session had ended already, and the app is on its way to sign-in.
-      if (!response.ok && response.status !== 401) return setFailed(true);
-    } catch {
-      return setFailed(true);
+    if (copy === undefined && !useOfflineMode.getState().offline) await uploaded(30_000);
+    const { offline, waiting } = useOfflineMode.getState();
+    if (copy === undefined && waiting > 0) return setWaitingAsk(waiting);
+    let notice: string | null = null;
+    if (offline) {
+      // Said only where the mark was kept: without it, the session ends by its own limits.
+      if (await signOutOffline(copy === "remove")) notice = PENDING_NOTICE;
+    } else {
+      try {
+        const { response } = await api.DELETE("/api/session");
+        // A 401: the session had ended already, and the app is on its way to sign-in.
+        if (!response.ok && response.status !== 401) return setFailed(true);
+      } catch {
+        return setFailed(true);
+      }
+      if (copy === "remove") await useOfflineCopy.getState().mirror?.remove();
+      else await lockEverywhere();
+      useOfflineCopy.getState().clear();
     }
     useEditor.getState().reset();
     forgetLastNote(useSession.getState().user?.id);
     useSession.getState().signOut();
+    if (notice !== null) useSession.setState({ notice });
     // The cache goes on the sign-in page: cleared here, the shell still shown would ask for the session again.
     navigate("/signin", { replace: true });
   };
@@ -498,6 +526,7 @@ function AccountRow() {
           Couldn't sign out. Try again.
         </p>
       )}
+      {waitingAsk !== null && <SignOutDialog waiting={waitingAsk} onStay={() => setWaitingAsk(null)} onSignOut={(remove) => void signOut(true, remove ? "remove" : "keep")} />}
       {asking && (
         <LeaveDialog
           id="sign-out-unsaved"
@@ -575,6 +604,7 @@ export default function TreeDrawer(props: {
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const active = vaults.data?.find((v) => v.name === activeVault);
+  const keepOffline = useKeepOffline(active?.id);
   const membership = active?.membership;
   const embeddings = active?.embeddings;
   const level = levelOf(active);
@@ -679,6 +709,7 @@ export default function TreeDrawer(props: {
     removing: removeFolder.isPending,
     level,
     publishing: publishingActions,
+    keepOffline,
   };
   const hasBoard = !!(activeVault && tree.data && findFolder(tree.data.root, `/${activeVault}/Board`)?.notes.some((n) => n.name === "Board.md"));
   // The board is a page of its own: the drawer, left open, would be open again on the way back to the notes.

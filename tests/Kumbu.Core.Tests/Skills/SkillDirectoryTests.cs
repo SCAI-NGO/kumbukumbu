@@ -36,7 +36,7 @@ public class SkillDirectoryTests
 
     [Fact]
     public async Task Lists_system_then_Skills_then_vaults() =>
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
 
     [Fact]
     public async Task A_skill_in_the_Skills_vault_takes_the_place_of_the_system_skill()
@@ -191,7 +191,7 @@ public class SkillDirectoryTests
         Put("/Private/_skills/a-skill/SKILL.md", "---\nname: a-skill\ndescription: A.\n---\n");
         Put("/Archiv/_skills/old/SKILL.md", "---\nname: old\ndescription: Old.\n---\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "write-as-alice", "old", "a-skill", "b-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "old", "a-skill", "b-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
     }
 
     [Fact]
@@ -386,7 +386,7 @@ public class SkillDirectoryTests
         Put("/Skills/readme.md", "# Readme\n");
         Put("/Work/_skills/readme.md", "# Readme\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
     }
 
     [Fact]
@@ -409,7 +409,7 @@ public class SkillDirectoryTests
         // Only the vault Skills has its archive in a skill's place.
         Put("/Work/_skills/_archive/SKILL.md", "---\nname: _archive\ndescription: Kept.\n---\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "write-as-alice", "_archive", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "_archive", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
         Assert.Equal(["write-as-alice"], (await dir.ListAsync("Skills", Ct)).Select(s => s.Name));
     }
 
@@ -418,7 +418,7 @@ public class SkillDirectoryTests
     {
         _store.SkillsVault = null;
 
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
         Assert.Empty(await dir.ListAsync("Skills", Ct));
     }
 
