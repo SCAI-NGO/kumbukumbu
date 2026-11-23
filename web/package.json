@@ -14,7 +14,9 @@
     "test:shell": "playwright test -c e2e/shell/playwright.config.ts",
     "e2e": "e2e/stack/run.sh",
     "e2e:0.5.0": "e2e/stack/run.sh --grep \"@smoke|@calendar|@flags|@explorer|@recent|@mermaid|@embeds|@aliases|@ailink|@blockrefs|@mentions|@photo|@properties\"",
-    "e2e:0.6.0": "e2e/stack/run.sh --grep \"@smoke|@memory|@graph|@svg|@deeplinks|@upload|@publish|@blame|@files|@readers|@shell|@palette|@windows|@filters|@console|@workspace|@calendar\"",
+    "e2e:0.6.0": "e2e/stack/run.sh --grep \"@smoke|@memory|@graph|@svg|@deeplinks|@upload|@publish|@blame|@files|@readers|@shell|@palette|@windows|@filters|@console|@workspace|@calendar\" --grep-invert \"@search|@since-0-7-0\"",
+    "e2e:0.7.0": "e2e/stack/run-0-7-0.sh",
+    "e2e:0.7.0:tensorx": "E2E_SEARCH=1 e2e/stack/run.sh --grep @tensorx",
     "gen:api": "openapi-typescript ${KUMBU_OPENAPI_URL:-http://localhost:8083/api/openapi.json} -o src/api/schema.d.ts",
     "icons": "node scripts/icons.mjs"
   },

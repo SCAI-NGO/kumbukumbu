@@ -8,17 +8,23 @@ import { Api, Mcp, seed } from "./api";
 import { e2eDir, fixturesDir, storageState, type User } from "./env";
 import { limitWindow, newSession } from "./session";
 
-/** Where each tag's screenshots go (spec §5): committed, so kept small. */
+/** Where each tag's screenshots go (spec §5): committed, so kept small. The 0.6.0 run's by default. */
 export const shotsDir = join(e2eDir, "..", "..", "docs", "superpowers", "overnighter", "2026-11-19-tests-0-6-0");
+/** The 0.7.0 run's: its specs set `test.use({ shotsDir: shotsDir070 })`, so their ids (F-01 on) don't overwrite 0.6.0's. */
+export const shotsDir070 = join(e2eDir, "..", "..", "docs", "superpowers", "overnighter", "2026-11-23-tests-0-7-0");
 
 /** The phone projects (`phone`, `serial-phone`): for `test.fail(onPhone(testInfo), "F-NN …")`. */
 export const onPhone = (testInfo: TestInfo) => testInfo.project.name.endsWith("phone");
 
 /** One screenshot named after the tag and the project, e.g. `calendar-desktop.png`; or a finding's, `F-03-phone.png`. */
-export async function shot(page: Page, testInfo: TestInfo, name: string) {
-  mkdirSync(shotsDir, { recursive: true });
-  await page.screenshot({ path: join(shotsDir, `${name}-${testInfo.project.name.replace(/^serial-?/, "") || "desktop"}.png`), scale: "css" });
+export async function shot(page: Page, testInfo: TestInfo, name: string, dir = shotsDirOf(testInfo)) {
+  mkdirSync(dir, { recursive: true });
+  await page.screenshot({ path: join(dir, `${name}-${testInfo.project.name.replace(/^serial-?/, "") || "desktop"}.png`), scale: "css" });
 }
+
+// The `shotsDir` option of each running test (test.use), for `shot`, which gets only its testInfo.
+const runningShotsDirs = new Map<string, string>();
+const shotsDirOf = (testInfo: TestInfo) => runningShotsDirs.get(testInfo.testId) ?? shotsDir;
 
 /**
  * Fixture files below `fixtures/<from>` (e.g. `Work/Pump`), mapped below the vault path `to` (e.g.
@@ -40,6 +46,8 @@ export function fixtureTree(from: string, to: string) {
 }
 
 type TestFixtures = {
+  /** Where this test's screenshots go: `shotsDir` unless the spec sets `test.use({ shotsDir: shotsDir070 })`. */
+  shotsDir: string;
   /** Alice's API as the web app calls it. */
   aliceApi: Api;
   /** Bob's API (read-only member of Work). */
@@ -74,6 +82,7 @@ type WorkerFixtures = {
 };
 
 export const test = base.extend<TestFixtures & AutoFixtures, WorkerFixtures>({
+  shotsDir: [shotsDir, { option: true }],
   aliceApi: async ({}, use) => {
     const api = await Api.as("alice");
     await use(api);
@@ -124,15 +133,17 @@ export const test = base.extend<TestFixtures & AutoFixtures, WorkerFixtures>({
   // (`expect(x, "F-03: …")`); a finding's test that fails for another reason (a page that never loaded) is reported
   // as a failure, not as the finding.
   findingShot: [
-    async ({ page }, use, testInfo) => {
+    async ({ page, shotsDir: dir }, use, testInfo) => {
+      runningShotsDirs.set(testInfo.testId, dir);
       await use();
+      runningShotsDirs.delete(testInfo.testId);
       const finding = testInfo.annotations.find((a) => a.type === "finding" || a.type === "fail")?.description?.match(/^F-(\d+|xx)/)?.[0];
       if (!finding || testInfo.expectedStatus !== "failed" || testInfo.status !== "failed") return;
       if (!testInfo.errors.some((e) => (e.message ?? "").includes(`${finding}:`))) {
         testInfo.expectedStatus = "passed";
         return;
       }
-      if (!page.isClosed()) await shot(page, testInfo, finding);
+      if (!page.isClosed()) await shot(page, testInfo, finding, dir);
     },
     { auto: true },
   ],

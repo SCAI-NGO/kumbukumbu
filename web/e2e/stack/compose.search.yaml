@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Search by meaning on, for the tags that need it (E2E_SEARCH=1, see up.sh): the internal model (arctic-m), the
+# `tensorx` provider of the README's example and people's own TensorX keys (BYOK). The model is kept in an external
+# volume that `down -v` doesn't remove: a fixed, checked download, not state. Every stack is still fresh.
+services:
+  kumbu:
+    environment:
+      Kumbu__Search__Enabled: "true"
+      Kumbu__Search__Model: arctic-m
+      # internal unless the model can't be downloaded (spec §3): E2E_EMBEDDINGS_DEFAULT=tensorx.
+      Kumbu__Embeddings__Default: ${E2E_EMBEDDINGS_DEFAULT:-internal}
+      Kumbu__Embeddings__Byok: "true"
+      Kumbu__Embeddings__Providers__tensorx__Driver: openai-compatible
+      Kumbu__Embeddings__Providers__tensorx__BaseUrl: https://api.tensorx.ai/v1
+      Kumbu__Embeddings__Providers__tensorx__Model: qwen/qwen3-embedding-8b
+      Kumbu__Embeddings__Providers__tensorx__Dimensions: "1024"
+      Kumbu__Embeddings__Providers__tensorx__QueryPrompt: "Instruct: Given a search query, retrieve the note sections that answer it\nQuery: "
+      # A placeholder, not a key: behind the VM's proxy, the proxy puts the real header in its place (spec §3).
+      Kumbu__Embeddings__Providers__tensorx__ApiKeyFile: /run/kumbu-e2e/tensorx-placeholder-key
+      Kumbu__Embeddings__Providers__tensorx__Label: TensorX
+      Kumbu__Embeddings__Providers__tensorx__Description: "As TensorX states: EU (Ireland), zero data retention"
+    volumes:
+      - ${E2E_STACK_DIR}/tensorx-placeholder-key:/run/kumbu-e2e/tensorx-placeholder-key:ro
+
+volumes:
+  models:
+    external: true
+    name: kumbu-e2e-models
