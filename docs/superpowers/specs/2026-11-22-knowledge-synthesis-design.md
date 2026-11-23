@@ -1,6 +1,6 @@
 # Knowledge synthesis (`similar`, `synthesize-knowledge`) — design
 
-Date: 2026-11-22. Status: draft for Chris's review; every decision in §3 is *(Claude's call)*, made overnight on the basis of the pre-analysis, and open to change. Size: M (an index method, one new `sh` command, three filters, a system skill). Release: open; 0.7.0 is otherwise scoped to offline mode, and none of this touches offline code.
+Date: 2026-11-22. Status: draft for Chris's review; every decision in §3 is *(Claude's call)*, made overnight on the basis of the pre-analysis, and open to change. Size: M (an index method, one new `sh` command, three filters, a system skill). Release: 0.7.0, beside offline mode (Chris, 2026-11-22); none of this touches offline code.
 
 Sources:
 - the pre-analysis "Operation Fish Oil" (2026-11-22, `/SWE/Kumbu/Ideas/`): Swanson's ABC model mapped to the commands, the gaps, a draft of the skill;
@@ -44,7 +44,7 @@ Anti-goals:
 6. **`--unlinked` leaves out distance 1 only.** *Because* distance 2 (a common neighbour) is exactly where many good bridges sit; the agent sees the distance and judges.
 7. **`--outside` leaves out notes (and on `semsearch` PDF pages) at or below a path; repeatable, at most 50 like the graph's filters.** **`--without-tag` leaves out notes carrying the tag, nested ones included; repeatable, a note carrying any of them goes.** PDFs carry no tags, so they stay. An unknown tag is no error for `--without-tag` (leaving out nothing is the right answer).
 8. **Pending and other-model notes are counted in the footer, never guessed.** A source note without current embeddings is an error that says so, and points to `semsearch` for its topic meanwhile.
-9. **The skill ships as a system skill** in `src/Kumbu.Core/Skills/System/synthesize-knowledge/`, with a hand-test list. The pre-analysis suggests trying it as a user skill first; the PR proposes both ways (§7), Chris decides.
+9. **The skill ships as a system skill** in `src/Kumbu.Core/Skills/System/synthesize-knowledge/`, with a hand-test list. Decided by Chris on 2026-11-22, against the pre-analysis's user skill first. *Because* then the 0.7.0 test rounds take it in as the system skill it will be.
 
 ## 4. The index: stored vectors
 
@@ -57,6 +57,8 @@ Task<StoredVectors> VectorsAsync(VaultPath scope, CancellationToken ct);
 ```
 
 `EncryptedNoteStore` answers it from the vault's working set, as `SearchAsync` reads it: per note below the scope, the chunks embedded by the vault's current model under the current chunking scheme; `Space` is the model's key, so the command compares only within one. Notes without such embeddings count as pending; a vault whose provider isn't configured is left out with a reason. The vectors are the stored arrays, handed out by reference and never written to. No consent check is needed: nothing is embedded, nothing leaves.
+
+The ranking lives in `Kumbu.Core.Search.SimilarSearch.RunAsync` (a `SimilarQuery` in, a `SimilarResult` out), not in the command, so that an HTTP endpoint can call it: link prediction's Similar tab and the graph's suggested links build on it; the command only parses and prints. Candidates a caller leaves out (a silo, a tag, a person's "not related") come in as a predicate over notes.
 
 Cost: one dot product per pair of a source chunk and a candidate chunk. A 2,000-note vault holds some 10,000 chunks; a source note of five chunks is 50,000 dot products of 768 floats, well under a tenth of a second. `--between` doubles it.
 
@@ -95,9 +97,7 @@ With `--between`: `score 0.71 (0.74 to A, 0.71 to C)  2 steps from A, not connec
 
 Both leave out earlier findings with `--without-tag synthesis/hypothesis`, cap the run at five hypotheses, say for each why it could be wrong, and write one report note tagged `#synthesis/hypothesis` with `source: synthesized` and a review date, the inference in an `[!inferred]` callout, each B link linked to the section it stands in. They never change A or C.
 
-How it lands, for Chris to pick in the PR:
-- **(a) as in the PR, a system skill now** (recommended): the commands it needs ship in the same change, and a system skill is updated with the server, so a run that teaches us something is fixed in one place.
-- **(b) a user skill first**: drop the skill's commit, put its `SKILL.md` into `/Skills/synthesize-knowledge/` on Chris's instance, run the hand tests two or three times, then freeze it with what was learned.
+It lands as a system skill now (§3.9), so the test rounds of 0.7.0 run it as such.
 
 The hand-test list goes to `/SWE/Kumbu/Tests/` once the release is chosen.
 
