@@ -4,8 +4,6 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Sync;
 using Microsoft.AspNetCore.Http.HttpResults;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Kumbu.Server.Api;
 
@@ -29,7 +27,7 @@ public sealed record MirrorContactView(
     string Id, string Key, IReadOnlyList<MirrorVaultView> Vaults,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Token = null);
 
-/// <summary><c>password</c>: needed to remove another browser's slot whose last contact reported changes waiting, or
+/// <summary><c>password</c>, for <c>POST /{id}/remove</c>: needed to remove another browser's slot whose last contact reported changes waiting, or
 /// that hasn't reported yet: those changes are the one thing in Kumbu² without a trash or a history.</summary>
 public sealed record RemoveMirrorSlotRequest(string? Password);
 
@@ -53,7 +51,9 @@ public static class MirrorSlotsApi
         account.MapPost("", CreateAsync).Errors(400, 401, 403, 409);
         // Made on every reconnect, so like the web app's other background calls it keeps no idle session alive.
         account.MapPost("/contact", ContactAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 403, 404);
-        account.MapDelete("/{id}", DeleteAsync).Errors(400, 401, 403, 404, 429);
+        account.MapDelete("/{id}", DeleteAsync).Errors(400, 401, 403, 404);
+        // The same with the password: for another browser's copy with changes waiting.
+        account.MapPost("/{id}/remove", RemoveAsync).Errors(400, 401, 403, 404, 429);
     }
 
     private static async Task<Ok<MirrorSlotView[]>> ListAsync(HttpContext http, RequestCaller caller, MirrorSlots slots, CancellationToken ct) =>
@@ -96,9 +96,19 @@ public static class MirrorSlotsApi
     /// only with the password, as a vault's deletion does: a stolen session cuts the device off by ending its session,
     /// not by destroying what it hasn't uploaded. This browser's own copy it removes itself, having said what goes with it.
     /// </summary>
-    private static async Task<Results<NoContent, NotFound<ApiError>>> DeleteAsync(
-        string id, [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RemoveMirrorSlotRequest? body, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users,
-        AccountLimits limits, Sessions sessions, SyncHub hub, CancellationToken ct)
+    private static Task<Results<NoContent, NotFound<ApiError>>> DeleteAsync(
+        string id, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users, AccountLimits limits, Sessions sessions, SyncHub hub,
+        CancellationToken ct) =>
+        RemoveSlotAsync(id, null, http, caller, slots, users, limits, sessions, hub, ct);
+
+    private static Task<Results<NoContent, NotFound<ApiError>>> RemoveAsync(
+        string id, RemoveMirrorSlotRequest body, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users, AccountLimits limits,
+        Sessions sessions, SyncHub hub, CancellationToken ct) =>
+        RemoveSlotAsync(id, body.Password, http, caller, slots, users, limits, sessions, hub, ct);
+
+    private static async Task<Results<NoContent, NotFound<ApiError>>> RemoveSlotAsync(
+        string id, string? password, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users, AccountLimits limits,
+        Sessions sessions, SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
         var slot = (await slots.ListAsync(user.Id, Subject(http), ct)).FirstOrDefault(s => s.Id == id);
@@ -106,7 +116,7 @@ public static class MirrorSlotsApi
         var withPassword = false;
         if (!slot.Current && !MirrorSlots.Counted(slot.Waiting, slot.ContactAt))
         {
-            if (string.IsNullOrEmpty(body?.Password))
+            if (string.IsNullOrEmpty(password))
             {
                 throw new ApiException(StatusCodes.Status400BadRequest,
                     "This device has changes it hasn't uploaded, or hasn't said yet. Enter your password to remove its offline copy with them.",
@@ -114,7 +124,7 @@ public static class MirrorSlotsApi
             }
 
             if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
-            if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
+            if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, password, ct)) throw new WrongPasswordException("The password is wrong.");
             await AccountApi.PasswordGivenAsync(http, sessions, ct);
             withPassword = true;
         }

@@ -132,17 +132,19 @@ describe("Settings: Offline", () => {
     expect(within(dialog).getByRole("button", { name: "Remove" })).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery");
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(calls(fake, "DELETE /api/account/mirror-slots/s2")).toHaveLength(1));
-    expect(await calls(fake, "DELETE /api/account/mirror-slots/s2")[0]!.json()).toEqual({ password: "correct horse battery" });
+    await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots/s2/remove")).toHaveLength(1));
+    expect(await calls(fake, "POST /api/account/mirror-slots/s2/remove")[0]!.json()).toEqual({ password: "correct horse battery" });
   });
 
   it("asks for the password when the device has just reported changes", async () => {
     let asked = 0;
     const fake = api({
       "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: 0 }]),
-      "DELETE /api/account/mirror-slots/*": () => (asked++ === 0
-        ? json(400, { error: "This device has just reported changes waiting. Enter your password to remove its offline copy.", code: "changes-waiting" })
-        : noContent()),
+      "DELETE /api/account/mirror-slots/*": () => {
+        asked++;
+        return json(400, { error: "This device has just reported changes waiting. Enter your password to remove its offline copy.", code: "changes-waiting" });
+      },
+      "POST /api/account/mirror-slots/*/remove": () => noContent(),
     });
     renderApp("/settings/offline");
     const devices = await screen.findByRole("list", { name: "Devices with a copy" });
@@ -153,7 +155,8 @@ describe("Settings: Offline", () => {
     expect(await within(dialog).findByText(/just reported changes waiting/)).toBeInTheDocument();
     await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery");
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(calls(fake, "DELETE /api/account/mirror-slots/s2")).toHaveLength(2));
+    await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots/s2/remove")).toHaveLength(1));
+    expect(asked).toBe(1);
   });
 
   it("shows the server's sentence when a removal is refused", async () => {

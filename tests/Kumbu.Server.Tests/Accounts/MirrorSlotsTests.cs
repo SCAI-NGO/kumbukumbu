@@ -249,7 +249,7 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
             Assert.Null((await JsonAsync(kept))["code"]);
         }
 
-        using (var removed = await other.SendAsync(HttpMethod.Delete, $"{Url}/{slot.Id}", new { password = Password })) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        using (var removed = await other.SendAsync(HttpMethod.Post, $"{Url}/{slot.Id}/remove", new { password = Password })) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
 
         using var wipe = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, alice.Session, slot.Token);
         await AssertWipeAsync(wipe, HttpStatusCode.Unauthorized);
@@ -404,10 +404,10 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.BadRequest, asked.StatusCode);
             Assert.Equal("changes-waiting", (await JsonAsync(asked))["code"]?.GetValue<string>());
         }
-        using (var wrong = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{slot.Id}", new { password = "not it" })) Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        using (var wrong = await alice.SendAsync(HttpMethod.Post, $"{Url}/{slot.Id}/remove", new { password = "not it" })) Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
         Assert.Single(await ListAsync(alice));
 
-        using (var removed = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{slot.Id}", new { password = Password })) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        using (var removed = await alice.SendAsync(HttpMethod.Post, $"{Url}/{slot.Id}/remove", new { password = Password })) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
         Assert.Empty(await ListAsync(alice));
     }
 
