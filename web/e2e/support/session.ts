@@ -27,7 +27,7 @@ async function withLock<T>(work: () => T): Promise<T> {
   }
 }
 
-async function reserve(ledgerName: string, limit = 5) {
+export async function reserve(ledgerName: string, limit = 5) {
   const file = join(authDir, `ledger-${ledgerName}.json`);
   for (;;) {
     const wait = await withLock(() => {

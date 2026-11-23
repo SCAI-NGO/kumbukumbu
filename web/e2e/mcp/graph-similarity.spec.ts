@@ -34,6 +34,14 @@ type Pair = { from: string; to: string; score: number | null };
 type Similarity = { state: "ready" | "preparing" | "off"; pairs: Pair[]; reason: string | null };
 type Local = { nodes: { path: string | null; title: string; kind: string }[]; edges: [number, number, number][] };
 
+// What each test wrote, removed after it (there is no `rm -r`).
+let written: string[] = [];
+
+test.afterEach(async ({ mcp }) => {
+  if (written.length > 0) await mcp.sh(`rm ${written.map((p) => `"${p}"`).join(" ")}`);
+  written = [];
+});
+
 /**
  * The meaning fixtures below `/Work/<folder>/`, with Dive tables linking Decompression, the cake, an empty note, an
  * image and a note that doesn't exist, and Decompression linking Dive computer (depth 2).
@@ -50,7 +58,9 @@ async function graphIn(api: Api, folder: string) {
     png: `${root}/plan ${id}.png`,
     ghost: `Nobody ${id}`,
   };
-  await seed(api, fixtureTree("tags/meaning", root));
+  const files = fixtureTree("tags/meaning", root);
+  written.push(...files.map((f) => f.path), n.png, n.empty);
+  await seed(api, files);
   await api.putFile(n.png, readFileSync(join(fixturesDir, "tags/smoke/pixel.png")));
   await api.putNote(n.empty, "");
   const tables = await api.getNote(n.tables);
@@ -79,7 +89,8 @@ test("graph-similarity #1: one pair per link between two notes, keyed by paths, 
   const n = await graphIn(aliceApi, folder);
   await waitIndexed(aliceApi, [n.tables, n.decompression, n.computer, n.cake], firstIndex);
 
-  for (const params of [{ path: n.tables }, { path: n.tables, depth: 2 }, { path: n.decompression, dir: "out", depth: 2 }, { path: n.tables, attachments: "false", ghosts: "false" }]) {
+  const asked: Record<string, string | number>[] = [{ path: n.tables }, { path: n.tables, depth: 2 }, { path: n.decompression, dir: "out", depth: 2 }, { path: n.tables, attachments: "false", ghosts: "false" }];
+  for (const params of asked) {
     const local = await aliceApi.json<Local>("GET", `/api/graph/local?${query(params)}`);
     const answer = await similarityOf(aliceApi, params);
     expect(answer.state, `${query(params)}: state`).toBe("ready");
@@ -157,7 +168,6 @@ test("graph-similarity #4: bad parameters are refused with 400, as /local refuse
     { path: n.tables, dir: "sideways" },
     { path: n.tables, depth: "two" },
     { path: n.tables, attachments: "maybe" },
-    { path: `/Work/${folder}` },
   ];
   for (const params of bad) {
     const local = await aliceApi.send("GET", `/api/graph/local?${query(params)}`);
@@ -166,8 +176,8 @@ test("graph-similarity #4: bad parameters are refused with 400, as /local refuse
     expect(similarity.status(), `/similarity?${query(params)}`).toBe(400);
     expect(await similarity.text(), `/similarity?${query(params)}: the same words as /local`).toBe(await local.text());
   }
-  // A note that doesn't exist, and an image no note links to, are 404 as for /local.
-  for (const path of [`/Work/${folder}/Nothing here.md`]) {
+  // A note that doesn't exist, and a folder, are 404 as for /local.
+  for (const path of [`/Work/${folder}/Nothing here.md`, `/Work/${folder}`]) {
     const local = await aliceApi.send("GET", `/api/graph/local?${query({ path })}`);
     const similarity = await aliceApi.send("GET", `/api/graph/similarity?${query({ path })}`);
     expect([similarity.status(), await similarity.text()], path).toEqual([local.status(), await local.text()]);
