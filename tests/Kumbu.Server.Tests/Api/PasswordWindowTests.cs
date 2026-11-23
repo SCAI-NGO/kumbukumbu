@@ -232,6 +232,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["POST /api/account/mirror-slots/contact"] = "answers the key of a slot the browser made, to a session of its user: it grants nothing (offline mode design §4.6)",
         ["PUT /api/account/mirror-slots/{id}/label"] = "renaming an offline copy in the device list: its key, token and vaults stay as they are",
         ["DELETE /api/account/mirror-slots/{id}"] = "removing an offline copy reduces what is out",
+        ["POST /api/account/mirror-slots/{id}/remove"] = OwnPassword,
     };
 
     [Fact]

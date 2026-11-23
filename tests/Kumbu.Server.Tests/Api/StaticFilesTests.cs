@@ -26,6 +26,7 @@ public sealed class StaticFilesTests : IDisposable
         File.WriteAllText(Path.Combine(_webRoot, "k.html"), SkillPage);
         Directory.CreateDirectory(Path.Combine(_webRoot, "assets"));
         File.WriteAllText(Path.Combine(_webRoot, "assets", "app-abc123.js"), "console.log(1);");
+        File.WriteAllText(Path.Combine(_webRoot, "assets", "kdfWorker-Df1aJ-u.js"), "self.onmessage = () => {};");
         File.WriteAllText(Path.Combine(_webRoot, "manifest.webmanifest"), """{"name":"Kumbu²"}""");
         _web = app.WithWebHostBuilder(b => b.UseWebRoot(_webRoot));
     }
@@ -179,6 +180,24 @@ public sealed class StaticFilesTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, head.StatusCode);
         Assert.Equal(Headers(get), Headers(head));
         Assert.Equal(Security.ReaderPagePolicy, Assert.Single(head.Headers.GetValues("Content-Security-Policy")));
+    }
+
+    [Fact]
+    public async Task Only_the_password_hash_worker_may_compile_WebAssembly()
+    {
+        using var worker = await _web.CreateClient().GetAsync("/assets/kdfWorker-Df1aJ-u.js", Ct);
+        Assert.Equal(HttpStatusCode.OK, worker.StatusCode);
+        Assert.Equal(Security.KdfWorkerPolicy, Assert.Single(worker.Headers.GetValues("Content-Security-Policy")));
+        Assert.Contains("'wasm-unsafe-eval'", Security.KdfWorkerPolicy, StringComparison.Ordinal);
+        Assert.DoesNotContain("'unsafe-eval'", Security.KdfWorkerPolicy, StringComparison.Ordinal);
+
+        // Every other script, the page and a look-alike path keep the app's policy, which compiles nothing.
+        foreach (var path in new[] { "/assets/app-abc123.js", "/", "/assets/old/kdfWorker-Df1aJ-u.js", "/kdfWorker-Df1aJ-u.js" })
+        {
+            using var other = await _web.CreateClient().GetAsync(path, Ct);
+            Assert.Equal(Security.ContentSecurityPolicy, Assert.Single(other.Headers.GetValues("Content-Security-Policy")));
+        }
+        Assert.DoesNotContain("wasm-unsafe-eval", Security.ContentSecurityPolicy, StringComparison.Ordinal);
     }
 
     [Fact]

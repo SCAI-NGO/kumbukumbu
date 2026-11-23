@@ -52,6 +52,11 @@ export class VaultHost {
     for (const { vault, engine } of this.running.values()) if (vault.name === name) void engine.check(false);
   }
 
+  /** Stops a vault's engine and forgets it: its mirror is going. The next refresh starts a new one if it may. */
+  drop(id: string): Promise<void> {
+    return this.queue.push(() => this.stopOne(id), "drop");
+  }
+
   stop(): Promise<void> {
     return this.queue.push(async () => {
       const all = [...this.running.values()];

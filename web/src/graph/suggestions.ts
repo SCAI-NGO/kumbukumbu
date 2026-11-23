@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import type { TreeFolder, TreeView } from "../api/notes";
-import { mockOn, similarity, type Similarity } from "./similarity";
+import { useMemo } from "react";
+import { titleOf } from "../api/paths";
+import { useSimilarNotes } from "../api/similar";
+import type { Similarity } from "./similarity";
 
 export type Suggestion = { path: string; title: string; similarity: Similarity };
 
-function notesOf(folder: TreeFolder): string[] {
-  return [...folder.notes.filter((n) => !n.kind || n.kind === "note").map((n) => n.path), ...folder.folders.flatMap(notesOf)];
-}
-
-/** Notes of the same vault that `path` might link to but does not show: for now only the dev mock makes any. `tree` is the path's vault's. */
-export function suggestedLinks(path: string, shown: ReadonlySet<string>, tree: TreeView | undefined): Suggestion[] {
-  if (!mockOn() || !tree) return [];
-  return notesOf(tree.root)
-    .filter((p) => p !== path && !shown.has(p))
-    .map((p) => ({ path: p, title: (p.split("/").pop() ?? p).replace(/\.md$/, ""), similarity: similarity(path, p) }))
-    .sort((a, b) => b.similarity.score - a.similarity.score || a.path.localeCompare(b.path))
-    .slice(0, 3);
+/**
+ * The notes `path` might link to and the graph doesn't show: the server's suggestions (link prediction spec §4), the
+ * same as the Links tab's "Similar notes", asked only while `enabled` (the layer switched on).
+ */
+export function useSuggestedLinks(path: string, shown: ReadonlySet<string>, enabled: boolean): Suggestion[] {
+  const similar = useSimilarNotes(path, enabled);
+  return useMemo(
+    () =>
+      enabled
+        ? (similar.data?.notes ?? [])
+            .filter((n) => n.path !== path && !shown.has(n.path))
+            .map((n) => ({ path: n.path, title: titleOf(n.path), similarity: { score: n.score, measured: true } }))
+        : [],
+    [enabled, similar.data, path, shown],
+  );
 }

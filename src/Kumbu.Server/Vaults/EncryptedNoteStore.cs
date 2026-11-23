@@ -1006,6 +1006,49 @@ public sealed class EncryptedNoteStore(
             $"{string.Join(", ", u.Vaults.Select(v => v.Name).Order(StringComparer.Ordinal))}: {u.Reason}";
     }
 
+    /// <summary>
+    /// The stored vectors of the notes below the scope, for <c>similar</c>: per note, the chunks its vault's current model
+    /// embedded under the current chunking scheme, the model's key as their space. Nothing is embedded, so no provider is
+    /// asked and no consent is needed; a vault whose provider isn't configured is left out (its current model is unknown).
+    /// Notes without such embeddings count as pending. Embeddings of an earlier version of the note stay in, as for a
+    /// search: the caller matches them to the note's current chunks.
+    /// </summary>
+    public async Task<Kumbu.Core.Search.StoredVectors> VectorsAsync(VaultPath scope, CancellationToken ct)
+    {
+        if (index is null) return new(Kumbu.Core.Search.SemanticState.Off, [], 0, "search by meaning is off on this server");
+        if (!index.TokenizerSettled) return new(Kumbu.Core.Search.SemanticState.Preparing, [], 0, "search by meaning is getting ready (the tokenizer is loading)");
+
+        IEnumerable<VaultAccess> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
+        var chunks = new List<Kumbu.Core.Search.ChunkVector>();
+        var unconfigured = new List<string>();
+        var pending = 0;
+        var scheme = index.Bound.Scheme;
+        foreach (var access in vaults)
+        {
+            var vault = access.Vault;
+            if (index.Providers.Resolve(vault) is not { } provider)
+            {
+                unconfigured.Add(access.Name);
+                continue;
+            }
+
+            var model = provider.Driver.ModelKey;
+            var within = access.ToVault(scope);
+            var embeddings = vault.Embeddings;
+            foreach (var path in vault.Notes.Keys)
+            {
+                if (!InScope(within, path)) continue;
+                if (!embeddings.TryGetValue(path, out var e) || e.Model != model || e.Scheme != scheme) { pending++; continue; }
+                var caller = access.ToCaller(path);
+                foreach (var chunk in e.Chunks) chunks.Add(new(caller, chunk.StartLine, chunk.Part, model, chunk.Vector));
+            }
+        }
+
+        var reason = unconfigured.Count == 0 ? null
+            : $"{string.Join(", ", unconfigured.Order(StringComparer.Ordinal))}: its embedding provider isn't configured on this server any more";
+        return new(Kumbu.Core.Search.SemanticState.Ready, chunks, pending, reason);
+    }
+
     /// <summary>Whether the caller's searches may go to the provider of <paramref name="access"/>'s vault: her own vault's
     /// always; a shared one's once she has acknowledged the provider it has now (<c>providerSeen</c>). Fails closed: a
     /// membership without one hasn't.</summary>

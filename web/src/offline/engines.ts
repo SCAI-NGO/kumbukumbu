@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// The sync engines of this tab's unlocked copy (offline mode design §3, §6), over fetch and the session cookie. They run
+// while the copy is open and this tab leads it; the app hears their conflicts, lost sessions and changes waiting.
+import { KumbuApi, type HttpFn } from "eidolon-core/api/client";
+import type { ListedVault } from "eidolon-core/engine/ports";
+import type { OfflineChoice } from "eidolon-core/store/choice";
+import { MirrorEngines } from "eidolon-core/store/engines";
+import type { SealedMirror } from "eidolon-core/store/mirror";
+import { api, call } from "../api/client";
+import { useOfflineCopy } from "./copy";
+import { useSession } from "../state/session";
+import { deviceLabel } from "./deviceLabel";
+import { openCopy } from "./turnOn";
+
+export interface EngineEvents {
+  conflict(vaultId: string, original: string, copy: string): void;
+  sessionLost(): void;
+  waitingChanged(): void;
+}
+
+const listeners = new Set<EngineEvents>();
+
+export function listenToEngines(events: EngineEvents): () => void {
+  listeners.add(events);
+  return () => listeners.delete(events);
+}
+
+/** The engines' HTTP: same origin, the session cookie with it. */
+export const mirrorHttp: HttpFn = async (r) => {
+  const response = await fetch(r.url, { method: r.method, headers: r.headers, body: r.body, credentials: "same-origin" });
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => (headers[key] = value));
+  const bytes = await response.arrayBuffer();
+  return { status: response.status, headers, text: new TextDecoder().decode(bytes), bytes };
+};
+
+async function listVaults(): Promise<ListedVault[]> {
+  return (await call(api.GET("/api/vaults"))).map((v) => ({
+    id: v.id, name: v.name, canWrite: v.canWrite, shared: v.shared, level: v.level, discreet: v.discreet,
+  }));
+}
+
+let running: { mirror: SealedMirror; engines: MirrorEngines } | null = null;
+
+function follow(mirror: SealedMirror | null): void {
+  if (running?.mirror === mirror) return;
+  void running?.engines.stop();
+  running = null;
+  if (mirror === null || mirror.locked) return;
+  const engines = new MirrorEngines({
+    mirror, device: deviceLabel(), listVaults,
+    remote: (name) => new KumbuApi(mirrorHttp, window.location.origin, name, null),
+    clock: { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as number) },
+    onStatus: () => listeners.forEach((l) => l.waitingChanged()),
+    onConflict: (vault, original, copy) => listeners.forEach((l) => l.conflict(vault, original, copy)),
+    onAuthLost: () => listeners.forEach((l) => l.sessionLost()),
+  });
+  running = { mirror, engines };
+  void engines.start().catch((e: unknown) => console.warn("The offline copy's sync couldn't start.", e));
+}
+
+/**
+ * Once, at the app's start: opens this user's copy when signed in (with the slot's key, nothing to ask), and starts and
+ * stops the engines with the copy this tab has open.
+ */
+export function runEngines(): () => void {
+  const opening = (user: { id: string } | null) => {
+    if (user !== null) void openCopy(user.id).catch(() => {});
+  };
+  opening(useSession.getState().user);
+  const stopOpening = useSession.subscribe((s, before) => {
+    if (s.user?.id !== before.user?.id) opening(s.user);
+  });
+  follow(useOfflineCopy.getState().mirror);
+  const stopFollowing = useOfflineCopy.subscribe((s) => follow(s.mirror));
+  return () => {
+    stopOpening();
+    stopFollowing();
+  };
+}
+
+/** A socket "changed" frame, naming the vault as the caller sees it. */
+export function enginesHinted(vaultName: string): void {
+  running?.engines.hinted(vaultName);
+}
+
+/** The socket is (back) up: the vault list and the engines are brought in line. */
+export function enginesReconnected(): void {
+  void running?.engines.refresh().catch(() => {});
+}
+
+/** An attachment opened online: kept on this device within the budget (§6). Nothing without an open copy. */
+export function openedOnline(vaultId: string, path: string): void {
+  void running?.engines.opened(vaultId, path).catch(() => {});
+}
+
+/**
+ * Changes what this device keeps offline. The tab that runs the engines applies it at once; the others hear of it
+ * through the copy (another tab's engines apply it there).
+ */
+export async function chooseOffline(mirror: SealedMirror, change: (c: OfflineChoice) => OfflineChoice): Promise<void> {
+  await mirror.choose(change);
+  if (running?.mirror === mirror) await running.engines.refresh(true);
+}

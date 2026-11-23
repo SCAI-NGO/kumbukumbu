@@ -11,6 +11,8 @@ The client-side data layer of Kumbu²: what a client keeps and does with notes, 
 | `src/live/` | The "vault changed" hints over a WebSocket, with backoff and polling |
 | `src/host/` | One engine per mirrored vault for a host that holds many vaults (a browser session), keyed by vault id |
 | `src/store/` | The sealed store: a browser's offline copy, its key and both wraps, each vault's records as the engine's `LocalFiles` and `StateStore`, contact and purge, the idle lock |
+| `src/links/` | Links as the server finds and resolves them, ported from `Kumbu.Core/Links`: wiki and Markdown links, aliases, Obsidian's resolution rules, the API's `LinkView` |
+| `src/read/` | Reading the copy offline: a vault's tree from the inventory, notes and attachments, links resolved in the copy, vaults by the name last seen online |
 
 The engine, the client and the hints came from the Obsidian plugin (`kumbu-obsidian`), with their tests. The plugin now vendors them back: `src/engine`, `src/api`, `src/live` and `test/fakes` are copied into it unchanged by its `scripts/vendor-eidolon.mjs`, and its CI checks the copy against the commit its `eidolon-core.json` names. Change them here; the plugin follows when it takes a new commit.
 
@@ -29,6 +31,10 @@ The engine, the client and the hints came from the Obsidian plugin (`kumbu-obsid
 ## The sealed store
 
 A copy is one user's mirror in one browser (design §4.7). `MirrorCopies` finds, creates, unlocks (online with the mirror slot's key, offline with the password) and wipes copies; an unlocked `SealedMirror` holds a `VaultMirror` per vault, which is the engine's `LocalFiles` (`files()`), `StateStore` (`stateStore()`), `RemoteApi` wrapper that records the inventory (`inventory()`) and fetch policy (`downloadOrder()`). Its ports (`src/store/ports.ts`, `src/store/crypto.ts`): record storage, WebCrypto, the mirror slot, Web Locks and a channel between tabs; the web app's are in `web/src/offline/`.
+
+## Reading offline
+
+`read/tree.ts` answers what `GET /api/vaults/{vault}/tree` and `GET /api/notes` would, from an unlocked `SealedMirror`, with paths in the host's form (`/<vault name>/<path>`); a path the inventory lists whose text or bytes aren't here yet throws `NotOnDeviceError`. `read/links.ts` resolves a note's links in the copy (`MirrorLinks`), building one resolver per vault again only when a path or a version changed. The web app's `OfflineSource` (`web/src/offline/source.ts`) stands them in for the API while the app is offline (design §4.8).
 
 ## Commands
 
