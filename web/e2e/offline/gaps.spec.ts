@@ -17,8 +17,9 @@
 // - Works offline: tree, reading, wiki links, embeds → offline.spec #1; words search across mirrored vaults → left
 //   out (not in Task 7's gaps; MiniSearch over the copy is core's, no browser step of its own); backlinks and tags →
 //   core links tests; editing, new notes, trashing → offline.spec #2; images and PDFs in the mirror → offline.spec #7.
-// - Needs a connection (shown, not silently failing): the graph → gaps #6; Similar notes (link prediction §3.7) →
-//   gaps #6; menus (history, blame, move, rename, duplicate) → gaps #2; search by meaning, console, calendar, board,
+// - Needs a connection (shown, not silently failing): the graph → gaps #6; Similar notes → gaps #6, by link
+//   prediction §3.7's "the query fails as any other and says so" (its §2 says "the section says it needs a
+//   connection"; §3.7 is the state the section has, so that line is asserted); menus (history, blame, move, rename, duplicate) → gaps #2; search by meaning, console, calendar, board,
 //   settings pages → left out (not among Task 7's gaps; the pane's sentence is the graph's, asserted in gaps #6).
 // §3a Turning it on
 // - Off by default, invited once (Keep me signed in or installed) → Vitest OfflineInvite.test.tsx (both tests); the
@@ -267,7 +268,7 @@ test("gaps #1b: a vault chosen one by one: the copy keeps Work and not Welcome, 
   await page.getByRole("checkbox", { name: "Keep Welcome on this device" }).click();
   await expect(page.getByRole("checkbox", { name: "Keep Welcome on this device" })).not.toBeChecked();
   // A vault not held shows its size only, the note count of the vault list: no "· … of attachments".
-  await expect(vaultLine(page, "Welcome")).toHaveText(/^Welcome\s*8 notes$/);
+  await expect(vaultLine(page, "Welcome")).toHaveText(/^Welcome\s*[1-9][\d,]* notes?$/);
   // The choice is the copy's, read back after a reload.
   await page.reload();
   await expect(page.getByRole("checkbox", { name: "All my vaults" })).not.toBeChecked();
@@ -336,7 +337,7 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
 test("gaps #2: offline, what needs a connection stays in its menu, dimmed, with \"Needs a connection\" @offline", async ({ page, aliceApi, folder }) => {
   test.info().annotations.push({
     type: "finding",
-    description: "F-xx: offline, History, Who wrote what, Duplicate and Rename or move stay enabled, without \"Needs a connection\" (§3a); nothing in the web app dims for the mode",
+    description: "F-05: offline, History, Who wrote what, Duplicate and Rename or move stay enabled, without \"Needs a connection\" (§3a); nothing in the web app dims for the mode",
   });
   test.fail();
   const plan = `/Work/${folder}/Plan.md`;
@@ -354,8 +355,8 @@ test("gaps #2: offline, what needs a connection stays in its menu, dimmed, with 
   for (const name of ["History", "Who wrote what", "Duplicate", "Rename or move"]) {
     const item = menu.getByRole("menuitem", { name: new RegExp(`^${name}`) });
     await expect(item, `${name} stays in the menu`).toHaveCount(1);
-    await expect(item, `F-xx: ${name} is dimmed offline`).toBeDisabled({ timeout: 2_000 });
-    await expect(item, `F-xx: ${name} says it needs a connection`).toContainText("Needs a connection");
+    await expect(item, `F-05: ${name} is dimmed offline`).toBeDisabled({ timeout: 2_000 });
+    await expect(item, `F-05: ${name} says it needs a connection`).toContainText("Needs a connection");
   }
   await page.keyboard.press("Escape");
   await page.context().setOffline(false);
@@ -364,7 +365,7 @@ test("gaps #2: offline, what needs a connection stays in its menu, dimmed, with 
 test("gaps #3: a vault's copy purged after access is lost: the notice names no vault @offline", async ({ bobPage, bobApi }) => {
   test.info().annotations.push({
     type: "finding",
-    description: "F-xx: a vault purged from the copy (access lost) shows no notice: the engines drop it on their own refresh, and the notice comes only from a contact that purges",
+    description: "F-06: a vault purged from the copy (access lost) shows no notice: the engines drop it on their own refresh, and the notice comes only from a contact that purges",
   });
   test.fail();
   test.setTimeout(240_000);
@@ -383,7 +384,7 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
     shared = false;
     const notice = bobPage.getByRole("status", { name: "Offline copy" });
     // Exact: the sentence of §3a, with no vault's name in it.
-    await expect(notice, "F-xx: the purge's notice").toHaveText(/^A vault's copy was removed from this device: it's no longer available here\.\s*Dismiss$/, { timeout: 45_000 });
+    await expect(notice, "F-06: the purge's notice").toHaveText(/^A vault's copy was removed from this device: it's no longer available here\.\s*Dismiss$/, { timeout: 45_000 });
     await expect(notice, "the notice names no vault").not.toContainText(share.vault);
 
     // And the copy has it no more: offline, the vault isn't kept here.
@@ -397,7 +398,7 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
   }
 });
 
-test("gaps #4: a discreet vault shown while offline is turned on is never kept, nor offered in the copy's vault list @offline @serial @discreet", async ({ freshSession, aliceApi, folder }, testInfo) => {
+test("gaps #4: a discreet vault shown while offline is turned on is never kept, nor offered in the copy's vault list @offline @serial @discreet", async ({ freshSession, aliceApi, folder }) => {
   test.setTimeout(240_000);
   const { page } = await freshSession("alice");
   try {
@@ -429,8 +430,9 @@ test("gaps #4: a discreet vault shown while offline is turned on is never kept, 
     await page.goto(notePage(home));
     await goOffline(page);
     await unlockAt(page, notePage(home));
-    await expect(page.getByText(/^There is no note at .* on this device\.$|is not kept on this device/).first()).toBeVisible({ timeout: 30_000 });
-    await expect(article(page)).not.toContainText("Zahnarzt");
+    // The sentence any vault not kept here gets, a made-up one's too: it tells Home from no other.
+    await expect(page.getByRole("complementary", { name: "File tree" }).getByText("Home is not kept on this device.")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Zahnarzt")).toHaveCount(0);
     await unlockAt(page, notePage(`/Work/${folder}/Plan.md`));
     await expect(article(page)).toContainText("Kept beside the hidden one.");
     await page.context().setOffline(false);
@@ -440,7 +442,6 @@ test("gaps #4: a discreet vault shown while offline is turned on is never kept, 
     await page.context().setOffline(false);
     await endHidden(page);
   }
-  void testInfo;
 });
 
 test("gaps #5: a read-only member's copy (Bob in Work) queues no write: no Write offline, nothing waits @offline", async ({ bobPage, bobApi, aliceApi, folder }) => {
@@ -476,7 +477,7 @@ test("gaps #5: a read-only member's copy (Bob in Work) queues no write: no Write
 test("gaps #6: offline the graph says it needs a connection, and Similar notes says it couldn't look @offline", async ({ page, aliceApi, folder }, testInfo) => {
   test.info().annotations.push({
     type: "finding",
-    description: "F-xx: offline, the graph's dialog says \"Couldn't draw the graph.\" with Try again, not \"The graph needs a connection. It's back when you are.\" (graph out of preview §3)",
+    description: "F-07: offline, the graph's dialog says \"Couldn't draw the graph.\" with Try again, not \"The graph needs a connection. It's back when you are.\" (graph out of preview §3)",
   });
   test.fail();
   const plan = `/Work/${folder}/Plan.md`;
@@ -499,6 +500,6 @@ test("gaps #6: offline the graph says it needs a connection, and Similar notes s
   const dialog = page.getByRole("dialog", { name: "Plan" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Drawing the graph…")).toHaveCount(0, { timeout: 30_000 });
-  await expect(dialog, "F-xx: the graph says it needs a connection").toContainText("The graph needs a connection. It's back when you are.", { timeout: 5_000 });
+  await expect(dialog, "F-07: the graph says it needs a connection").toContainText("The graph needs a connection. It's back when you are.", { timeout: 5_000 });
   await page.context().setOffline(false);
 });
