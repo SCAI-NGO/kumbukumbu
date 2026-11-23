@@ -14,19 +14,21 @@
 //     embedded within about a second); `state` `ready` → "graph-similarity #1"
 //  2. The score: a diving pair above a diving note and the cake (order of a clear case only, never a value)
 //     → "graph-similarity #2"
-//  3. 404 for a vault the caller hasn't: Bob (a read member of Work) for Alice's own vault, answered as for a vault
-//     that doesn't exist; a read member gets the scores of a vault he has (§1, "No text leaves the server")
-//     → "graph-similarity #3"
-//  4. 400 for bad parameters, as `/local` answers them → "graph-similarity #4"
+//  3. A read member gets the scores of a vault he has → "graph-similarity #3"
+//  4. 404 for a vault the caller hasn't: Bob (a read member of Work) for Alice's own vault, answered as for a vault
+//     that doesn't exist; 400 for bad parameters, as `/local` answers them → "graph-similarity #4" (no `@search`,
+//     `@since-0-7-0`: both come before any vector is read, GraphApi.cs:145, so it runs in either phase)
 //  5. `off` with a `reason` and no pairs when search by meaning is off → "graph-similarity #5" (no `@search`, and
 //     `@since-0-7-0`: it runs in the phase with search off, and fails on a stack with it on)
 // Left out: `preparing` (the model is loaded before the tests run, plan review point 5); a note embedded by another
-// model (needs a provider switch, Task 9's); no `ETag` and the `changed` nudge: the web app's (Vitest, api.test.tsx).
+// model (needs a provider switch, Task 9's); scores for a member who hasn't consented to the vault's provider (§1, "No
+// text leaves the server"): Work uses the internal model, so no consent is asked here; it belongs to `@tensorx`; no
+// `ETag` and the `changed` nudge: the web app's (Vitest, api.test.tsx).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Api, seed } from "../support/api";
 import { fixturesDir } from "../support/env";
-import { firstIndex, waitIndexed } from "../support/search";
+import { firstIndex, nextIndex, waitIndexed } from "../support/search";
 import { fixtureTree } from "../support/test";
 import { expect, test } from "./fixtures";
 
@@ -73,6 +75,12 @@ async function graphIn(api: Api, folder: string) {
   return n;
 }
 
+/** The first note within the first index's bound (the model may still load), the rest within the next one's. */
+async function waitAll(api: Api, [first, ...rest]: string[]) {
+  await waitIndexed(api, [first], firstIndex);
+  await waitIndexed(api, rest, nextIndex);
+}
+
 const query = (params: Record<string, string | number>) => new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
 const similarityOf = (api: Api, params: Record<string, string | number>) => api.json<Similarity>("GET", `/api/graph/similarity?${query(params)}`);
 /** A pair's two paths, in a fixed order, so a pair matches whichever way its link runs. */
@@ -87,7 +95,7 @@ const noteLinks = (local: Local) => {
 test("graph-similarity #1: one pair per link between two notes, keyed by paths, none for the image or the ghost, null for a note with nothing embedded @graph @search", async ({ aliceApi, folder }) => {
   test.setTimeout(240_000);
   const n = await graphIn(aliceApi, folder);
-  await waitIndexed(aliceApi, [n.tables, n.decompression, n.computer, n.cake], firstIndex);
+  await waitAll(aliceApi, [n.tables, n.decompression, n.computer, n.cake]);
 
   const asked: Record<string, string | number>[] = [{ path: n.tables }, { path: n.tables, depth: 2 }, { path: n.decompression, dir: "out", depth: 2 }, { path: n.tables, attachments: "false", ghosts: "false" }];
   for (const params of asked) {
@@ -121,7 +129,7 @@ test("graph-similarity #1: one pair per link between two notes, keyed by paths, 
 test("graph-similarity #2: two diving notes score above a diving note and the cake @graph @search", async ({ aliceApi, folder }) => {
   test.setTimeout(240_000);
   const n = await graphIn(aliceApi, folder);
-  await waitIndexed(aliceApi, [n.tables, n.decompression, n.computer, n.cake], firstIndex);
+  await waitAll(aliceApi, [n.tables, n.decompression, n.computer, n.cake]);
   const answer = await similarityOf(aliceApi, { path: n.tables, depth: 2 });
   const score = (a: string, b: string) => answer.pairs.find((p) => key(p.from, p.to) === key(a, b))?.score ?? null;
   const diving = score(n.tables, n.decompression);
@@ -132,11 +140,18 @@ test("graph-similarity #2: two diving notes score above a diving note and the ca
   expect(score(n.decompression, n.computer)!, "Decompression is closer to Dive computer than Dive tables is to the cake").toBeGreaterThan(cake!);
 });
 
-test("graph-similarity #3: a vault Bob hasn't answers 404 as one that doesn't exist; Work, which he reads, gives him the scores @graph @search", async ({ aliceApi, bobApi, folder }) => {
+test("graph-similarity #3: Bob, a read member of Work, gets the same scores as Alice @graph @search", async ({ aliceApi, bobApi, folder }) => {
   test.setTimeout(240_000);
   const n = await graphIn(aliceApi, folder);
-  await waitIndexed(aliceApi, [n.tables, n.decompression, n.cake], firstIndex);
+  await waitAll(aliceApi, [n.tables, n.decompression, n.cake]);
+  const alice = await similarityOf(aliceApi, { path: n.tables });
+  const bob = await similarityOf(bobApi, { path: n.tables });
+  expect(bob.state).toBe("ready");
+  expect(bob.pairs.map((p) => [key(p.from, p.to), p.score]).sort(), "Bob gets Alice's scores").toEqual(alice.pairs.map((p) => [key(p.from, p.to), p.score]).sort());
+});
 
+test("graph-similarity #4: a vault Bob hasn't answers 404 as one that doesn't exist; bad parameters 400, as /local answers them @graph @since-0-7-0", async ({ aliceApi, bobApi, folder }) => {
+  const n = await graphIn(aliceApi, folder);
   // Alice's own vault (Home), and one that doesn't exist, with the same note's name.
   const nowhere = `Nowhere-${folder.slice(-6)}`;
   const home = await bobApi.send("GET", `/api/graph/similarity?${query({ path: "/Home/Zahnarzt.md" })}`);
@@ -144,19 +159,9 @@ test("graph-similarity #3: a vault Bob hasn't answers 404 as one that doesn't ex
   expect(home.status(), "Bob, Alice's Home").toBe(404);
   expect(none.status(), "Bob, a vault that doesn't exist").toBe(404);
   expect((await home.text()).replaceAll("Home", "<vault>"), "the same answer as for a vault that doesn't exist").toBe((await none.text()).replaceAll(nowhere, "<vault>"));
-  // As /local answers it.
   const local = await bobApi.send("GET", `/api/graph/local?${query({ path: "/Home/Zahnarzt.md" })}`);
   expect(local.status(), "/local, Bob, Alice's Home").toBe(404);
 
-  // A read member: the scores of vectors the server holds, no consent asked (§1).
-  const alice = await similarityOf(aliceApi, { path: n.tables });
-  const bob = await similarityOf(bobApi, { path: n.tables });
-  expect(bob.state).toBe("ready");
-  expect(bob.pairs.map((p) => [key(p.from, p.to), p.score]).sort(), "Bob gets Alice's scores").toEqual(alice.pairs.map((p) => [key(p.from, p.to), p.score]).sort());
-});
-
-test("graph-similarity #4: bad parameters are refused with 400, as /local refuses them @graph @search", async ({ aliceApi, folder }) => {
-  const n = await graphIn(aliceApi, folder);
   const bad: Record<string, string | number>[] = [
     {},
     { path: "Work/plan.md" },
@@ -188,8 +193,9 @@ test("graph-similarity #4: bad parameters are refused with 400, as /local refuse
 test("graph-similarity #5: with search by meaning off, state off with the reason and no pairs @graph @since-0-7-0", async ({ aliceApi, folder }) => {
   const n = await graphIn(aliceApi, folder);
   const answer = await similarityOf(aliceApi, { path: n.tables });
-  expect(answer.state).toBe("off");
-  expect(answer.pairs).toEqual([]);
-  // In the words the search already uses (ISearchIndex.cs: "search by meaning is off on this server").
-  expect(answer.reason).toMatch(/^search by meaning is off\b/);
+  expect(answer.state, "M-xx: state off with search by meaning off").toBe("off");
+  expect(answer.pairs, "M-xx: no pairs with search by meaning off").toEqual([]);
+  expect(typeof answer.reason === "string" && answer.reason.length > 0, "M-xx: a reason with search by meaning off").toBe(true);
+  // In the words the search already uses (spec §1); the exact tail is not the spec's to settle.
+  expect(answer.reason, "the reason's words").toMatch(/^search by meaning is off\b/);
 });

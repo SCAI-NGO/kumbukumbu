@@ -36,7 +36,7 @@ import { join } from "node:path";
 import { dismissInstallHint } from "../calendar/helpers";
 import { Api, seed } from "../support/api";
 import { fixturesDir, secrets } from "../support/env";
-import { firstIndex, similarNotes, waitIndexed, waitSimilarReady } from "../support/search";
+import { firstIndex, nextIndex, similarNotes, waitIndexed, waitSimilarReady } from "../support/search";
 import { reservePassword } from "../support/session";
 import { expect, fixtureTree, shot, shotsDir070, test } from "../support/test";
 
@@ -95,6 +95,12 @@ async function graphIn(api: Api, folder: string) {
   return n;
 }
 
+/** The first note within the first index's bound (the model may still load), the rest within the next one's. */
+async function waitAll(api: Api, [first, ...rest]: string[]) {
+  await waitIndexed(api, [first], firstIndex);
+  await waitIndexed(api, rest, nextIndex);
+}
+
 type Edge = { width: number; length: number };
 
 /**
@@ -127,16 +133,17 @@ function edgesOf(drawing: Locator, centre: string, others: string[]): Promise<(E
 }
 
 /**
- * Until Dive tables' edges to Decompression and to the cake are drawn with widths of their own (the placeholder draws
- * both alike), then the close pair thicker and shorter than the far one.
+ * Until Dive tables' edges to Decompression and to the cake are drawn at the ends of the stretched scale (§1: the
+ * graph's two measured scores stretched over [0, 1], so `edgeWidth(1)` = 3 and `edgeWidth(0)` = 0.75, scales.ts), so a
+ * graph with one edge still unmeasured can't pass; then the close pair thicker and shorter than the far one.
  */
 async function expectCloserThickerAndShorter(drawing: Locator) {
   await expect
     .poll(async () => {
       const [close, far] = await edgesOf(drawing, "Dive tables", ["Decompression", "Chocolate cake"]);
-      return close && far ? (close.width === far.width ? "alike" : "measured") : "not drawn";
-    }, { message: "the edges carry their measured similarity", timeout: 15_000 })
-    .toBe("measured");
+      return close && far ? [close.width, far.width] : "not drawn";
+    }, { message: "the edges drawn at the stretched scale's ends", timeout: 15_000 })
+    .toEqual([3, 0.75]);
   const [close, far] = (await edgesOf(drawing, "Dive tables", ["Decompression", "Chocolate cake"])) as Edge[];
   expect(close.width, "Decompression's edge is thicker than the cake's").toBeGreaterThan(far.width);
   expect(close.length, "Decompression sits nearer Dive tables than the cake").toBeLessThan(far.length);
@@ -145,7 +152,7 @@ async function expectCloserThickerAndShorter(drawing: Locator) {
 test("graph #1: in the dialog, the diving note drawn thicker and nearer than the cake; no similarity line with every link measured @graph @search @phone", async ({ page, aliceApi, folder }, testInfo) => {
   test.setTimeout(240_000);
   const n = await graphIn(aliceApi, folder);
-  await waitIndexed(aliceApi, [n.tables, n.decompression, n.cake], firstIndex);
+  await waitAll(aliceApi, [n.tables, n.decompression, n.cake]);
   await openNote(page, n.tables);
   const dialog = await openDialog(page, "Dive tables");
   const drawing = dialog.getByRole("group", { name: "Graph of Dive tables" });
@@ -164,7 +171,7 @@ test.describe("at 1920 px", () => {
   test("graph #2: in the column, the diving note drawn thicker and nearer than the cake; no similarity line @graph @search", async ({ page, aliceApi, folder }) => {
     test.setTimeout(240_000);
     const n = await graphIn(aliceApi, folder);
-    await waitIndexed(aliceApi, [n.tables, n.decompression, n.cake], firstIndex);
+    await waitAll(aliceApi, [n.tables, n.decompression, n.cake]);
     await openNote(page, n.tables);
     const column = page.getByRole("complementary", { name: "Graph" });
     const toggle = page.getByRole("button", { name: "Graph", exact: true });
@@ -179,7 +186,7 @@ test.describe("at 1920 px", () => {
 test("graph #3: the foot says 'Similarity measured for 1 of 2 links' while a linked note has nothing embedded @graph @search @phone", async ({ page, aliceApi, folder }) => {
   test.setTimeout(240_000);
   const n = await graphIn(aliceApi, folder);
-  await waitIndexed(aliceApi, [n.tomatoes, n.decompression], firstIndex);
+  await waitAll(aliceApi, [n.tomatoes, n.decompression]);
   await openNote(page, n.tomatoes);
   const dialog = await openDialog(page, "Tomatoes");
   await expect(dialog.getByRole("group", { name: "Graph of Tomatoes" }).getByRole("button", { name: /^Empty, / })).toHaveCount(1);
@@ -190,11 +197,14 @@ test("graph #5: with search by meaning off, the foot says so and the edges are d
   const n = await graphIn(aliceApi, folder);
   await openNote(page, n.tables);
   const dialog = await openDialog(page, "Dive tables");
-  // The spec's words; the reason is the search's own ("… is off on this server", ISearchIndex.cs).
-  await expect(dialog.getByText(/^Similarity/)).toHaveText(/^Similarity not measured: search by meaning is off\b/);
-  const [close, far] = await edgesOf(dialog.getByRole("group", { name: "Graph of Dive tables" }), "Dive tables", ["Decompression", "Chocolate cake"]);
-  expect(close, "Decompression's edge drawn").not.toBeNull();
-  expect(close!.width, "unmeasured edges are drawn alike").toBe(far!.width);
+  // The spec's words (§1); whatever tail the server's reason adds is not asserted here.
+  await expect(dialog.getByText(/^Similarity/), "F-xx: the foot says search by meaning is off").toHaveText(/^Similarity not measured: search by meaning is off\b/);
+  const drawing = dialog.getByRole("group", { name: "Graph of Dive tables" });
+  await expect
+    .poll(async () => (await edgesOf(drawing, "Dive tables", ["Decompression", "Chocolate cake"])).every((e) => e !== null), { message: "both edges drawn" })
+    .toBe(true);
+  const [close, far] = (await edgesOf(drawing, "Dive tables", ["Decompression", "Chocolate cake"])) as Edge[];
+  expect(close.width, "unmeasured edges are drawn alike").toBe(far.width);
 });
 
 test.describe("suggestions", () => {
