@@ -54,19 +54,23 @@ export async function invitedUser(browser: Browser, options: BrowserContextOptio
     await page.getByLabel(/I have stored my recovery key/).check();
     await page.getByRole("button", { name: "Continue" }).click();
     await expect.poll(() => new URL(page.url()).pathname, { message: "the join ends on the vault list" }).toBe("/");
+    const id = await idOf(username);
+    if (!id) throw new Error(`${username} isn't in Admin → Users`);
+    return { username, password, id, context, page, reservePassword: () => reserve(`password-${username}`) };
   } catch (error) {
-    // The failure's screenshot would show the recovery key, and a half-made user would stay: neither.
+    // A failure's screenshot, taken when the context closes, would show the recovery key: the page leaves it first.
+    // A half-made user would stay: removed.
+    await page.goto("about:blank").catch(() => undefined);
     await context.close();
     await removeUser(username);
     throw error;
   }
+}
 
+async function idOf(username: string) {
   const admin = await Api.as("alice");
   try {
-    const users = await admin.json<{ id: string; username: string }[]>("GET", "/api/admin/users");
-    const id = users.find((u) => u.username === username)?.id;
-    if (!id) throw new Error(`${username} isn't in Admin → Users`);
-    return { username, password, id, context, page, reservePassword: () => reserve(`password-${username}`) };
+    return (await admin.json<{ id: string; username: string }[]>("GET", "/api/admin/users")).find((u) => u.username === username)?.id;
   } finally {
     await admin.dispose();
   }
@@ -84,11 +88,10 @@ export async function confirmAs(user: TestUser) {
  * for a test's cleanup, and for a join that failed half-way.
  */
 export async function removeUser(username: string) {
+  const id = await idOf(username);
+  if (!id) return;
   const admin = await Api.as("alice");
   try {
-    const users = await admin.json<{ id: string; username: string }[]>("GET", "/api/admin/users");
-    const id = users.find((u) => u.username === username)?.id;
-    if (!id) return;
     await reservePassword("alice");
     const response = await admin.send("POST", `/api/admin/users/${encodeURIComponent(id)}/delete`, { data: { password: secrets().passwords.alice, confirm: username } });
     if (!response.ok()) throw new Error(`POST /api/admin/users/…/delete: ${response.status()}`);
