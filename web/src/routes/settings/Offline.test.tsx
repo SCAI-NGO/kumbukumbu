@@ -29,6 +29,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
     "POST /api/account/mirror-slots": () => json(201, { id: "s1", token: "tok", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] }),
     "POST /api/account/mirror-slots/contact": () => json(200, { id: "s1", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] }),
     "DELETE /api/account/mirror-slots/*": () => noContent(),
+    "PUT /api/account/mirror-slots/*": () => noContent(),
     ...overrides,
   });
   vi.stubGlobal("fetch", (input: Request | string, init?: RequestInit) =>
@@ -119,6 +120,43 @@ describe("Settings: Offline", () => {
     expect(screen.getByRole("checkbox", { name: "All my vaults" })).not.toBeChecked();
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Space for opened attachments" }), "1 GB");
     await waitFor(() => expect(useOfflineCopy.getState().mirror!.choice.budget).toBe(1024 * 1_048_576));
+  });
+
+  it("renames a device's copy, this one too, and lists it under the new name", async () => {
+    let label = phone.label;
+    const fake = api({
+      "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, label }]),
+      "PUT /api/account/mirror-slots/*": async (r) => {
+        label = ((await r.json()) as { label: string }).label;
+        return noContent();
+      },
+    });
+    renderApp("/settings/offline");
+    const devices = await screen.findByRole("list", { name: "Devices with a copy" });
+    expect(within(devices).getAllByRole("button", { name: /^Rename / })).toHaveLength(2);
+    await userEvent.click(within(devices).getByRole("button", { name: "Rename Safari on iOS" }));
+    const dialog = screen.getByRole("dialog", { name: "Rename Safari on iOS" });
+    const name = within(dialog).getByLabelText("New name");
+    expect(within(dialog).getByRole("button", { name: "Rename" })).toBeDisabled();
+    await userEvent.clear(name);
+    await userEvent.type(name, "  My phone ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Rename Safari on iOS" })).not.toBeInTheDocument());
+    const put = calls(fake, "PUT /api/account/mirror-slots/s2/label");
+    expect(put).toHaveLength(1);
+    expect(label).toBe("My phone");
+    expect(await within(devices).findByText("My phone")).toBeInTheDocument();
+  });
+
+  it("keeps the rename dialog open with the server's sentence when it refuses", async () => {
+    api({ "PUT /api/account/mirror-slots/*": () => json(400, { error: "A label is one line of 1 to 64 characters." }) });
+    renderApp("/settings/offline");
+    const devices = await screen.findByRole("list", { name: "Devices with a copy" });
+    await userEvent.click(within(devices).getByRole("button", { name: "Rename Firefox on Linux" }));
+    const dialog = screen.getByRole("dialog", { name: "Rename Firefox on Linux" });
+    await userEvent.type(within(dialog).getByLabelText("New name"), " at work");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+    expect(await within(dialog).findByText("A label is one line of 1 to 64 characters.")).toBeInTheDocument();
   });
 
   it("removes another device's copy after naming what it hadn't uploaded", async () => {
