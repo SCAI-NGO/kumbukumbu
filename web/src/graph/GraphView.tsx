@@ -9,14 +9,14 @@ import { useErrorTextFor } from "../discreet/errorText";
 import { mediaQueryHook } from "../hooks/mediaQuery";
 import { useWide } from "../hooks/useWide";
 import { useOpenNote } from "../shell/openInPane";
-import { useGraphPaths, useLocalGraph, type GraphFilters, type GraphPathsView } from "./api";
+import { useGraphPaths, useGraphSimilarity, useLocalGraph, type GraphFilters, type GraphPathsView } from "./api";
 import GraphCanvas from "./GraphCanvas";
 import { toModel, type GNode, type SizeBy } from "./model";
 import NodeCard from "./NodeCard";
 import NodePreview from "./NodePreview";
-import { similarity } from "./similarity";
+import { edgeSimilarities, pairKey, similarityLine } from "./similarity";
 import SuggestionCard from "./SuggestionCard";
-import { suggestedLinks, type Suggestion } from "./suggestions";
+import { useSuggestedLinks, type Suggestion } from "./suggestions";
 import { useGraphPrefs, type GraphPrefs } from "./useGraphPrefs";
 
 /** Tailwind's `sm` (40rem): from here on the dialog's toolbar fits one row and Open beside is offered. */
@@ -65,6 +65,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   const { depth, days, attachments, ghosts } = prefs;
   const filters = useMemo<GraphFilters>(() => ({ depth, days, attachments, ghosts }), [depth, days, attachments, ghosts]);
   const local = useLocalGraph(path, filters, running);
+  const similar = useGraphSimilarity(path, filters, running);
   const tree = useTree(vaultOf(path));
   const errorFor = useErrorTextFor(path);
   const other = useGraphPaths(path, otherPath, filters, running);
@@ -81,12 +82,26 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   // The last graph stands in while the next is asked for only if the note is in it; else it would show another note's.
   const stale = local.isPlaceholderData && !local.data?.nodes.some((n) => n.path === path);
   // Memoised per answer, or the layout would warm again on every render.
-  const model = useMemo(() => (local.data && !stale ? toModel(local.data, tree.data) : null), [local.data, stale, tree.data]);
-  const unmeasured = useMemo(() => {
-    if (!model) return false;
-    const keys = new Map(model.nodes.map((n) => [n.id, n.key]));
-    return model.edges.some((e) => !similarity(keys.get(e.source)!, keys.get(e.target)!).measured);
-  }, [model]);
+  const plain = useMemo(() => (local.data && !stale ? toModel(local.data, tree.data) : null), [local.data, stale, tree.data]);
+  // Each edge with its similarity, and the foot's line on it: how many distinct links between two notes are measured.
+  const { model, similarityText } = useMemo(() => {
+    if (!plain) return { model: null, similarityText: null };
+    const byId = new Map(plain.nodes.map((n) => [n.id, n]));
+    const ends = plain.edges.map((e) => [byId.get(e.source)!.key, byId.get(e.target)!.key] as const);
+    const scores = edgeSimilarities(ends, similar.data);
+    const isNote = (id: string) => ["note", "day"].includes(byId.get(id)!.kind);
+    const links = new Map<string, boolean>();
+    plain.edges.forEach((e, i) => {
+      if (e.source !== e.target && isNote(e.source) && isNote(e.target)) links.set(pairKey(...ends[i]), scores[i].measured);
+    });
+    // Another graph's answer (the filters just changed) may score these edges where it shares them, but says nothing of the rest.
+    const answer = similar.isPlaceholderData ? undefined : similar.data;
+    const measured = [...links.values()].filter(Boolean).length;
+    return {
+      model: { nodes: plain.nodes, edges: plain.edges.map((e, i) => ({ ...e, s: scores[i].score })) },
+      similarityText: similarityLine(links.size, measured, answer),
+    };
+  }, [plain, similar.data, similar.isPlaceholderData]);
   const neighbours = useMemo(
     () => (model?.nodes ?? []).filter((n) => n.depth > 0).sort((a, b) => a.depth - b.depth || a.title.localeCompare(b.title)),
     [model],
@@ -103,10 +118,8 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
 
   const otherText = otherLine(other.data);
 
-  const suggestions = useMemo(
-    () => (prefs.suggestions && model ? suggestedLinks(path, new Set(model.nodes.flatMap((n) => (n.path ? [n.path] : []))), tree.data) : []),
-    [prefs.suggestions, model, path, tree.data],
-  );
+  const inGraph = useMemo(() => new Set(model?.nodes.flatMap((n) => (n.path ? [n.path] : [])) ?? []), [model]);
+  const suggestions = useSuggestedLinks(path, inGraph, prefs.suggestions && !!model);
 
   // Where a card goes: beside the pointer, or the node that has the keyboard's focus, in the body's coordinates.
   const body = useRef<HTMLDivElement>(null);
@@ -242,7 +255,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
         {/* The selected node's card says all the hover card would. */}
         {model && prefs.preview && hover?.on === path && hover.node.key !== selected?.node.key && <NodePreview node={hover.node} anchor={hover.anchor} width={hover.width} />}
         {model && selected && <NodeCard ref={card} node={selected.node} anchor={selected.anchor} width={selected.width} height={selected.height} docked={!smUp} beside={smUp} onOpen={open} />}
-        {model && suggestion?.on === path && <SuggestionCard suggestion={suggestion.s} onClose={closeSuggestion} />}
+        {model && suggestion?.on === path && <SuggestionCard from={path} suggestion={suggestion.s} onClose={closeSuggestion} />}
       </div>
       {prefs.list && model && (
         <div id={`${id}-list`} className="max-h-[40%] flex-none overflow-y-auto border-t border-line px-[18px] py-2">
@@ -268,9 +281,9 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
           )}
         </div>
       )}
-      {(unmeasured || otherText) && (
-        <p className="flex flex-none gap-3 border-t border-line px-3 py-1.5 font-mono text-[11px] text-dim">
-          {unmeasured && <span>Similarity not measured yet</span>}
+      {(similarityText || otherText) && (
+        <p className="flex flex-none flex-wrap gap-x-3 border-t border-line px-3 py-1.5 font-mono text-[11px] text-dim">
+          {similarityText && <span>{similarityText}</span>}
           {otherText && <span>{otherText}</span>}
         </p>
       )}

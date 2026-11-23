@@ -17,6 +17,8 @@ import DeleteFileDialog from "./DeleteFileDialog";
 import { useZoomPan } from "./gestures";
 import PdfPages, { type PdfStatus } from "./PdfPages";
 import TextFile from "./TextFile";
+import { notOnDevice, OPENS_ONLINE } from "../offline/source";
+import { useOpenedOnline } from "../offline/useOpenedOnline";
 
 const HistorySheet = lazy(() => import("../note/HistorySheet"));
 
@@ -57,6 +59,8 @@ export default function Lightbox() {
   const checkpoint = search.get("checkpoint") ?? undefined;
   const source = useMemo<FileAt>(() => (checkpoint ? { checkpoint } : version ? { version } : {}), [checkpoint, version]);
   const readOnly = !!(checkpoint || version);
+  // Only the file as it is now: an older version or a checkpoint's is no copy to keep.
+  useOpenedOnline(vault, path, !readOnly);
   // Below `write` the file is looked at, linked to and its history read, never moved or deleted (collab design §12).
   const writes = useMayChange(path);
   const state = location.state as State | null;
@@ -401,7 +405,7 @@ function ImageStage({
     <div ref={stage} data-testid="image-stage" className="absolute inset-0 touch-none overflow-hidden select-none" {...handlers}>
       {url === null || broken ? (
         <p role="alert" className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-[#d9d6cf]">
-          This image can't be shown. Check the connection and try again.
+          {notOnDevice(path) ? OPENS_ONLINE : "This image can't be shown. Check the connection and try again."}
         </p>
       ) : url === undefined ? (
         <p className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-[#a09d96]">Loading …</p>

@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
+import { resetOfflineMode } from "./offline/mode";
 import { startOver } from "./shell/lastNote";
 
 // React Router builds a Request with an AbortSignal for every navigation. Under jsdom that signal is jsdom's,
@@ -23,8 +24,14 @@ for (const name of ["localStorage", "sessionStorage"] as const) {
 // vi.unstubAllGlobals() takes away again.
 Object.defineProperty(globalThis, "WebSocket", { value: undefined, configurable: true, writable: true });
 
+// No server answers in the tests. A request a test didn't stub (often one still on its way from the test before)
+// fails as a bug would, not as a lost network: Node's fetch would fail with a TypeError, the offline mode's signal.
+globalThis.fetch = () => Promise.reject(new Error("No server in the tests: stub fetch."));
+
 // The last note a test opened would open on start in the next one, and each test is a new page load.
 afterEach(() => {
   startOver();
+  // A request a test left unanswered would leave the next test offline.
+  resetOfflineMode();
   for (const key of Object.keys(localStorage)) if (key.startsWith("kumbu.lastNote.")) localStorage.removeItem(key);
 });

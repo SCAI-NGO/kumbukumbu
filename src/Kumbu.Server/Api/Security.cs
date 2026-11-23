@@ -51,13 +51,27 @@ public static class Security
     /// (the web app's submit through fetch, but for the gallery's ZIP, a same-origin form post). <c>object-src 'none'</c>
     /// is stricter than the <c>'self'</c> it would inherit: no plug-in content at all. <c>blob:</c> images: the web app shows an attachment
     /// it fetched (with its session) through an object URL. <c>worker-src 'self'</c> is what it would inherit, said
-    /// explicitly: the only workers are pdf.js's and the app shell's service worker (<c>/sw.js</c>), files of the app;
-    /// no <c>blob:</c> worker, and no WebAssembly (pdf.js runs without it, so no <c>'wasm-unsafe-eval'</c>). Scripts
+    /// explicitly: the only workers are pdf.js's, the password hash's and the app shell's service worker (<c>/sw.js</c>),
+    /// files of the app; no <c>blob:</c> worker, and no WebAssembly (pdf.js runs without it, so no <c>'wasm-unsafe-eval'</c>;
+    /// the password hash worker has a policy of its own, <see cref="KdfWorkerPolicy"/>). Scripts
     /// never get <c>'unsafe-eval'</c>: nothing in a PDF is compiled into code.
     /// </summary>
     public const string ContentSecurityPolicy =
         "default-src 'self'; img-src 'self' data: blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
         "base-uri 'none'; form-action 'self'; object-src 'none'";
+
+    /// <summary>
+    /// For the web app's password hash worker (<c>/assets/kdfWorker-*.js</c>, offline mode design §4.2), the one script
+    /// that may compile WebAssembly: Argon2id. A dedicated worker takes the policy of its own script, so the app's page
+    /// and every other script keep theirs, which compiles nothing. It loads nothing and connects nowhere.
+    /// </summary>
+    public const string KdfWorkerPolicy = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; base-uri 'none'; form-action 'none'; " +
+        "frame-ancestors 'none'; object-src 'none'";
+
+    /// <summary>Whether <paramref name="path"/> is the password hash worker's: a file directly under <c>/assets</c>, as the build names it.</summary>
+    internal static bool IsKdfWorker(PathString path) =>
+        path.StartsWithSegments("/assets", StringComparison.Ordinal, out var rest) && rest.Value is { } name
+        && name.StartsWith("/kdfWorker-", StringComparison.Ordinal) && name.EndsWith(".js", StringComparison.Ordinal) && name.IndexOf('/', 1) < 0;
 
     /// <summary>The same, for an endpoint marked <see cref="SameOriginFramesMetadata"/>: only its own origin may frame it.</summary>
     public static readonly string SameOriginFramesPolicy = ContentSecurityPolicy.Replace("frame-ancestors 'none'", "frame-ancestors 'self'", StringComparison.Ordinal);
@@ -118,6 +132,7 @@ public static class Security
                 headers.ContentSecurityPolicy = metadata?.GetMetadata<FileContentMetadata>() is not null ? FileContentPolicy
                     : reader ? ReaderPagePolicy
                     : metadata?.GetMetadata<SameOriginFramesMetadata>() is not null ? SameOriginFramesPolicy
+                    : IsKdfWorker(context.Request.Path) ? KdfWorkerPolicy
                     : ContentSecurityPolicy;
                 if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):

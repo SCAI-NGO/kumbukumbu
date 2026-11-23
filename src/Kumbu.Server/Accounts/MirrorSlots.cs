@@ -168,16 +168,24 @@ public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
         return (await Slots.UpdateOneAsync(m => m.Id == objectId && m.User == userId, update, cancellationToken: ct)).MatchedCount > 0;
     }
 
-    /// <summary>Deletes the user's slot <paramref name="id"/> ("Remove offline copy"); false if the user has none of that id.</summary>
-    public async Task<bool> DeleteAsync(string userId, string id, CancellationToken ct)
+    /// <summary>A slot whose last contact reported no change waiting: nothing but the copy goes with it.</summary>
+    public static bool Counted(int waiting, DateTime? contactAt) => waiting == 0 && contactAt is not null;
+
+    /// <summary>Deletes the user's slot <paramref name="id"/> ("Remove offline copy"); false if the user has none of that id,
+    /// or, <paramref name="onlyCounted"/>, if it isn't <see cref="Counted"/> (any more).</summary>
+    public async Task<bool> DeleteAsync(string userId, string id, bool onlyCounted, CancellationToken ct)
     {
         if (!ObjectId.TryParse(id, out var objectId)) return false;
-        return (await Slots.DeleteOneAsync(m => m.Id == objectId && m.User == userId, ct)).DeletedCount > 0;
+        var deleted = onlyCounted
+            ? await Slots.DeleteOneAsync(m => m.Id == objectId && m.User == userId && m.Waiting == 0 && m.ContactAt != null, ct)
+            : await Slots.DeleteOneAsync(m => m.Id == objectId && m.User == userId, ct);
+        return deleted.DeletedCount > 0;
     }
 
-    /// <summary>"End other sessions": every slot of the user but those the asking session made or last contacted.</summary>
+    /// <summary>"End other sessions": every slot of the user but those the asking session made or last contacted, and
+    /// those with changes waiting or none reported yet: they wait for a removal with the password.</summary>
     public Task EndOthersAsync(string userId, string? sessionSubject, CancellationToken ct) =>
-        Slots.DeleteManyAsync(m => m.User == userId && m.Session != sessionSubject, ct);
+        Slots.DeleteManyAsync(m => m.User == userId && m.Session != sessionSubject && m.Waiting == 0 && m.ContactAt != null, ct);
 
     /// <summary>Every slot of the user, inside the caller's transaction (a rotation of the user key, the account's deletion).</summary>
     internal static Task DeleteAllAsync(IMongoDatabase db, IClientSessionHandle session, string userId, CancellationToken ct) =>
