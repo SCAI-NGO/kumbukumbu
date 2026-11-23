@@ -92,6 +92,9 @@ export const useOfflineMode = create<OfflineModeState>()((set) => ({
 if (typeof window !== "undefined") {
   // A hint only: the browser knows it has no network at all; it never says the server is reachable.
   window.addEventListener("offline", () => useOfflineMode.getState().failed());
+  // Started without a network (the installed app opened offline, at the sign-in page even, which asks nothing of the
+  // server): the same hint, at once.
+  if (navigator.onLine === false) queueMicrotask(() => useOfflineMode.getState().failed());
   window.addEventListener("pagehide", () => shared?.stop());
 }
 
@@ -208,6 +211,9 @@ export function keep(opened: SealedMirror) {
 export function openCopy(userId: string, signIn?: { username: string; password: string; remember: boolean }): Promise<void> {
   // No IndexedDB (a private window of some browsers, the tests): no copy can be here.
   if (typeof indexedDB === "undefined") return Promise.resolve();
+  // Signed in offline: the session knows the username only (id ""), and the copy is open already. Looking it up by
+  // that id would find none and lock it.
+  if (userId === "") return Promise.resolve();
   opening ??= (async () => {
     try {
       const all = await mirrorCopies();

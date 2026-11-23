@@ -49,7 +49,7 @@ export default function OfflineBar() {
   const done = useOfflineMode((s) => s.done);
   const conflicts = useOfflineMode((s) => s.conflicts);
   const purged = useOfflineMode((s) => s.purged);
-  const hasCopy = useOfflineCopy((s) => s.header !== null);
+  const hasCopy = useOfflineCopy((s) => s.header !== null || s.stored);
   const [signingIn, setSigningIn] = useState(false);
   useTimeout(!offline && done !== null && conflicts.length === 0, 4_000, () => useOfflineMode.getState().seen());
 

@@ -10,7 +10,9 @@ import { api, call } from "../api/client";
 import { useOfflineCopy } from "./copy";
 import { useSession } from "../state/session";
 import { deviceLabel } from "./deviceLabel";
-import { openCopy } from "./turnOn";
+import { openCopy } from "./mode";
+import { nameVaults } from "./source";
+import { draftsFor } from "./writing";
 
 export interface EngineEvents {
   conflict(vaultId: string, original: string, copy: string): void;
@@ -22,7 +24,7 @@ const listeners = new Set<EngineEvents>();
 
 export function listenToEngines(events: EngineEvents): () => void {
   listeners.add(events);
-  return () => listeners.delete(events);
+  return () => void listeners.delete(events);
 }
 
 /** The engines' HTTP: same origin, the session cookie with it. */
@@ -49,6 +51,9 @@ function follow(mirror: SealedMirror | null): void {
   if (mirror === null || mirror.locked) return;
   const engines = new MirrorEngines({
     mirror, device: deviceLabel(), listVaults,
+    // The open editors are the engine's drafts while offline writes are on (§4.9); the vault keeps the caller's name (§4.8).
+    files: (vault) => vault.files(draftsFor(vault.id)),
+    adopted: (ref) => nameVaults(mirror, [ref]),
     remote: (name) => new KumbuApi(mirrorHttp, window.location.origin, name, null),
     clock: { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as number) },
     onStatus: () => listeners.forEach((l) => l.waitingChanged()),
@@ -82,6 +87,11 @@ export function runEngines(): () => void {
 /** A socket "changed" frame, naming the vault as the caller sees it. */
 export function enginesHinted(vaultName: string): void {
   running?.engines.hinted(vaultName);
+}
+
+/** A path of a vault was written in this tab, offline: its engine uploads it (another tab's write comes over the copy). */
+export function enginesLocalChanged(vaultId: string, path: string): void {
+  running?.engines.localChanged(vaultId, path);
 }
 
 /** The socket is (back) up: the vault list and the engines are brought in line. */
