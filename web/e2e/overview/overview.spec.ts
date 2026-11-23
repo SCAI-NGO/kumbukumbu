@@ -206,7 +206,7 @@ test("overview #3: Update copy on an older copy brings the row to Up to date @ov
   await openPublished(page);
   const r = row(page, n.path("Beacon"));
   await expect(r).toHaveAttribute("data-tone", "yellow");
-  await r.getByRole("button", { name: "Update copy", exact: true }).click();
+  await r.getByRole("button", { name: `Update copy of ${n.path("Beacon")}`, exact: true }).click();
   await expect(r).toHaveAttribute("data-tone", "green");
   await expect(state(r)).toHaveText(/^Up to date · Snapshot of /);
   await expect(r.getByRole("button")).toHaveText(["Unpublish"]);
@@ -226,7 +226,7 @@ test("overview #4: Update copy on a bundle shows its list first, then the row is
   await openPublished(page);
   const r = row(page, n.path("Start"));
   await expect(state(r)).toHaveText(/^Copy is older than the note · with 1 linked note · /);
-  await r.getByRole("button", { name: "Update copy", exact: true }).click();
+  await r.getByRole("button", { name: `Update copy of ${n.path("Start")}`, exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Update the published copy" });
   await expect(dialog.getByRole("status")).toHaveText("3 notes");
   const goes = dialog.getByRole("group", { name: "What goes out" });
@@ -250,13 +250,13 @@ test("overview #5: Unpublish asks first, Keep keeps it; Unpublish removes the ro
   await openPublished(page);
   const r = row(page, n.path("Lantern"));
   const question = page.getByRole("alertdialog", { name: "Withdraw the link? Whoever has it can't read the note any more." });
-  await r.getByRole("button", { name: "Unpublish", exact: true }).click();
+  await r.getByRole("button", { name: `Unpublish ${n.path("Lantern")}`, exact: true }).click();
   await question.getByRole("button", { name: "Keep", exact: true }).click();
   await expect(question).toHaveCount(0);
   await expect(r).toHaveCount(1);
   expect(await readStatus(link), "Keep leaves the copy readable").toBe(200);
 
-  await r.getByRole("button", { name: "Unpublish", exact: true }).click();
+  await r.getByRole("button", { name: `Unpublish ${n.path("Lantern")}`, exact: true }).click();
   await question.getByRole("button", { name: "Unpublish", exact: true }).click();
   await expect(question).toHaveCount(0);
   await expect(row(page, n.path("Lantern"))).toHaveCount(0);
@@ -282,7 +282,7 @@ test("overview #6: Compare on the row and on the note's bar shows the copy's ver
   const now = ["# Tide", "", "The new line.", ""];
 
   await openPublished(page);
-  await row(page, n.path("Tide")).getByRole("button", { name: "Compare", exact: true }).click();
+  await row(page, n.path("Tide")).getByRole("button", { name: `Compare copy of ${n.path("Tide")}`, exact: true }).click();
   let sheet = page.getByRole("dialog", { name: `Compare ${n.name("Tide")}` });
   await compared(sheet, before, now);
   await sheet.getByRole("button", { name: `Close compare ${n.name("Tide").toLowerCase()}` }).click();
@@ -320,7 +320,7 @@ test("overview #7: Compare says so when the history no longer keeps the copy's v
   ).toBe(false);
 
   await openPublished(page);
-  await row(page, path).getByRole("button", { name: "Compare", exact: true }).click();
+  await row(page, path).getByRole("button", { name: `Compare copy of ${path}`, exact: true }).click();
   const sheet = page.getByRole("dialog", { name: `Compare ${n.name("Reef")}` });
   await expect(sheet.getByText("This version is no longer kept", { exact: true })).toBeVisible();
   await expect(sheet.getByRole("list", { name: "Published copy" })).toHaveCount(0);
@@ -340,7 +340,7 @@ test("overview #8: Compare shows the copy's version after a note was edited, pub
   await aliceApi.putNote(path, "# Shore\n\nThe new line.\n");
 
   await openPublished(page);
-  await row(page, path).getByRole("button", { name: "Compare", exact: true }).click();
+  await row(page, path).getByRole("button", { name: `Compare copy of ${path}`, exact: true }).click();
   const sheet = page.getByRole("dialog", { name: `Compare ${n.name("Shore")}` });
   await expect(sheet.getByRole("list", { name: "Now" }).getByRole("listitem")).toHaveText(["# Shore", "", "The new line.", ""]);
   await expect(sheet.getByText("This version is no longer kept", { exact: true }), "F-xx: Compare shows the copy's version, not that it is no longer kept").toHaveCount(0, {
