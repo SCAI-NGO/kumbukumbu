@@ -116,7 +116,7 @@ test("similar-api #1: a diving note gets the other two diving notes, the cake no
     const view = await similarNotes(aliceApi, n.decompression);
     expect(view.state).toBe("ready");
     expect(view.pending, "every note of the vault compared").toBe(0);
-    expect(view.notes.map((s) => s.path).sort(), "the two other diving notes, nothing of Work or the archive").toEqual([n.cake, n.computer, n.tables].sort());
+    expect(view.notes.map((s) => s.path).sort(), "the two other diving notes, nothing of Work or the archive").toEqual([n.computer, n.tables].sort());
     for (const s of view.notes) {
       expect(s.score, `${s.path} at or above the floor`).toBeGreaterThanOrEqual(0.5);
       // The line of its closest section, and that section's first line of prose, as the note has them.
@@ -149,14 +149,14 @@ test("similar-api #2: up to five suggestions, one per note @similar @search", as
   const view = await similarNotes(aliceApi, n.decompression);
   expect(view.state).toBe("ready");
   const paths = view.notes.map((s) => s.path);
-  expect(paths, "at most five").toHaveLength(4);
+  expect(paths, "at most five").toHaveLength(5);
   expect(new Set(paths).size, `one row per note: ${paths.join(", ")}`).toBe(5);
   for (const path of paths) expect([...copies, n.tables, n.computer], "a diving note").toContain(path);
 });
 
 test("similar-api #3: a note in the archive gets the archive's notes too @similar @search", async ({ aliceApi, vault }) => {
   test.setTimeout(240_000);
-  test.info().annotations.push({ type: "finding", description: "M-xx: a note in the archive gets no suggestions from the archive (SimilarApi scopes to the vault's root without Archive)" });
+  test.info().annotations.push({ type: "finding", description: "M-03: a note in the archive gets no suggestions from the archive (SimilarApi scopes to the vault's root without Archive)" });
   test.fail();
   const n = at(vault);
   await seedMeaning(aliceApi, vault);
@@ -170,7 +170,7 @@ test("similar-api #3: a note in the archive gets the archive's notes too @simila
 
   // From outside the archive, the archive is left out; from inside, it is in.
   expect(await pathsOf(aliceApi, n.decompression), "the vault's notes outside the archive only").toEqual([n.computer, n.tables].sort());
-  expect(await pathsOf(aliceApi, source), "M-xx: the archived copy of Dive tables is suggested for an archived note").toContain(archived);
+  expect(await pathsOf(aliceApi, source), "M-03: the archived copy of Dive tables is suggested for an archived note").toContain(archived);
 });
 
 test("similar-api #4: a note it links, or that links it, is not suggested @similar @search", async ({ aliceApi, vault }) => {
@@ -185,7 +185,7 @@ test("similar-api #4: a note it links, or that links it, is not suggested @simil
   await aliceApi.putNote(n.computer, `${(await aliceApi.getNote(n.computer)).content}\nSee [[Decompression]].\n`);
   await waitSimilarReady(aliceApi, n.decompression, nextIndex);
 
-  expect(await pathsOf(aliceApi, n.decompression), "neither the note it links nor the note linking it").toEqual([n.tables]);
+  expect(await pathsOf(aliceApi, n.decompression), "neither the note it links nor the note linking it").toEqual([]);
   expect(await pathsOf(aliceApi, n.tables), "Dive tables: not Decompression, which links it").toEqual([n.computer]);
   expect(await pathsOf(aliceApi, n.computer), "Dive computer: not Decompression, which it links").toEqual([n.tables]);
 });
@@ -214,7 +214,7 @@ test("similar-api #5: a PDF close in meaning is not suggested, only notes @simil
     })
     .toContain(pdf);
 
-  expect(await pathsOf(aliceApi, n.decompression), "the diving notes, not the PDF").toEqual([n.computer, pdf, n.tables].sort());
+  expect(await pathsOf(aliceApi, n.decompression), "the diving notes, not the PDF").toEqual([n.computer, n.tables].sort());
 });
 
 test("similar-api #6: Add link appends - [[Other]] to a Related section made once at the end; the suggestion goes @similar @search", async ({ aliceApi, vault }) => {
@@ -229,7 +229,7 @@ test("similar-api #6: Add link appends - [[Other]] to a Related section made onc
   const written = (await first.json()) as { path: string; version: string };
   const note = await aliceApi.getNote(n.decompression);
   expect(written).toEqual({ path: n.decompression, version: note.version });
-  expect(note.content).toBe(`${before.trimEnd()}\n\n## Related\n\n- [[Diving/Dive tables]]\n`);
+  expect(note.content).toBe(`${before.trimEnd()}\n\n## Related\n\n- [[Dive tables]]\n`);
 
   const second = await link(aliceApi, vault, n.decompression, n.computer);
   expect(second.status(), await second.text()).toBe(200);
@@ -254,7 +254,7 @@ test("similar-api #7: an existing related section, any case, takes the item at i
   const response = await link(aliceApi, vault, n.decompression, n.tables);
   expect(response.status(), await response.text()).toBe(200);
   expect((await aliceApi.getNote(n.decompression)).content).toBe(
-    `${body}\n\n## RELATED\n\n- [[Chocolate cake]]\n\n## Log\n\nTwo dives today.\n\n## Related\n\n- [[Dive tables]]\n`,
+    `${body}\n\n## RELATED\n\n- [[Chocolate cake]]\n- [[Dive tables]]\n\n## Log\n\nTwo dives today.\n`,
   );
 });
 
@@ -262,7 +262,7 @@ test("similar-api #8: Add link writes the path when another note of the vault ha
   test.setTimeout(240_000);
   test.info().annotations.push({
     type: "finding",
-    description: "M-xx: with a second note named Dive tables in the vault, Add link from the same folder writes [[Dive tables]], not the path (the resolver's same-folder preference)",
+    description: "M-04: with a second note named Dive tables in the vault, Add link from the same folder writes [[Dive tables]], not the path (the resolver's same-folder preference)",
   });
   test.fail();
   const n = at(vault);
@@ -274,7 +274,7 @@ test("similar-api #8: Add link writes the path when another note of the vault ha
 
   const response = await link(aliceApi, vault, n.decompression, n.tables);
   expect(response.status(), await response.text()).toBe(200);
-  expect((await aliceApi.getNote(n.decompression)).content, "M-xx: the link names the path, as the title is ambiguous in the vault").toBe(
+  expect((await aliceApi.getNote(n.decompression)).content, "M-04: the link names the path, as the title is ambiguous in the vault").toBe(
     `${before.trimEnd()}\n\n## Related\n\n- [[Diving/Dive tables]]\n`,
   );
 });
@@ -304,7 +304,7 @@ test("similar-api #9: Not related keeps the path in not-related, hides the pair 
     await waitSimilarReady(aliceApi, n.decompression, nextIndex);
 
     expect(await pathsOf(aliceApi, n.decompression), "hidden on the note it was written to").toEqual([n.computer]);
-    expect(await pathsOf(aliceApi, n.tables), "hidden on the other note too").toEqual([n.computer, n.decompression].sort());
+    expect(await pathsOf(aliceApi, n.tables), "hidden on the other note too").toEqual([n.computer]);
     const fromDecompression = await unlinked(n.decompression);
     expect(fromDecompression, "the agent: Dive tables left out").not.toContain(n.tables);
     expect(fromDecompression, "the agent: Dive computer still there").toContain(n.computer);
@@ -334,7 +334,7 @@ test("similar-api #10: a read member gets the suggestions, but Add link and Not 
 
     expect(await pathsOf(bobApi, n.decompression), "Bob reads the suggestions").toEqual([n.computer, n.tables].sort());
     const linked = await link(bobApi, share.vault, n.decompression, n.tables);
-    expect(linked.status(), "Add link refused").toBe(200);
+    expect(linked.status(), "Add link refused").toBe(403);
     const hidden = await notRelated(bobApi, share.vault, n.decompression, n.tables);
     expect(hidden.status(), "Not related refused").toBe(403);
     expect(await aliceApi.getNote(n.decompression), "the note unchanged").toEqual(before);
@@ -353,7 +353,7 @@ test("similar-api #11: a note not indexed yet answers unindexed, then ready @sim
   const fresh = `/${vault}/Diving/Safety stop.md`;
   await aliceApi.putNote(fresh, "# Safety stop\n\nAt five metres the diver waits three minutes, so the nitrogen leaves the tissues before surfacing.\n");
   const first = await similarNotes(aliceApi, fresh);
-  expect(first, "not indexed yet").toEqual({ state: "ready", notes: [], pending: 0 });
+  expect(first, "not indexed yet").toEqual({ state: "unindexed", notes: [], pending: 0 });
   await waitSimilarReady(aliceApi, fresh, nextIndex);
   expect((await similarNotes(aliceApi, fresh)).notes.length, "then suggestions").toBeGreaterThan(0);
 });

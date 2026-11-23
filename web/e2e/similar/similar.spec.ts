@@ -113,7 +113,7 @@ test("similar #1: closed and not asked until opened; the two diving notes, each 
   expect(asked, "nothing asked while closed").toEqual([]);
 
   await openSimilar(page);
-  await expect(rows).toHaveCount(3);
+  await expect(rows).toHaveCount(2);
   expect(asked.length, "asked once opened").toBeGreaterThan(0);
   // Best first, as the server ranks them; each a mention row: title, its line, the folder, and nothing else.
   for (const [i, s] of expected.notes.entries()) {
@@ -150,7 +150,7 @@ test("similar #2: Add link writes - [[Dive tables]] under Related at the end, an
   const box = (await add.boundingBox())!;
   expect([box.width, box.height], "a 44 px target").toEqual([44, 44]);
   await add.click();
-  await expect(rows).toHaveCount(2);
+  await expect(rows).toHaveCount(1);
   await expect(row(rows, "Dive computer")).toHaveCount(1);
   await expect(page.locator("article").getByRole("heading", { name: "Related", level: 2 })).toBeVisible();
   expect((await aliceApi.getNote(n.decompression)).content).toBe(`${before.trimEnd()}\n\n## Related\n\n- [[Dive tables]]\n`);
@@ -186,13 +186,14 @@ test("similar #3: Not related hides the row with Undo and keeps the path in not-
   await waitSimilarReady(aliceApi, n.tables, firstIndex);
   await openNote(page, n.tables);
   const other = await openSimilar(page);
-  await expect(other.rows).toHaveCount(2);
+  await expect(other.rows).toHaveCount(1);
   await expect(row(other.rows, "Dive computer")).toHaveCount(1);
 });
 
 test("similar #4: a row answered Not related reads Hidden · Undo @similar @search", async ({ page, aliceApi, vault }) => {
   test.setTimeout(240_000);
-  test.info().annotations.push({ type: "finding", description: "F-xx: the hidden row reads \"Hidden · Dive tables\" and Undo, not the spec's \"Hidden · Undo\"" });
+  test.info().annotations.push({ type: "finding", description: "F-01: the hidden row reads \"Hidden · Dive tables\" and Undo, not the spec's \"Hidden · Undo\"" });
+  test.fail();
   const n = at(vault);
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
   await openNote(page, n.decompression);
@@ -200,7 +201,7 @@ test("similar #4: a row answered Not related reads Hidden · Undo @similar @sear
   await page.getByRole("button", { name: "Not related: Dive tables", exact: true }).click();
   const hidden = rows.filter({ hasText: /^Hidden/ });
   await expect(hidden.getByRole("button", { name: "Undo" })).toBeVisible();
-  await expect(hidden, "F-xx: the row reads Hidden · Undo (§3.6)").toHaveText("Hidden · Undo");
+  await expect(hidden, "F-01: the row reads Hidden · Undo (§3.6)").toHaveText("Hidden · Undo");
 });
 
 test("similar #5: a read member sees the suggestions without Add link and Not related @similar @search", async ({ page, bobPage, aliceApi, seedAs }) => {
@@ -216,7 +217,7 @@ test("similar #5: a read member sees the suggestions without Add link and Not re
     await expect(bob.rows).toHaveCount(2);
     await expect(row(bob.rows, "Dive tables")).toHaveCount(1);
     await expect(row(bob.rows, "Dive computer")).toHaveCount(1);
-    await expect(bob.section.getByRole("button", { name: /^(Add link to|Not related:) / })).toHaveCount(4);
+    await expect(bob.section.getByRole("button", { name: /^(Add link to|Not related:) / })).toHaveCount(0);
 
     // Alice, the owner, has them.
     await openNote(page, n.decompression);
@@ -233,7 +234,7 @@ test("similar #6: the cake has nothing above the floor; a failed request says so
   await waitSimilarReady(aliceApi, n.cake, firstIndex);
   await openNote(page, n.cake);
   const cake = await openSimilar(page);
-  await expect(cake.section.getByText("No similar notes.", { exact: true })).toBeVisible();
+  await expect(cake.section.getByText("No similar notes that aren't linked.", { exact: true })).toBeVisible();
   await expect(cake.rows).toHaveCount(0);
 
   // The request fails, as a dropped connection would; the query's retries run out first.
@@ -263,7 +264,7 @@ test("similar #7: in Write mode Add link saves the text and leaves Write first @
   await source.fill(edited);
   await page.getByRole("button", { name: "Add link to Dive tables", exact: true }).click();
 
-  await expect(page.getByRole("button", { name: "Done" }), "Write mode left").toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Done" }), "Write mode left").toHaveCount(0);
   await expect(page.getByRole("button", { name: "Write" })).toBeVisible();
   await expect
     .poll(async () => (await aliceApi.getNote(n.decompression)).content, { message: "the typed text saved, then the link added" })
@@ -283,7 +284,7 @@ test("similar #8: the graph's suggested links, their card's Add link, and Not re
   await suggestions.click();
   await expect(suggestions).toHaveAttribute("aria-pressed", "true");
   const suggested = page.getByRole("button", { name: /^Suggested link: / });
-  await expect(suggested).toHaveCount(3);
+  await expect(suggested).toHaveCount(2);
   await expect(page.getByRole("button", { name: "Suggested link: Dive tables", exact: true })).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Suggested link: Dive computer", exact: true })).toHaveCount(1);
 
@@ -310,7 +311,8 @@ test("similar #8: the graph's suggested links, their card's Add link, and Not re
 
 test("similar #10: in the side panel a row shows a short title in full @similar @search", async ({ page, aliceApi, vault }) => {
   test.setTimeout(240_000);
-  test.info().annotations.push({ type: "finding", description: "F-xx: in the 300 px side panel a row cuts even a short title (\"Dive tab…\") and its line, the folder taking up to 30 %" });
+  test.info().annotations.push({ type: "finding", description: "F-02: in the 300 px side panel a row cuts even a short title (\"Dive tab…\") and its line, the folder taking up to 30 %" });
+  test.fail();
   const n = at(vault);
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
   await openNote(page, n.decompression);
@@ -318,7 +320,7 @@ test("similar #10: in the side panel a row shows a short title in full @similar 
   await expect(rows).toHaveCount(2);
   const title = row(rows, "Dive tables").getByText("Dive tables", { exact: true });
   const cut = await title.evaluate((e) => e.scrollWidth > e.clientWidth);
-  expect(cut, "F-xx: the title Dive tables is shown in full (§3.2)").toBe(false);
+  expect(cut, "F-02: the title Dive tables is shown in full (§3.2)").toBe(false);
 });
 
 test("similar #9: with search by meaning off, the section says so @similar", async ({ page, aliceApi, folder }) => {
