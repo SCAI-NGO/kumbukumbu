@@ -192,6 +192,7 @@ The local index (links, tags, words search) is built in memory after unlocking a
   - **Offline:** under a key derived from the password, so the app opens offline after a reload. The web app has the password at every sign-in, so it re-wraps then, and a password change needs no special path.
 - **KDF:** PBKDF2-SHA-256 from WebCrypto, about 1,000,000 iterations (tuned to ~1 s on a mid-range phone). Argon2id would be stronger against GPU guessing, but needs WebAssembly, and the CSP has no `'wasm-unsafe-eval'` (`src/Kumbu.Server/Api/Security.cs:59`); the app runs pdf.js without WebAssembly for the same reason. Opening the CSP is a security decision of its own, for the 0.7.0 audit.
 - The key lives in memory only, per tab. A reload offline asks for the password; online the slot answers.
+- **A password change leaves the other devices' copies in place.** Each still opens offline with the old password until its device next signs in, which wraps the key again under the new one. The first visit after the change lists the devices that keep a copy, each with "Remove offline copy", and Settings, Security says so before the change. Why: wiping them would lose changes on the person's own devices that haven't uploaded, the one thing in Kumbu² with no trash or history; a device that isn't trusted any more is removed from that list, and its session has ended with the change anyway.
 - **No PIN for offline unlocking:** 4 to 6 digits against a copied disk are guessed in seconds.
 
 ### 4.3 Discreet vaults
@@ -209,7 +210,7 @@ The server can only reach a device that comes online. On contact the client purg
 | Mirror slot deleted ("Remove offline copy" in the device list), account deleted, "end other sessions" | The whole mirror |
 | Account or vault re-encrypted | The affected mirrors (they are re-synced under a new mirror key) |
 
-A purge also removes changes that haven't uploaded yet, so the device list says beforehand when a device had changes waiting (its slot records that at each contact). A device that never comes online again can't be wiped; the security document says so plainly, as it does for the Obsidian plugin.
+A purge also removes changes that haven't uploaded yet, so the device list says beforehand when a device had changes waiting (its slot records that at each contact). **Removing another device's copy that had changes waiting, or hasn't reported yet, takes the password**, as deleting a vault does; the server checks it against the slot as it is at the removal, so a contact in between that reports changes makes it ask. This browser's own copy needs no password: the browser removes it itself, having said what goes with it. **"End other sessions" leaves those copies in place** and ends only their sessions; they wait for a removal with the password. Why: a stolen session must not be enough to destroy work that exists nowhere else, and a lost device is cut off at once all the same, as its session ends. A device that never comes online again can't be wiped; the security document says so plainly, as it does for the Obsidian plugin.
 
 **The kill switch** (backlog, not built) gets room here: a duress password at the offline unlock that destroys the mirror is a natural extension, decided in its own design.
 

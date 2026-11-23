@@ -27,6 +27,10 @@ public sealed record MirrorContactView(
     string Id, string Key, IReadOnlyList<MirrorVaultView> Vaults,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Token = null);
 
+/// <summary><c>password</c>: needed to remove another browser's slot whose last contact reported changes waiting, or
+/// that hasn't reported yet: those changes are the one thing in Kumbu² without a trash or a history.</summary>
+public sealed record RemoveMirrorSlotRequest(string? Password);
+
 /// <summary>A slot in the device list: never its key or token. <c>waiting</c>: the changes the browser had waiting at its
 /// last contact, lost if the slot is removed before they upload. <c>current</c>: this browser's.</summary>
 public sealed record MirrorSlotView(string Id, string Label, DateTime CreatedAt, DateTime? ContactAt, int Waiting, bool Current);
@@ -47,7 +51,7 @@ public static class MirrorSlotsApi
         account.MapPost("", CreateAsync).Errors(400, 401, 403, 409);
         // Made on every reconnect, so like the web app's other background calls it keeps no idle session alive.
         account.MapPost("/contact", ContactAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 403, 404);
-        account.MapDelete("/{id}", DeleteAsync).Errors(401, 403, 404);
+        account.MapDelete("/{id}", DeleteAsync).Errors(400, 401, 403, 404, 429);
     }
 
     private static async Task<Ok<MirrorSlotView[]>> ListAsync(HttpContext http, RequestCaller caller, MirrorSlots slots, CancellationToken ct) =>
@@ -85,10 +89,40 @@ public static class MirrorSlotsApi
         return TypedResults.Ok(new MirrorContactView(contact.Id, Encode(contact.Key), await VaultsAsync(caller, token, ct)));
     }
 
+    /// <summary>
+    /// "Remove offline copy". Another browser's copy with changes waiting at its last contact, or none reported yet, goes
+    /// only with the password, as a vault's deletion does: a stolen session cuts the device off by ending its session,
+    /// not by destroying what it hasn't uploaded. This browser's own copy it removes itself, having said what goes with it.
+    /// </summary>
     private static async Task<Results<NoContent, NotFound<ApiError>>> DeleteAsync(
-        string id, RequestCaller caller, MirrorSlots slots, SyncHub hub, CancellationToken ct)
+        string id, RemoveMirrorSlotRequest? body, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users,
+        AccountLimits limits, Sessions sessions, SyncHub hub, CancellationToken ct)
     {
-        if (!await slots.DeleteAsync(caller.User!.Id, id, ct)) return TypedResults.NotFound(new ApiError("There is no such offline copy."));
+        var user = caller.User!;
+        var slot = (await slots.ListAsync(user.Id, Subject(http), ct)).FirstOrDefault(s => s.Id == id);
+        if (slot is null) return TypedResults.NotFound(new ApiError("There is no such offline copy."));
+        var withPassword = false;
+        if (!slot.Current && !MirrorSlots.Counted(slot.Waiting, slot.ContactAt))
+        {
+            if (string.IsNullOrEmpty(body?.Password))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest,
+                    "This device has changes it hasn't uploaded, or hasn't said yet. Enter your password to remove its offline copy with them.",
+                    code: ApiErrors.ChangesWaiting);
+            }
+
+            if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
+            if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
+            await AccountApi.PasswordGivenAsync(http, sessions, ct);
+            withPassword = true;
+        }
+
+        // Without the password only while nothing is waiting: a contact in between that reports changes keeps the slot.
+        if (!await slots.DeleteAsync(user.Id, id, onlyCounted: !withPassword && !slot.Current, ct))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "This device has just reported changes waiting. Enter your password to remove its offline copy.",
+                code: ApiErrors.ChangesWaiting);
+        }
         await hub.MirrorChangedAsync(caller.User!.Id, CancellationToken.None);
         return TypedResults.NoContent();
     }

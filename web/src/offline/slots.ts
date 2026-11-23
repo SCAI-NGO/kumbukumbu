@@ -28,9 +28,12 @@ async function answer<T>(response: Response): Promise<T> {
 /** A device with a copy, as Settings, Offline lists them (§4.6). `current`: this browser's. */
 export interface DeviceCopy { id: string; label: string; createdAt: string; contactAt: string | null; waiting: number; current: boolean; }
 
-async function send(method: "GET" | "DELETE", path: string): Promise<Response> {
+async function send(method: "GET" | "DELETE", path: string, body?: unknown): Promise<Response> {
   try {
-    return await fetch(new Request(new URL(`${BASE}${path}`, window.location.origin), { method, credentials: "same-origin" }));
+    return await fetch(new Request(new URL(`${BASE}${path}`, window.location.origin), {
+      method, credentials: "same-origin",
+      ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    }));
   } catch {
     throw new OfflineError("Kumbu² can't be reached.");
   }
@@ -41,10 +44,24 @@ export async function listDeviceCopies(): Promise<DeviceCopy[]> {
   return answer<DeviceCopy[]>(await send("GET", ""));
 }
 
+/**
+ * Whether removing another device's copy needs the password: its last contact reported changes waiting, or it hasn't
+ * reported yet. Those changes are the one thing in Kumbu² without a trash or a history (design §4.4).
+ */
+export const needsPassword = (d: DeviceCopy) => !d.current && (d.waiting > 0 || d.contactAt === null);
+
+/** The server wants the password for this removal: the device has (just) reported changes waiting. */
+export class PasswordNeededError extends RejectedError {}
+
 /** Removes a device's copy: it goes when that device next comes online, with what it hadn't uploaded. */
-export async function removeDeviceCopy(id: string): Promise<void> {
-  const response = await send("DELETE", `/${encodeURIComponent(id)}`);
-  if (response.status !== 404 && !response.ok) await answer(response);
+export async function removeDeviceCopy(id: string, password?: string): Promise<void> {
+  const response = await send("DELETE", `/${encodeURIComponent(id)}`, password === undefined ? undefined : { password });
+  if (response.status === 404 || response.ok) return;
+  if (response.status === 400) {
+    const error = (await response.clone().json().catch(() => null)) as { error?: string; code?: string } | null;
+    if (error?.code === "changes-waiting") throw new PasswordNeededError(error.error ?? "Enter your password.", 400);
+  }
+  await answer(response);
 }
 
 export const mirrorSlots: MirrorSlotsPort = {

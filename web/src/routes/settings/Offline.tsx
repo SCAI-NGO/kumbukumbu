@@ -1,38 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Settings, Offline (offline mode design §3a): the copy on this device, which vaults it keeps, the attachments and
 // their budget, what is kept offline whole, the browser's storage, and the devices with a copy.
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { attachmentKind, isMarker } from "eidolon-core/engine/paths";
-import { OfflineError, RejectedError } from "eidolon-core/engine/ports";
 import { attachmentsUsed, BUDGETS, mirrors } from "eidolon-core/store/choice";
 import type { SealedMirror } from "eidolon-core/store/mirror";
-import { useEffect, useId, useReducer, useState, type ReactNode } from "react";
+import { useEffect, useId, useReducer, useState } from "react";
 import { Link } from "react-router-dom";
 import { errorText } from "../../api/error-text";
 import { useVaults, type VaultView } from "../../api/notes";
 import { storageText } from "../../api/storage";
 import ConfirmTyped from "../../components/ConfirmTyped";
-import { FormError, inputClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
-import { useDialog } from "../../hooks/useDialog";
-import { ago } from "../../note/AgentBanner";
+import { FormError, inputClass, secondaryButtonClass } from "../../components/form";
 import { useOfflineCopy } from "../../offline/copy";
 import { chooseOffline } from "../../offline/engines";
 import { storageUse } from "../../offline/ports";
-import { listDeviceCopies, removeDeviceCopy, type DeviceCopy } from "../../offline/slots";
 import { openCopy, turnOff, turnOn } from "../../offline/turnOn";
 import { useSession } from "../../state/session";
 import { isStandalone } from "../../update/InstallHint";
+import { changes, Confirm, DeviceCopies, failureText, plural } from "./DeviceCopies";
 import { Section } from "./Section";
-
-/** The store's and the slots' errors are the core's, not HttpError: their sentences are shown as errorText shows the API's. */
-function failureText(e: unknown): string {
-  if (e instanceof RejectedError) return e.message;
-  if (e instanceof OfflineError) return "The server can't be reached right now. Try again in a moment.";
-  return errorText(e);
-}
-
-const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en-GB")} ${n === 1 ? one : many}`;
-const changes = (n: number) => plural(n, "change", "changes");
 
 /** The copy changes under the page (downloads, other tabs): read again every second while it is open. */
 function useEverySecond(on: boolean) {
@@ -328,85 +315,10 @@ function StorageSection() {
 }
 
 function DevicesSection() {
-  const queryClient = useQueryClient();
-  const devices = useQuery({ queryKey: ["offline-devices"], queryFn: listDeviceCopies });
-  const [removing, setRemoving] = useState<DeviceCopy | null>(null);
-  const remove = useMutation({
-    mutationFn: (id: string) => removeDeviceCopy(id),
-    onSuccess: async () => {
-      setRemoving(null);
-      await queryClient.invalidateQueries({ queryKey: ["offline-devices"] });
-    },
-  });
   return (
     <Section title="Devices with a copy">
-      {devices.isError && <p className="text-muted">The list needs a connection.</p>}
-      {devices.data?.length === 0 && <p className="text-muted">No device keeps a copy of your notes.</p>}
-      {devices.data && devices.data.length > 0 && (
-        <ul aria-label="Devices with a copy" className="flex flex-col gap-2">
-          {devices.data.map((d) => (
-            <li key={d.id} className="flex min-h-11 items-center gap-3">
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="break-words text-text">{d.label}</span>
-                <span className="text-sm text-muted">{deviceDetail(d)}</span>
-              </span>
-              {!d.current && (
-                <button type="button" onClick={() => setRemoving(d)} className={secondaryButtonClass}>
-                  Remove offline copy
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {removing && (
-        <Confirm
-          title={`Remove the copy on ${removing.label}?`}
-          text={`${removing.waiting > 0 ? `${changes(removing.waiting)} on that device haven't uploaded and will be lost. ` : ""}The copy goes when that device next comes online.`}
-          action="Remove"
-          busy={remove.isPending}
-          error={remove.isError ? failureText(remove.error) : null}
-          onConfirm={() => remove.mutate(removing.id)}
-          onClose={() => setRemoving(null)}
-        />
-      )}
+      <DeviceCopies />
     </Section>
   );
 }
 
-/** "This device", or "last online 3 days ago · had 2 changes waiting". */
-function deviceDetail(d: DeviceCopy): string {
-  const parts = [d.current ? "This device" : d.contactAt ? `last online ${ago(d.contactAt)}` : `set up ${ago(d.createdAt)}`];
-  if (!d.current && d.waiting > 0) parts.push(`had ${changes(d.waiting)} waiting`);
-  return parts.join(" · ");
-}
-
-function Confirm(props: { title: string; text: ReactNode; action: string; busy: boolean; error: string | null; onConfirm(): void; onClose(): void }) {
-  const id = useId();
-  const dialog = useDialog<HTMLDivElement>(props.onClose);
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
-      <div
-        ref={dialog}
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby={`${id}-title`}
-        className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
-      >
-        <h2 id={`${id}-title`} className="text-lg font-bold break-words text-text">
-          {props.title}
-        </h2>
-        <p className="text-text-body">{props.text}</p>
-        {props.error && <FormError>{props.error}</FormError>}
-        <div className="flex gap-3">
-          <button type="button" data-autofocus onClick={props.onClose} className={`${secondaryButtonClass} flex-1`}>
-            Cancel
-          </button>
-          <button type="button" disabled={props.busy} onClick={props.onConfirm} className={`${primaryButtonClass} flex-1`}>
-            {props.action}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}

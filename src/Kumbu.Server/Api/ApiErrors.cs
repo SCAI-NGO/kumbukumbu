@@ -41,6 +41,10 @@ public static class ApiErrors
     /// and sign in as its owner.</summary>
     public const string OtherAccount = "other-account";
 
+    /// <summary>The 400 of removing another browser's offline copy that has changes waiting, without the password: the
+    /// device list asks for it (<see cref="MirrorSlotsApi"/>).</summary>
+    public const string ChangesWaiting = "changes-waiting";
+
     /// <summary>The <see cref="ApiError.Code"/> that tells a browser to purge its whole offline mirror (offline mode design
     /// §4.4): its mirror slot is gone. On the 404 of a contact (<see cref="MirrorSlotsApi"/>), and on the 401 of a request
     /// that hands in the slot's token in <see cref="MirrorHeader"/> when no slot of it exists any more.</summary>
