@@ -640,6 +640,21 @@ public sealed class BundleTests(KumbuAppFactory app)
             Assert.Equal("/Work/C.md", json["publications"]![0]!["without"]![0]!.GetValue<string>());
         }
 
+        // The overview carries the walk too, so that Update copy can show the bundle's list from there; never the link.
+        using (var overview = await alice.GetAsync("/api/publications"))
+        {
+            var json = (await RestClient.JsonAsync(overview))[0]!;
+            Assert.Equal(2, json["notes"]!.GetValue<int>());
+            Assert.Equal(1, json["depth"]!.GetValue<int>());
+            Assert.Equal(["/Work/C.md"], json["without"]!.AsArray().Select(n => n!.GetValue<string>()));
+            Assert.True(json["link"] is null, "the overview holds a link");
+            // The versions the copy was made from, the start first, for Compare.
+            var copied = json["copied"]!.AsArray();
+            Assert.Equal(["/Work/A.md", "/Work/B.md"], copied.Select(c => c!["path"]!.GetValue<string>()));
+            var a = await RestClient.JsonAsync(await alice.GetAsync("/api/notes/Work/A.md"));
+            Assert.Equal(a["version"]!.GetValue<string>(), copied[0]!["version"]!.GetValue<string>());
+        }
+
         using (var updated = await alice.SendAsync(HttpMethod.Put, "/api/publications/Work/A.md", new { depth = 0, expected = new[] { "A.md" } }))
         {
             Assert.Equal(HttpStatusCode.OK, updated.StatusCode);

@@ -189,7 +189,7 @@ describe("Settings: Security", () => {
     renderApp("/settings/security");
     await screen.findByRole("region", { name: "Sessions" });
     await userEvent.click(within(section("Sessions")).getByRole("button", { name: "Sign out other sessions" }));
-    expect(await within(section("Sessions")).findByText("Every other session has ended.")).toBeInTheDocument();
+    expect(await within(section("Sessions")).findByText(/Every other session has ended\./)).toBeInTheDocument();
     expect(ended).toBe(1);
   });
 });

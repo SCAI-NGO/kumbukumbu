@@ -1,4 +1,4 @@
-# 0018. Answer a contact with another user's token with a refusal, not a wipe
+# 0020. Answer a contact with another user's token with a refusal, not a wipe
 
 - **Date:** 2026-11-23
 - **Status:** Proposed

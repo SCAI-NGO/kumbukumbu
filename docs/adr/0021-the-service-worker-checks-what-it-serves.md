@@ -1,4 +1,4 @@
-# 0019. Let the service worker serve a kept file only while its bytes are the build's
+# 0021. Let the service worker serve a kept file only while its bytes are the build's
 
 - **Date:** 2026-11-23
 - **Status:** Proposed

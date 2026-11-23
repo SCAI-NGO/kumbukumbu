@@ -193,6 +193,7 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
     [InlineData("POST", Url)]
     [InlineData("POST", Contact)]
     [InlineData("DELETE", Url + "/000000000000000000000000")]
+    [InlineData("PUT", Url + "/000000000000000000000000/label")]
     public async Task Api_keys_are_refused(string method, string path)
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");
@@ -210,6 +211,8 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
     [InlineData("POST", Contact, "https://evil.example")]
     [InlineData("DELETE", "{slot}", null)]
     [InlineData("DELETE", "{slot}", "https://evil.example")]
+    [InlineData("PUT", "{slot}/label", null)]
+    [InlineData("PUT", "{slot}/label", "https://evil.example")]
     public async Task Changes_need_our_own_origin(string method, string path, string? origin)
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");
@@ -222,6 +225,7 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         var entry = Assert.Single(await ListAsync(alice))!;
         Assert.Equal(0, entry["waiting"]!.GetValue<int>());
+        Assert.Equal("Firefox on Linux", entry["label"]!.GetValue<string>());
     }
 
     [Fact]
@@ -254,7 +258,7 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
             Assert.Null((await JsonAsync(kept))["code"]);
         }
 
-        using (var removed = await other.SendAsync(HttpMethod.Delete, $"{Url}/{slot.Id}")) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        using (var removed = await other.SendAsync(HttpMethod.Post, $"{Url}/{slot.Id}/remove", new { password = Password })) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
 
         using var wipe = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, alice.Session, slot.Token);
         await AssertWipeAsync(wipe, HttpStatusCode.Unauthorized);
@@ -398,6 +402,7 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
         var here = await CreateAsync(alice, "Here");
         var elsewhere = await alice.SignInAgainAsync();
         var there = await CreateAsync(elsewhere, "There");
+        await ContactedAsync(elsewhere, there.Token);
 
         using (var ended = await alice.SendAsync(HttpMethod.Post, "/api/sessions/end-others")) Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
 
@@ -405,6 +410,60 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
         Assert.Equal(here.Key, (await ContactedAsync(alice, here.Token))["key"]!.GetValue<string>());
         using var gone = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, elsewhere.Session, there.Token);
         await AssertWipeAsync(gone, HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Ending_other_sessions_leaves_a_slot_with_changes_waiting_or_not_yet_counted()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var elsewhere = await alice.SignInAgainAsync();
+        var waiting = await CreateAsync(elsewhere, "Waiting");
+        await ContactedAsync(elsewhere, waiting.Token, waiting: 3);
+        var third = await alice.SignInAgainAsync();
+        var uncounted = await CreateAsync(third, "Not counted");
+
+        using (var ended = await alice.SendAsync(HttpMethod.Post, "/api/sessions/end-others")) Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
+
+        // Their sessions are gone; their unsent changes, which nothing else in Kumbu² keeps, wait for a removal with the password.
+        Assert.Equal(["Not counted", "Waiting"], (await ListAsync(alice)).Select(s => s!["label"]!.GetValue<string>()).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Removing_a_slot_with_changes_waiting_asks_for_the_password()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var elsewhere = await alice.SignInAgainAsync();
+        var slot = await CreateAsync(elsewhere);
+        await ContactedAsync(elsewhere, slot.Token, waiting: 2);
+
+        using (var asked = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{slot.Id}"))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, asked.StatusCode);
+            Assert.Equal("changes-waiting", (await JsonAsync(asked))["code"]?.GetValue<string>());
+        }
+        using (var wrong = await alice.SendAsync(HttpMethod.Post, $"{Url}/{slot.Id}/remove", new { password = "not it" })) Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        Assert.Single(await ListAsync(alice));
+
+        using (var removed = await alice.SendAsync(HttpMethod.Post, $"{Url}/{slot.Id}/remove", new { password = Password })) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        Assert.Empty(await ListAsync(alice));
+    }
+
+    [Fact]
+    public async Task Removing_a_slot_not_yet_counted_asks_for_the_password_but_this_browsers_own_does_not()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var elsewhere = await alice.SignInAgainAsync();
+        var there = await CreateAsync(elsewhere, "There");
+        var here = await CreateAsync(alice, "Here");
+        await ContactedAsync(alice, here.Token, waiting: 5);
+
+        using (var asked = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{there.Id}"))
+        {
+            Assert.Equal("changes-waiting", (await JsonAsync(asked))["code"]?.GetValue<string>());
+        }
+        // Its own copy this browser removes itself, and has said what goes with it.
+        using (var own = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{here.Id}")) Assert.Equal(HttpStatusCode.NoContent, own.StatusCode);
+        Assert.Equal([there.Id], (await ListAsync(alice)).Select(s => s!["id"]!.GetValue<string>()));
     }
 
     [Fact]
@@ -422,6 +481,56 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
         Assert.Equal(0, await db.GetCollection<BsonDocument>("mirror_slots").CountDocumentsAsync(d => d["user"] == alice.User.Id, cancellationToken: Ct));
         using var wipe = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, alice.Session, slot.Token);
         await AssertWipeAsync(wipe, HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task A_slot_is_renamed_and_keeps_its_key()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var slot = await CreateAsync(alice);
+
+        using (var renamed = await alice.SendAsync(HttpMethod.Put, $"{Url}/{slot.Id}/label", new { label = "  Work laptop  " }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        Assert.Equal("Work laptop", Assert.Single(await ListAsync(alice))!["label"]!.GetValue<string>());
+        Assert.Equal(slot.Key, (await ContactedAsync(alice, slot.Token))["key"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_session_of_one_user_never_renames_another_users_slot()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var bob = await NewAsync(app.PublicApi, vault: "Garden");
+        var slot = await CreateAsync(alice);
+
+        using (var renamed = await bob.SendAsync(HttpMethod.Put, $"{Url}/{slot.Id}/label", new { label = "Mine now" }))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, renamed.StatusCode);
+        }
+        using (var nothing = await alice.SendAsync(HttpMethod.Put, $"{Url}/not-an-id/label", new { label = "Nothing" }))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, nothing.StatusCode);
+        }
+
+        Assert.Equal("Firefox on Linux", Assert.Single(await ListAsync(alice))!["label"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("line\nbreak")]
+    [InlineData("a label of more than sixty-four characters, which is longer than any browser's")]
+    public async Task A_new_label_is_a_short_line(string label)
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var slot = await CreateAsync(alice);
+
+        using var response = await alice.SendAsync(HttpMethod.Put, $"{Url}/{slot.Id}/label", new { label });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("Firefox on Linux", Assert.Single(await ListAsync(alice))!["label"]!.GetValue<string>());
     }
 
     [Fact]

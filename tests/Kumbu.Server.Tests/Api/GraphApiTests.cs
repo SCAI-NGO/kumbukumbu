@@ -268,6 +268,46 @@ public sealed class GraphApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Similarity_scores_the_local_graphs_edges_between_notes()
+    {
+        var user = await RestClient.NewAsync(app.PublicApi, "Work");
+        await user.CreateAsync("garden.md", "# Garden\n\nTomatoes grow in the greenhouse. See [[harvest]], [[shed]] and [[Nobody]].\n\n![[pump.png]]\n");
+        await user.CreateAsync("harvest.md", "# Harvest\n\nTomatoes from the greenhouse, picked ripe.\n");
+        await user.CreateAsync("shed.md", "# Shed\n\nA spade, a rake and a bicycle.\n");
+        await user.CreateFileAsync("pump.png", FileApiTests.Png(4, 4));
+        await app.IndexedAsync();
+
+        using var response = await user.GetAsync($"/api/graph/similarity?path={Uri.EscapeDataString("/Work/garden.md")}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var view = await RestClient.JsonAsync(response);
+        Assert.Equal("ready", view["state"]!.GetValue<string>());
+        var pairs = view["pairs"]!.AsArray().ToDictionary(p => p!["to"]!.GetValue<string>(), p => p!["score"]?.GetValue<double>());
+        // The ghost and the picture have no meaning to compare: only the two edges between notes are scored.
+        Assert.Equal(["/Work/harvest.md", "/Work/shed.md"], pairs.Keys.Order(StringComparer.Ordinal));
+        Assert.All(pairs.Values, s => Assert.InRange(s!.Value, 0, 1));
+        Assert.True(pairs["/Work/harvest.md"] > pairs["/Work/shed.md"]);
+    }
+
+    [Fact]
+    public async Task Similarity_validates_as_the_local_graph()
+    {
+        var user = await WorkAsync();
+        var plan = Uri.EscapeDataString("/Work/plan.md");
+
+        foreach (var query in new[] { "depth=0", "cap=101", "dir=sideways" })
+        {
+            using var bad = await user.GetAsync($"/api/graph/similarity?path={plan}&{query}");
+            Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        }
+
+        using var noVault = await user.GetAsync($"/api/graph/similarity?path={Uri.EscapeDataString("/Nowhere/plan.md")}");
+        Assert.Equal(HttpStatusCode.NotFound, noVault.StatusCode);
+        using var unknown = await user.GetAsync($"/api/graph/similarity?path={Uri.EscapeDataString("/Work/none.md")}");
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+    }
+
+    [Fact]
     public async Task Node_has_times_and_first_paragraph()
     {
         var user = await WorkAsync();

@@ -11,6 +11,9 @@ namespace Kumbu.Server.Api;
 /// <see cref="MirrorSlots.MaxLabelLength"/> characters.</summary>
 public sealed record CreateMirrorSlotRequest(string? Label);
 
+/// <summary><c>label</c>: the device list's new name for the slot, the same one line as <see cref="CreateMirrorSlotRequest"/>'s.</summary>
+public sealed record RenameMirrorSlotRequest(string? Label);
+
 /// <summary><c>token</c>: the one the slot was made with. <c>waiting</c>: the changes the browser has waiting to upload,
 /// for the device list's warning before a removal.</summary>
 public sealed record MirrorContactRequest(string? Token, int Waiting = 0);
@@ -26,6 +29,10 @@ public sealed record MirrorVaultView(string Id, string Tag, bool CanWrite, bool 
 public sealed record MirrorContactView(
     string Id, string Key, IReadOnlyList<MirrorVaultView> Vaults,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Token = null);
+
+/// <summary><c>password</c>, for <c>POST /{id}/remove</c>: needed to remove another browser's slot whose last contact reported changes waiting, or
+/// that hasn't reported yet: those changes are the one thing in Kumbu² without a trash or a history.</summary>
+public sealed record RemoveMirrorSlotRequest(string? Password);
 
 /// <summary>A slot in the device list: never its key or token. <c>waiting</c>: the changes the browser had waiting at its
 /// last contact, lost if the slot is removed before they upload. <c>current</c>: this browser's.</summary>
@@ -47,7 +54,10 @@ public static class MirrorSlotsApi
         account.MapPost("", CreateAsync).Errors(400, 401, 403, 409);
         // Made on every reconnect, so like the web app's other background calls it keeps no idle session alive.
         account.MapPost("/contact", ContactAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 403, 404);
-        account.MapDelete("/{id}", DeleteAsync).Errors(401, 403, 404);
+        account.MapPut("/{id}/label", RenameAsync).Errors(400, 401, 403, 404);
+        account.MapDelete("/{id}", DeleteAsync).Errors(400, 401, 403, 404);
+        // The same with the password: for another browser's copy with changes waiting.
+        account.MapPost("/{id}/remove", RemoveAsync).Errors(400, 401, 403, 404, 429);
     }
 
     private static async Task<Ok<MirrorSlotView[]>> ListAsync(HttpContext http, RequestCaller caller, MirrorSlots slots, CancellationToken ct) =>
@@ -57,12 +67,7 @@ public static class MirrorSlotsApi
     private static async Task<Created<MirrorContactView>> CreateAsync(
         CreateMirrorSlotRequest body, HttpContext http, RequestCaller caller, MirrorSlots slots, CancellationToken ct)
     {
-        var label = body.Label?.Trim();
-        if (string.IsNullOrEmpty(label) || label.Length > MirrorSlots.MaxLabelLength || label.Any(char.IsControl))
-        {
-            throw ApiErrors.BadRequest($"A label is one line of 1 to {MirrorSlots.MaxLabelLength} characters.");
-        }
-
+        var label = Label(body.Label);
         try
         {
             var (id, token, key) = await slots.CreateAsync(caller.User!.Id, caller.UserKey!, label, Subject(http), ct);
@@ -92,10 +97,54 @@ public static class MirrorSlotsApi
         return TypedResults.Ok(new MirrorContactView(found.Id, Encode(found.Key), await VaultsAsync(caller, token, ct)));
     }
 
-    private static async Task<Results<NoContent, NotFound<ApiError>>> DeleteAsync(
-        string id, RequestCaller caller, MirrorSlots slots, SyncHub hub, CancellationToken ct)
+    /// <summary>Only the name changes: the slot keeps its key, token and vaults, so the device's copy stays as it is.</summary>
+    private static async Task<NoContent> RenameAsync(string id, RenameMirrorSlotRequest body, RequestCaller caller, MirrorSlots slots, CancellationToken ct) =>
+        await slots.RenameAsync(caller.User!.Id, id, Label(body.Label), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such offline copy.");
+
+    /// <summary>
+    /// "Remove offline copy". Another browser's copy with changes waiting at its last contact, or none reported yet, goes
+    /// only with the password, as a vault's deletion does: a stolen session cuts the device off by ending its session,
+    /// not by destroying what it hasn't uploaded. This browser's own copy it removes itself, having said what goes with it.
+    /// </summary>
+    private static Task<Results<NoContent, NotFound<ApiError>>> DeleteAsync(
+        string id, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users, AccountLimits limits, Sessions sessions, SyncHub hub,
+        CancellationToken ct) =>
+        RemoveSlotAsync(id, null, http, caller, slots, users, limits, sessions, hub, ct);
+
+    private static Task<Results<NoContent, NotFound<ApiError>>> RemoveAsync(
+        string id, RemoveMirrorSlotRequest body, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users, AccountLimits limits,
+        Sessions sessions, SyncHub hub, CancellationToken ct) =>
+        RemoveSlotAsync(id, body.Password, http, caller, slots, users, limits, sessions, hub, ct);
+
+    private static async Task<Results<NoContent, NotFound<ApiError>>> RemoveSlotAsync(
+        string id, string? password, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users, AccountLimits limits,
+        Sessions sessions, SyncHub hub, CancellationToken ct)
     {
-        if (!await slots.DeleteAsync(caller.User!.Id, id, ct)) return TypedResults.NotFound(new ApiError("There is no such offline copy."));
+        var user = caller.User!;
+        var slot = (await slots.ListAsync(user.Id, Subject(http), ct)).FirstOrDefault(s => s.Id == id);
+        if (slot is null) return TypedResults.NotFound(new ApiError("There is no such offline copy."));
+        var withPassword = false;
+        if (!slot.Current && !MirrorSlots.Counted(slot.Waiting, slot.ContactAt))
+        {
+            if (string.IsNullOrEmpty(password))
+            {
+                throw new ApiException(StatusCodes.Status400BadRequest,
+                    "This device has changes it hasn't uploaded, or hasn't said yet. Enter your password to remove its offline copy with them.",
+                    code: ApiErrors.ChangesWaiting);
+            }
+
+            if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
+            if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, password, ct)) throw new WrongPasswordException("The password is wrong.");
+            await AccountApi.PasswordGivenAsync(http, sessions, ct);
+            withPassword = true;
+        }
+
+        // Without the password only while nothing is waiting: a contact in between that reports changes keeps the slot.
+        if (!await slots.DeleteAsync(user.Id, id, onlyCounted: !withPassword && !slot.Current, ct))
+        {
+            throw new ApiException(StatusCodes.Status400BadRequest, "This device has just reported changes waiting. Enter your password to remove its offline copy.",
+                code: ApiErrors.ChangesWaiting);
+        }
         await hub.MirrorChangedAsync(caller.User!.Id, CancellationToken.None);
         return TypedResults.NoContent();
     }
@@ -112,6 +161,18 @@ public static class MirrorSlotsApi
         return [.. open
             .Where(v => !session.IsDiscreet(v.Id) && !v.Vault.Discreet)
             .Select(v => new MirrorVaultView(v.Id, MirrorSlots.VaultTag(token, v.Id, v.Vault.KeyId), v.Level >= AccessLevel.Write, v.Vault.Pending))];
+    }
+
+    /// <summary>A slot's label, trimmed: one line of 1 to <see cref="MirrorSlots.MaxLabelLength"/> characters, else a 400.</summary>
+    private static string Label(string? label)
+    {
+        label = label?.Trim();
+        if (string.IsNullOrEmpty(label) || label.Length > MirrorSlots.MaxLabelLength || label.Any(char.IsControl))
+        {
+            throw ApiErrors.BadRequest($"A label is one line of 1 to {MirrorSlots.MaxLabelLength} characters.");
+        }
+
+        return label;
     }
 
     /// <summary>The asking session, as <see cref="Sessions.SubjectOf"/> names it.</summary>

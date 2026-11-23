@@ -89,6 +89,12 @@ describe("PublicationBar", () => {
     for (const name of ["Update copy", "Copy link", "Unpublish"]) expect(within(region).getByRole("button", { name })).toBeInTheDocument();
   });
 
+  it("offers Compare where the copy is older, never where it is up to date", async () => {
+    fakeApi({ "GET /api/session": session(), [LIST]: listed(), [`GET ${API}`]: () => json(200, { ...older, copied: [{ path: NOTE, version: "v1" }] }) });
+    renderBar();
+    expect(within(await bar()).getByRole("button", { name: "Compare" })).toBeInTheDocument();
+  });
+
   describe("when the start's own text is not after the copy", () => {
     const bundle = { ...older, depth: 1, notes: 2 };
     const statusOf = async (published: object, lastWriteAt: string) => {

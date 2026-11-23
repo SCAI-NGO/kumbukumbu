@@ -1,4 +1,4 @@
-# 0017. Deactivating a user removes their offline copies
+# 0019. Deactivating a user removes their offline copies
 
 - **Date:** 2026-11-23
 - **Status:** Proposed

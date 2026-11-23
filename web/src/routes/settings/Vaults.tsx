@@ -10,7 +10,6 @@ import { storageText, useAccountStorage } from "../../api/storage";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
 import { PasswordField } from "../../components/PasswordField";
 import { useDialog } from "../../hooks/useDialog";
-import PublicationsSection from "../PublicationsSection";
 import SharedVaultsSection from "../SharedVaultsSection";
 import DeleteVaultDialog from "../../shell/DeleteVaultDialog";
 import { Done, Section } from "./Section";
@@ -21,9 +20,6 @@ export default function Vaults() {
       <VaultsSection />
       <Section title="Shared vaults">
         <SharedVaultsSection />
-      </Section>
-      <Section title="Published notes">
-        <PublicationsSection />
       </Section>
     </>
   );

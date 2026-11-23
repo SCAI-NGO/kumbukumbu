@@ -32,10 +32,11 @@ public sealed record PublishedNote(
 /// <summary>A published note as the caller may see it: for a member only <see cref="Note"/> (publish spec §3.10);
 /// <see cref="Link"/> only when asked for, and only for the owner; <see cref="ToString"/> leaves it out.</summary>
 /// <para>For the owner also <see cref="Notes"/>, how many notes the copy holds, and the <see cref="Depth"/> and
-/// <see cref="Without"/> an update walks with (Publish 2.0).</para>
+/// <see cref="Without"/> an update walks with (Publish 2.0), and the note versions the copy was made from, the start
+/// first (<see cref="Copied"/>), for comparing the copy with the notes now.</para>
 public sealed record PublicationState(
     VaultPath Note, DateTime? SnapshotAt = null, bool? Older = null, DateTime? ChangedAt = null, string? PublishedBy = null, string? Link = null,
-    int? Notes = null, int? Depth = null, IReadOnlyList<VaultPath>? Without = null)
+    int? Notes = null, int? Depth = null, IReadOnlyList<VaultPath>? Without = null, IReadOnlyList<(VaultPath Note, string Version)>? Copied = null)
 {
     public override string ToString() =>
         $"PublicationState {{ Note = {Note}, SnapshotAt = {SnapshotAt:O}, Older = {Older}, ChangedAt = {ChangedAt:O}, PublishedBy = {PublishedBy} }}";
@@ -653,7 +654,8 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
         return new PublicationState(
             shown, entry.SnapshotAt, older, older && changed.Count > 0 ? changed.Max() : null, entry.By,
             linkBase is null ? null : ShareCode.Link(linkBase, entry.Code),
-            1 + (entry.Members?.Count ?? 0), entry.Depth ?? 0, [.. (entry.Without ?? []).Select(w => access.ToCaller(Parse(w)))]);
+            1 + (entry.Members?.Count ?? 0), entry.Depth ?? 0, [.. (entry.Without ?? []).Select(w => access.ToCaller(Parse(w)))],
+            [(shown, entry.NoteVersion), .. (entry.Members ?? []).Select(m => (access.ToCaller(Parse(m.Note)), m.Version))]);
     }
 
     /// <summary>
