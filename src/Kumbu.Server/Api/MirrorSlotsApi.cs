@@ -4,6 +4,8 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Sync;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Kumbu.Server.Api;
 
@@ -95,7 +97,7 @@ public static class MirrorSlotsApi
     /// not by destroying what it hasn't uploaded. This browser's own copy it removes itself, having said what goes with it.
     /// </summary>
     private static async Task<Results<NoContent, NotFound<ApiError>>> DeleteAsync(
-        string id, RemoveMirrorSlotRequest? body, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users,
+        string id, [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RemoveMirrorSlotRequest? body, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users,
         AccountLimits limits, Sessions sessions, SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
