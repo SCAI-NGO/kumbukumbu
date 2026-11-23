@@ -8,7 +8,9 @@
 // 1. Opened from the drawer's account row ("Published") and from the palette ("Open / Published"); `/published`
 //    loads it; the row's path is a link to the note → overview #1.
 // 2. Per row: the path, the dot and word ("Up to date", "Copy is older than the note"), "with N linked notes" for a
-//    bundle, the snapshot's time and who published it → overview #2.
+//    bundle, the snapshot's time and who published it ("by you") → overview #2. Another publisher ("by “name”") is
+//    out of reach here (Bob is a read-only member and can't publish); Vitest covers it (PublishedPage.test.tsx, "lists
+//    her publications with who published them, and whether the copy is older").
 // 3. "N of M copies are older than their notes." above the list, and the rows by path, across vaults → overview #9
 //    (@serial: the list is every publication of Alice's; the expected one is read from GET /api/publications first).
 // 4. Update copy only on an older copy; after it the row is "Up to date" → overview #2 (only where older), #3; for a
@@ -17,7 +19,7 @@
 // 7. Compare on the row and on the note's bar, only where the copy is older: the note at the copy's version beside the
 //    note now → overview #6; a version the history no longer keeps says so → overview #7 (the history keeps 10
 //    versions, NoteWriter.HistoryLimit: twelve writes alternating between Alice and an agent push it out); a copy made
-//    after an edit in the same session → overview #8.
+//    after an edit in the same session → overview #8 (F-04).
 // 8. Never a reader link on the page, nor in the overview's answer → overview #2.
 // Left out: 6, publishing switched off on the server (one line says so, Update copy goes, Unpublish stays): it needs a
 // stack started with Kumbu__Publish__Enabled=false, a phase of its own (plan, review point 15); Vitest covers it
@@ -26,7 +28,7 @@
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { Api, encodePath, guarded } from "../support/api";
-import { baseURL, secrets } from "../support/env";
+import { secrets } from "../support/env";
 import { reservePassword, reserveReaderRead } from "../support/session";
 import { expect, onPhone, shot, shotsDir070, test } from "../support/test";
 
@@ -106,6 +108,8 @@ async function openPublished(page: Page) {
 /** Clean-ups a test registers before it writes: they run after it even when it timed out. */
 let cleanUps: (() => Promise<void>)[] = [];
 const afterTest = (cleanUp: () => Promise<void>) => void cleanUps.push(cleanUp);
+// windowOpen may wait for the password ledger (61 s), and #9 deletes a vault with the password.
+test.beforeEach(() => test.setTimeout(240_000));
 test.afterEach(async () => {
   for (const cleanUp of cleanUps.reverse()) await cleanUp().catch(() => undefined);
   cleanUps = [];
@@ -183,9 +187,7 @@ test("overview #2: a row shows its path, state, linked notes, snapshot and publi
 
   // Never a reader link: not on the page, not in the overview's answer (booleans only).
   const onPage = await published(page).evaluate(
-    (d, origin) => d.textContent!.includes(`${origin}/s#`) || d.textContent!.includes("/s#") || [...d.querySelectorAll("a")].some((a) => a.getAttribute("href")!.includes("/s#")),
-    baseURL,
-  );
+(d) => (d.textContent ?? "").includes("/s#") || [...d.querySelectorAll("a")].some((a) => (a.getAttribute("href") ?? "").includes("/s#")));
   expect(onPage, "no reader link on the Published page").toBe(false);
   await expect(published(page).getByRole("button", { name: /Copy link/ })).toHaveCount(0);
   const answer = await aliceApi.send("GET", "/api/publications");
@@ -303,8 +305,8 @@ test("overview #7: Compare says so when the history no longer keeps the copy's v
   await aliceApi.putNote(path, "# Reef\n\nWrite 0.\n");
   await publish(aliceApi, path);
   const copied = (await publication(aliceApi, path)).copied![0].version;
-  // Twelve writes, Alice's and an agent's in turn: each starts a changeset of its own, so each leaves a version, and
-  // the history keeps ten (NoteWriter.HistoryLimit).
+  // Twelve writes, Alice's and an agent's in turn: each replaces a state of the other writer's changeset, so none
+  // coalesces and each leaves a version (NoteWriter.cs:132-134); the history keeps ten (NoteWriter.HistoryLimit).
   for (let i = 1; i <= 12; i++) {
     const content = `# Reef\n\nWrite ${i}.\n`;
     if (i % 2) await aliceApi.putNote(path, content);
@@ -328,7 +330,7 @@ test("overview #7: Compare says so when the history no longer keeps the copy's v
 });
 
 test("overview #8: Compare shows the copy's version after a note was edited, published and edited again in one session @overview", async ({ page, aliceApi, folder }) => {
-  test.info().annotations.push({ type: "finding", description: "F-04: a copy made within a changeset loses its version at the next write of it, so Compare says it is no longer kept" });
+  test.info().annotations.push({ type: "finding", description: "F-04: a copy made within a changeset loses its version at the next write of it, so Compare says it is no longer kept; a fix likely makes publishing a checkpoint of the note (an ADR)" });
   test.fail();
   const n = named(folder);
   const path = n.path("Shore");
@@ -337,20 +339,26 @@ test("overview #8: Compare shows the copy's version after a note was edited, pub
   await aliceApi.putNote(path, "# Shore\n\nDraft.\n");
   await aliceApi.putNote(path, "# Shore\n\nThe old line.\n");
   await publish(aliceApi, path);
+  const copied = (await publication(aliceApi, path)).copied![0].version;
   await aliceApi.putNote(path, "# Shore\n\nThe new line.\n");
+  // Read back: soft, so the window's Compare is checked too.
+  const kept = (await aliceApi.history(path)) as { version: string }[];
+  expect.soft(
+    kept.some((v) => v.version === copied),
+    "F-04: the history keeps the version the copy was made from",
+  ).toBe(true);
 
   await openPublished(page);
   await row(page, path).getByRole("button", { name: `Compare copy of ${path}`, exact: true }).click();
   const sheet = page.getByRole("dialog", { name: `Compare ${n.name("Shore")}` });
   await expect(sheet.getByRole("list", { name: "Now" }).getByRole("listitem")).toHaveText(["# Shore", "", "The new line.", ""]);
-  await expect(sheet.getByText("This version is no longer kept", { exact: true }), "F-04: Compare shows the copy's version, not that it is no longer kept").toHaveCount(0, {
-    timeout: 3_000,
-  });
-  await expect(sheet.getByRole("list", { name: "Published copy" }).getByRole("listitem")).toHaveText(["# Shore", "", "The old line.", ""]);
+  await expect(
+    sheet.getByRole("list", { name: "Published copy" }).getByRole("listitem"),
+    "F-04: the Published copy column holds the note at the copy's version",
+  ).toHaveText(["# Shore", "", "The old line.", ""]);
 });
 
 test("overview #9: the count line and the rows, by path across vaults @overview @serial", async ({ page, aliceApi, folder }) => {
-  test.setTimeout(240_000);
   const n = named(folder);
   const vault = `Overview-${randomBytes(3).toString("hex")}`;
   const other = `/${vault}/Elsewhere.md`;
