@@ -247,7 +247,18 @@ Decisions of 2026-11-22 while building it, each with its reason; to be confirmed
 - **A wipe locks every tab of the copy**, and a purge of one vault drops it in every tab. Why: a tab must not go on showing what the server wants gone.
 - **What waits for the next packages:** the switch that turns the copy on and the vault choice (WP9), the editor's drafts as the copy's `Drafts` port (WP7: unsaved discreet text never reaches it, as the copy never holds a discreet vault), the `Kumbu-Mirror` header and the contacts on sign-in, reconnect and `mirror` frame (WP8, with the mode), the tree and reading from the copy (WP5).
 
-### 4.8 Offline writing (work package 7, built)
+### 4.8 Reading the copy (work package 5, built)
+
+Decisions of 2026-11-22 while building it, each with its reason; to be confirmed in review. The code is `packages/eidolon-core/src/read/` and `src/links/`, the web app's side `web/src/offline/source.ts`.
+
+- **The hooks keep their shapes; their query functions ask the copy while offline.** `useTree`, `useNote`, `useLinks` and `fetchFile` (so `useAttachmentUrl`, thumbnails, PDFs and text files) answer from an `OfflineSource` while one is set, and from the API otherwise. The mode (work package 8) sets it on entering offline mode with an unlocked copy, clears it on leaving, and asks `tree`, `note` and `links` again on each switch. Why: §3's "same hook shapes, a subset" with no second set of hooks, and every screen that reads through them (embeds, the lightbox, the gallery) works offline without a change of its own.
+- **The server's link resolution, ported, not reimplemented.** `src/links/` is a line-by-line port of `Kumbu.Core/Links` (wiki and Markdown links, code spans and fences, aliases, Obsidian's rules with the archive and folder preferences), with the C# tests' cases. Why: a link must lead to the same note offline as online; two different sets of rules would be a bug per difference. Where it can't be exact: the aliases are read without a YAML parser (no dependency for it), so frontmatter broken outside the `aliases` key still yields aliases where the server yields none; the text order uses the root collation, as .NET's invariant culture does, which can differ in rare scripts.
+- **Vaults are named as last seen online.** A copy knows its vaults by id; paths name them by name, which is per member and changes. The vault's meta keeps the name the vault list last gave (`nameVaults`, called after each contact online by work packages 8 and 9), sealed like the rest. Why: offline there is no other way from `/Work/plan.md` to a vault, and a contact carries no names (§4.6).
+- **The tree comes from the inventory**, so it is whole before the texts are here; each file says whether this device holds it. A note listed without its text answers "Not on this device yet. It comes when you're back online." (an error of its own, not a 404, so the view offers no "create it" and nothing retries); an attachment's place says "Opens when you're online." A note removed here and not uploaded yet is gone from the tree and reads as a 404. No flags in the tree offline: they come from tags, which the local index (work package 6) reads.
+- **Links are resolved against the whole inventory, aliases from the texts held.** One resolver per vault, built again only when a path or a version changed. Why: a link to a note whose text hasn't come still leads to it (and to "Not on this device yet"), not to "not found"; the aliases need the texts, opened once per change rather than per note shown.
+- **Earlier versions and checkpoints need a connection**, as §3 says; the copy gives today's bytes only.
+
+### 4.9 Offline writing (work package 7, built)
 
 Decisions of 2026-11-22 while building it, each with its reason; to be confirmed in review. The core is `packages/eidolon-core/src/store/writing.ts`, the web app's side `web/src/offline/writing.ts`.
 

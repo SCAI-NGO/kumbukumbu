@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Board;
 using Kumbu.Core.Calendar;
+using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Publishing;
 using Kumbu.Core.Search;
@@ -225,6 +226,8 @@ builder.Services.AddScoped(sp =>
     var writer = sp.GetRequiredService<NoteWriter>();
     return new FlagService(sp.GetRequiredService<INoteStore>(), writer, () => writer.Now, sp.GetRequiredService<ICallerZone>());
 });
+// The answers to a suggested link (link prediction) for the REST API.
+builder.Services.AddScoped(sp => new SuggestionService(sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>()));
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
@@ -344,6 +347,7 @@ app.MapEmbeddingsKeyApi();
 app.MapFavouritesApi();
 app.MapMirrorSlotsApi();
 app.MapFlagApi();
+app.MapSimilarApi();
 app.MapRecentApi();
 app.MapTagApi();
 app.MapConsoleApi();
