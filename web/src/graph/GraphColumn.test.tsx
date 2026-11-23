@@ -7,7 +7,7 @@ import { NO_SUCH_NOTE } from "../discreet/errorText";
 import { useEditor } from "../state/editor";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json } from "../test/app";
-import type { LocalGraphView } from "./api";
+import type { GraphSimilarityView, LocalGraphView } from "./api";
 import type { GNode } from "./model";
 import type { Suggestion } from "./suggestions";
 
@@ -48,6 +48,7 @@ const { default: GraphColumn } = await import("./GraphColumn");
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   localStorage.clear();
   useEditor.getState().reset();
 });
@@ -75,9 +76,19 @@ function Where() {
   return <output data-testid="where">{location.pathname + location.search}</output>;
 }
 
-function show({ local = (): Response | Promise<Response> => json(200, graph), paths, otherPath = null, hidden = false }: { local?: () => Response | Promise<Response>; paths?: () => Response; otherPath?: string | null; hidden?: boolean } = {}) {
+// Budget–Plan is measured, Plan–Alpha not yet; the ghost and the attachment have no similarity.
+const measured: GraphSimilarityView = { state: "ready", reason: null, pairs: [{ from: BUDGET, to: PLAN, score: 0.4 }, { from: PLAN, to: "/Work/Alpha.md", score: null }] };
+
+function show({
+  local = (): Response | Promise<Response> => json(200, graph),
+  similarity = (): Response => json(200, measured),
+  paths,
+  otherPath = null,
+  hidden = false,
+}: { local?: () => Response | Promise<Response>; similarity?: () => Response; paths?: () => Response; otherPath?: string | null; hidden?: boolean } = {}) {
   const fetch = fakeApi({
     "GET /api/graph/local": local,
+    "GET /api/graph/similarity": similarity,
     "GET /api/graph/node": () => json(200, detail),
     "GET /api/vaults/Work/tree": () => json(200, tree),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, level: "owner" }]),
@@ -108,9 +119,9 @@ describe("GraphColumn", () => {
     expect(screen.getByRole("complementary", { name: "Graph" })).toHaveTextContent("Drawing the graph…");
   });
 
-  it("draws the graph, says the similarity isn't measured yet, and runs while shown", async () => {
+  it("draws the graph, says how many links have their similarity measured, and runs while shown", async () => {
     show();
-    expect(await screen.findByText("Similarity not measured yet")).toBeInTheDocument();
+    expect(await screen.findByText("Similarity measured for 1 of 2 links")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "node Plan" })).toBeInTheDocument();
     expect(canvas.running).toBe(true);
   });
@@ -166,7 +177,7 @@ describe("GraphColumn", () => {
 
   it("asks for depth 2 with its hub cap", async () => {
     const { fetch } = show();
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     await userEvent.click(screen.getByRole("button", { name: "Depth 2" }));
     await waitFor(() => expect(asked(fetch, "/api/graph/local").at(-1)?.searchParams.get("cap")).toBe("8"));
     expect(asked(fetch, "/api/graph/local").at(-1)?.searchParams.get("depth")).toBe("2");
@@ -175,7 +186,7 @@ describe("GraphColumn", () => {
 
   it("sizes the nodes anew without asking the server again", async () => {
     const { fetch } = show();
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Size by" }), "length");
     expect(screen.getByRole("combobox", { name: "Size by" })).toHaveValue("length");
     expect(asked(fetch, "/api/graph/local")).toHaveLength(1);
@@ -183,7 +194,7 @@ describe("GraphColumn", () => {
 
   it("hides day notes on the toggle, and remembers it", async () => {
     const { fetch, view, ui } = show();
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     const toggle = screen.getByRole("button", { name: "Day notes" });
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     await userEvent.click(toggle);
@@ -233,7 +244,7 @@ describe("GraphColumn", () => {
 
   it("lists the neighbours by depth, then title, a ghost as text", async () => {
     show();
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     await userEvent.click(screen.getByRole("button", { name: "List" }));
     const list = screen.getByRole("list", { name: "Neighbours" });
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Anna, no note yet", "Plan", "scan.png", "Alpha"]);
@@ -246,7 +257,7 @@ describe("GraphColumn", () => {
     show({ local: () => json(200, orphan) });
     await userEvent.click(await screen.findByRole("button", { name: "List" }));
     expect(await screen.findByText("No links yet")).toBeInTheDocument();
-    expect(screen.queryByText("Similarity not measured yet")).toBeNull();
+    expect(screen.queryByText("Similarity measured for 1 of 2 links")).toBeNull();
   });
 
   it("opens a note beside on Ctrl+click", async () => {
@@ -264,7 +275,7 @@ describe("GraphColumn", () => {
     useEditor.getState().openNote(BUDGET);
     show();
     const user = userEvent.setup();
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     await user.click(screen.getByRole("button", { name: "List" }));
     const plan = within(screen.getByRole("list", { name: "Neighbours" })).getByRole("button", { name: "Plan" });
     await user.keyboard("{Meta>}");
@@ -275,7 +286,7 @@ describe("GraphColumn", () => {
 
   it("opens an attachment from the list in its window", async () => {
     show();
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     await userEvent.click(screen.getByRole("button", { name: "List" }));
     await userEvent.click(within(screen.getByRole("list", { name: "Neighbours" })).getByRole("button", { name: "scan.png" }));
     expect(screen.getByTestId("where")).toHaveTextContent("/view/Work/scan.png");
@@ -284,18 +295,18 @@ describe("GraphColumn", () => {
   it("says it is drawing while a note outside the last graph is asked for, not the old graph", async () => {
     let calls = 0;
     const { view, ui } = show({ local: () => (++calls === 1 ? json(200, graph) : new Promise<Response>(() => {})) });
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     view.rerender(ui("/Work/Other.md"));
     const column = screen.getByRole("complementary", { name: "Graph" });
     await waitFor(() => expect(column).toHaveTextContent("Drawing the graph…"));
     expect(screen.queryByTestId("canvas")).toBeNull();
-    expect(screen.queryByText("Similarity not measured yet")).toBeNull();
+    expect(screen.queryByText("Similarity measured for 1 of 2 links")).toBeNull();
   });
 
   it("keeps the old graph while a note in it is asked for", async () => {
     let calls = 0;
     const { view, ui } = show({ local: () => (++calls === 1 ? json(200, graph) : new Promise<Response>(() => {})) });
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     view.rerender(ui(PLAN));
     await waitFor(() => expect(calls).toBe(2));
     expect(screen.getByTestId("canvas")).toBeInTheDocument();
@@ -304,7 +315,7 @@ describe("GraphColumn", () => {
   it("keeps a drawn graph when asking again fails", async () => {
     let calls = 0;
     const { client } = show({ local: () => (++calls === 1 ? json(200, graph) : new Response(null, { status: 500 })) });
-    await screen.findByText("Similarity not measured yet");
+    await screen.findByText("Similarity measured for 1 of 2 links");
     await act(() => client.invalidateQueries({ queryKey: ["graph", "local"] }));
     await waitFor(() => expect(client.getQueryCache().findAll({ queryKey: ["graph", "local"] })[0].state.status).toBe("error"));
     expect(screen.getByRole("button", { name: "node Plan" })).toBeInTheDocument();
@@ -341,6 +352,22 @@ describe("GraphColumn", () => {
     expect(screen.queryByRole("button", { name: /^suggestion (Budget|Plan|Alpha)$/ })).toBeNull();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("says nothing of the similarity once every link between notes is measured", async () => {
+    const all = { ...measured, pairs: measured.pairs.map((p) => ({ ...p, score: 0.5 })) };
+    const { fetch } = show({ similarity: () => json(200, all) });
+    await screen.findByRole("button", { name: "node Plan" });
+    await waitFor(() => expect(asked(fetch, "/api/graph/similarity")).toHaveLength(1));
+    // The similarity is asked for with the graph's own parameters.
+    expect(Object.fromEntries(asked(fetch, "/api/graph/similarity")[0].searchParams)).toEqual(Object.fromEntries(asked(fetch, "/api/graph/local")[0].searchParams));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/^Similarity/)).toBeNull();
+  });
+
+  it("says why the similarity isn't measured when the server can't", async () => {
+    show({ similarity: () => json(200, { state: "off", reason: "search by meaning is off on this server", pairs: [] }) });
+    expect(await screen.findByText("Similarity not measured: search by meaning is off on this server")).toBeInTheDocument();
   });
 
   it("suggests nothing, and asks for nothing, with the layer off", async () => {
