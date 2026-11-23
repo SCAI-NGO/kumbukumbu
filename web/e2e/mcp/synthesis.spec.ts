@@ -511,11 +511,12 @@ test("graph --without-tag: a tagged note leaves the local graph, the paths and t
     text: [`3  ${p("H")}  (1 in, 2 out)`, `2  ${p("S")}  (0 in, 2 out)`, `1  ${p("B")}  (1 in, 0 out)`, `1  ${p("T")}  (1 in, 0 out)`, `0  ${p("Lone")}  (0 in, 0 out)`].join("\n"),
     isError: false,
   });
-  // The tagged notes leave the list; the counts stay those of the whole graph (the spec doesn't say which: unclear).
-  expect(await mcp.sh(`graph --hubs /Work/${folder} --without-tag synthesis`)).toEqual({
-    text: [`2  ${p("S")}  (0 in, 2 out)`, `1  ${p("B")}  (1 in, 0 out)`, `1  ${p("T")}  (1 in, 0 out)`].join("\n"),
-    isError: false,
-  });
+  // The tagged notes leave the list. Its counts are left out: they stay those of the whole graph, links of the notes
+  // left out included (GraphQueries.cs:87-95), while --unresolved counts kept notes only; the spec doesn't say which
+  // (M-05, unclear, in the report).
+  const hubs = await mcp.sh(`graph --hubs /Work/${folder} --without-tag synthesis`);
+  expect(hubs.isError).toBe(false);
+  expect(hubs.text.split("\n").map((l) => l.replace(/^\d+ {2}(.+?) {2}\(\d+ in, \d+ out\)$/, "$1")).sort()).toEqual([p("B"), p("S"), p("T")].sort());
   expect(await mcp.sh(`graph --unresolved /Work/${folder}`)).toEqual({ text: `Gone ${n.id}, linked from 1 note:\n  ${p("H")}:6`, isError: false });
   expect(await mcp.sh(`graph --unresolved /Work/${folder} --without-tag synthesis`)).toEqual({ text: "(no unresolved links)", isError: false });
 });
