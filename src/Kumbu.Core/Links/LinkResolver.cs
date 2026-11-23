@@ -254,6 +254,6 @@ public sealed class LinkResolver
             : new LinkResolution(LinkKind.Ambiguous, null, candidates);
     }
 
-    private static string StripMd(string name) =>
+    internal static string StripMd(string name) =>
         name.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? name[..^3] : name;
 }

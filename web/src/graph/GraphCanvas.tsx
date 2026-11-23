@@ -290,7 +290,7 @@ export default function GraphCanvas({ nodes, edges, centreKey, otherKey, sizeBy,
   // Once per answer, not on every frame of the layout.
   const scores = useMemo(() => {
     const keyOf = new Map(nodes.map((n) => [n.id, n.key]));
-    return edges.map((e) => (keyOf.has(e.source) && keyOf.has(e.target) ? similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score : 0));
+    return edges.map((e) => (keyOf.has(e.source) && keyOf.has(e.target) ? (e.s ?? similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score) : 0));
   }, [nodes, edges]);
   const neutral = ageColour(null, 0, dark);
   const now = Date.now();

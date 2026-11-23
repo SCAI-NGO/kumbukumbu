@@ -19,6 +19,8 @@ Your Kumbu² address is {{server}}: the address you open Kumbu² at (in a browse
 
 A connector added on claude.ai also works in Claude Desktop and in the mobile apps.
 
+**Your memory from the first answer on.** With several connectors on, claude.ai may load Kumbu²'s tools, and with them Kumbu²'s instructions, only once it needs them, so a chat can begin without reading your memory. To be sure, add one line to your personal preferences in claude.ai's settings, or to a project's instructions: *At the start of every chat, read my Kumbu² skill project-memory and follow it.*
+
 *Tested.*
 
 ## This is how you connect ChatGPT
@@ -62,5 +64,6 @@ with your key in place of `kumbu_…`.
 
 - The plain address `{{server}}/mcp` takes API keys only; a connection's own address takes no key.
 - A key or a connection is revoked on the Access page, and stops working at once.
+- If your AI doesn't read your memory by itself at the start of a chat, add one line to its own instructions (its personal preferences or a project's instructions): *At the start of every chat, read my Kumbu² skill project-memory and follow it.*
 
 Back to [[Start here]].
