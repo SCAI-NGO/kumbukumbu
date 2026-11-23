@@ -101,8 +101,8 @@ public static class Frontmatter
         line.Trim().Length > 0
         && (line.StartsWith(' ') || line.StartsWith('\t') || line.StartsWith("- ", StringComparison.Ordinal) || line.TrimEnd() == "-");
 
-    private const int MaxValues = 10_000;
-    private const int MaxDepth = 64;
+    internal const int MaxValues = 10_000;
+    internal const int MaxDepth = 64;
 
     private sealed class TooLarge : Exception;
 

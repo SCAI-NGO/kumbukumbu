@@ -1,0 +1,13 @@
+description: A declared date reads a quoted date as a date; the declaration wins over the quotes.
+source: spec
+types:
+  birthday: date
+notes:
+  Ann.md: |
+    ---
+    birthday: "1980-11-03"
+    ---
+expect:
+  properties:
+    Ann.md:
+      birthday: date 1980-11-03

@@ -22,6 +22,8 @@
     <!-- Shared with the web's tests, which find it beside them: the Docker web stage copies only web/. -->
     <None Include="../../web/src/note/comments.cases.json" Link="Publishing/comments.cases.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../web/src/note/blocks.cases.json" Link="Sections/blocks.cases.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Shared with the offline engine's tests in packages/eidolon-core (tests/query-conformance/README.md). -->
+    <None Include="../query-conformance/**/*.yaml" Link="query-conformance/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

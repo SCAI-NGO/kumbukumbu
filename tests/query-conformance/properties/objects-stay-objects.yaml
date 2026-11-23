@@ -1,0 +1,17 @@
+description: A map is an object whose values are read as undeclared ones; a declared text does not flatten it.
+source: spec
+types:
+  address: text
+notes:
+  Ann.md: |
+    ---
+    address:
+      city: Vienna
+      zip: 1010
+    ---
+expect:
+  properties:
+    Ann.md:
+      address:
+        city: text Vienna
+        zip: number 1010
