@@ -285,10 +285,13 @@ test("gaps #1b: a vault chosen one by one: the copy keeps Work and not Welcome, 
 });
 
 test("gaps #1c: a folder kept offline keeps its large attachment; one in another folder opens online only @offline", async ({ page, aliceApi, folder }) => {
-  // Both above the 1 MiB that come with the notes (SMALL_ATTACHMENT_BYTES).
-  await aliceApi.putFile(`/Work/${folder}/Kept/kept.png`, noisePng(700));
-  await aliceApi.putFile(`/Work/${folder}/Rest/rest.png`, noisePng(700));
-  await aliceApi.putNote(`/Work/${folder}/Kept/Plan.md`, "# Plan\n\n![[kept.png]]\n\n![[rest.png]]\n");
+  // Both above the 1 MiB that come with the notes (SMALL_ATTACHMENT_BYTES); named for the test, as links resolve
+  // vault-wide and an earlier run's files stay in Work.
+  const id = folder.slice(-6);
+  const [kept, rest] = [`kept-${id}.png`, `rest-${id}.png`];
+  await aliceApi.putFile(`/Work/${folder}/Kept/${kept}`, noisePng(700));
+  await aliceApi.putFile(`/Work/${folder}/Rest/${rest}`, noisePng(700));
+  await aliceApi.putNote(`/Work/${folder}/Kept/Plan.md`, `# Plan\n\n![[${kept}]]\n\n![[${rest}]]\n`);
   await turnOn(page);
   await page.goto(notePage(`/Work/${folder}/Kept/Plan.md`));
   await expect(article(page)).toBeVisible();
@@ -321,17 +324,21 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
   await expect(article(page)).toBeVisible();
   await goOffline(page);
   const viewer = (name: string) => page.getByRole("main", { name });
-  await article(page).getByRole("link", { name: "Open the image kept.png" }).click();
-  await expect(viewer("kept.png").getByRole("img", { name: "kept.png" })).toBeVisible();
+  await article(page).getByRole("link", { name: `Open the image ${kept}` }).click();
+  await expect(viewer(kept).getByRole("img", { name: kept })).toBeVisible();
   await page.goBack();
   await expect(article(page)).toBeVisible();
-  console.log("EXPLORE html:", (await article(page).innerHTML()).replace(/class="[^"]*"/g, "").slice(0, 3000));
-  await article(page).getByRole("link", { name: "Open the image rest.png" }).click();
-  await expect(viewer("rest.png").getByRole("alert")).toHaveText("Opens when you're online.");
+  await article(page).getByRole("link", { name: `Open the image ${rest}` }).click();
+  await expect(viewer(rest).getByRole("alert")).toHaveText("Opens when you're online.");
   await page.context().setOffline(false);
 });
 
 test("gaps #2: offline, what needs a connection stays in its menu, dimmed, with \"Needs a connection\" @offline", async ({ page, aliceApi, folder }) => {
+  test.info().annotations.push({
+    type: "finding",
+    description: "F-xx: offline, History, Who wrote what, Duplicate and Rename or move stay enabled, without \"Needs a connection\" (§3a); nothing in the web app dims for the mode",
+  });
+  test.fail();
   const plan = `/Work/${folder}/Plan.md`;
   await aliceApi.putNote(plan, "# Plan\n\nRead offline.\n");
   await turnOn(page);
@@ -355,6 +362,11 @@ test("gaps #2: offline, what needs a connection stays in its menu, dimmed, with 
 });
 
 test("gaps #3: a vault's copy purged after access is lost: the notice names no vault @offline", async ({ bobPage, bobApi }) => {
+  test.info().annotations.push({
+    type: "finding",
+    description: "F-xx: a vault purged from the copy (access lost) shows no notice: the engines drop it on their own refresh, and the notice comes only from a contact that purges",
+  });
+  test.fail();
   test.setTimeout(240_000);
   // A vault of the test's own, shared with Bob; his device keeps it with All my vaults.
   const share = await shareWithBob("Purge", "write");
@@ -366,25 +378,20 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
     await bobPage.goto(notePage(`/${share.vault}/Plan.md`));
     await expect(article(bobPage)).toContainText("Bob's copy.");
 
-    // Bob leaves and Alice deletes the vault, from other sessions: his browser's next contact purges it.
+    // Bob leaves and Alice deletes the vault, from other sessions: his sockets lose it, and his browser purges it.
     await unshare(share);
     shared = false;
     const notice = bobPage.getByRole("status", { name: "Offline copy" });
-    await notice.waitFor({ timeout: 30_000 }).then(() => console.log("EXPLORE: notice by frame"), async () => {
-      console.log("EXPLORE: no notice after 30 s; reconnecting");
-      await goOffline(bobPage);
-      await bobPage.context().setOffline(false);
-      await notice.waitFor({ timeout: 60_000 }).then(() => console.log("EXPLORE: notice after reconnect"), async () => {
-        console.log("EXPLORE: none after reconnect either");
-        await goOffline(bobPage);
-        await unlockAt(bobPage, notePage(`/${share.vault}/Plan.md`), "bob");
-        console.log("EXPLORE tree:", JSON.stringify(await bobPage.getByRole("complementary", { name: "File tree" }).innerText()));
-        console.log("EXPLORE main:", await bobPage.getByRole("main").innerText());
-        await bobPage.context().setOffline(false);
-      });
-    });
-    await expect(notice).toHaveText(/^A vault's copy was removed from this device: it's no longer available here\.\s*Dismiss$/, { timeout: 30_000 });
+    // Exact: the sentence of §3a, with no vault's name in it.
+    await expect(notice, "F-xx: the purge's notice").toHaveText(/^A vault's copy was removed from this device: it's no longer available here\.\s*Dismiss$/, { timeout: 45_000 });
     await expect(notice, "the notice names no vault").not.toContainText(share.vault);
+
+    // And the copy has it no more: offline, the vault isn't kept here.
+    await goOffline(bobPage);
+    await unlockAt(bobPage, notePage(`/${share.vault}/Plan.md`), "bob");
+    await expect(bobPage.getByRole("complementary", { name: "File tree" }).getByText(`${share.vault} is not kept on this device.`)).toBeVisible({ timeout: 30_000 });
+    await expect(bobPage.getByText("Bob's copy.")).toHaveCount(0);
+    await bobPage.context().setOffline(false);
   } finally {
     if (shared) await unshare(share);
   }
@@ -467,6 +474,11 @@ test("gaps #5: a read-only member's copy (Bob in Work) queues no write: no Write
 });
 
 test("gaps #6: offline the graph says it needs a connection, and Similar notes says it couldn't look @offline", async ({ page, aliceApi, folder }, testInfo) => {
+  test.info().annotations.push({
+    type: "finding",
+    description: "F-xx: offline, the graph's dialog says \"Couldn't draw the graph.\" with Try again, not \"The graph needs a connection. It's back when you are.\" (graph out of preview §3)",
+  });
+  test.fail();
   const plan = `/Work/${folder}/Plan.md`;
   await aliceApi.putNote(plan, "# Plan\n\nThe lighthouse keeper's log.\n");
   await turnOn(page);
