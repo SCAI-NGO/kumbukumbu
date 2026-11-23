@@ -160,6 +160,14 @@ public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
         return [.. slots.Select(m => new MirrorSlot(m.Id.ToString(), m.Label, m.CreatedAt, m.ContactAt, m.Waiting, sessionSubject is not null && m.Session == sessionSubject))];
     }
 
+    /// <summary>Renames the user's slot <paramref name="id"/> in the device list; false if the user has none of that id.</summary>
+    public async Task<bool> RenameAsync(string userId, string id, string label, CancellationToken ct)
+    {
+        if (!ObjectId.TryParse(id, out var objectId)) return false;
+        var update = Builders<MirrorSlotDocument>.Update.Set(m => m.Label, label);
+        return (await Slots.UpdateOneAsync(m => m.Id == objectId && m.User == userId, update, cancellationToken: ct)).MatchedCount > 0;
+    }
+
     /// <summary>A slot whose last contact reported no change waiting: nothing but the copy goes with it.</summary>
     public static bool Counted(int waiting, DateTime? contactAt) => waiting == 0 && contactAt is not null;
 

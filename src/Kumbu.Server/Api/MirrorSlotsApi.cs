@@ -11,6 +11,9 @@ namespace Kumbu.Server.Api;
 /// <see cref="MirrorSlots.MaxLabelLength"/> characters.</summary>
 public sealed record CreateMirrorSlotRequest(string? Label);
 
+/// <summary><c>label</c>: the device list's new name for the slot, the same one line as <see cref="CreateMirrorSlotRequest"/>'s.</summary>
+public sealed record RenameMirrorSlotRequest(string? Label);
+
 /// <summary><c>token</c>: the one the slot was made with. <c>waiting</c>: the changes the browser has waiting to upload,
 /// for the device list's warning before a removal.</summary>
 public sealed record MirrorContactRequest(string? Token, int Waiting = 0);
@@ -51,6 +54,7 @@ public static class MirrorSlotsApi
         account.MapPost("", CreateAsync).Errors(400, 401, 403, 409);
         // Made on every reconnect, so like the web app's other background calls it keeps no idle session alive.
         account.MapPost("/contact", ContactAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 403, 404);
+        account.MapPut("/{id}/label", RenameAsync).Errors(400, 401, 403, 404);
         account.MapDelete("/{id}", DeleteAsync).Errors(400, 401, 403, 404);
         // The same with the password: for another browser's copy with changes waiting.
         account.MapPost("/{id}/remove", RemoveAsync).Errors(400, 401, 403, 404, 429);
@@ -63,12 +67,7 @@ public static class MirrorSlotsApi
     private static async Task<Created<MirrorContactView>> CreateAsync(
         CreateMirrorSlotRequest body, HttpContext http, RequestCaller caller, MirrorSlots slots, CancellationToken ct)
     {
-        var label = body.Label?.Trim();
-        if (string.IsNullOrEmpty(label) || label.Length > MirrorSlots.MaxLabelLength || label.Any(char.IsControl))
-        {
-            throw ApiErrors.BadRequest($"A label is one line of 1 to {MirrorSlots.MaxLabelLength} characters.");
-        }
-
+        var label = Label(body.Label);
         try
         {
             var (id, token, key) = await slots.CreateAsync(caller.User!.Id, caller.UserKey!, label, Subject(http), ct);
@@ -90,6 +89,10 @@ public static class MirrorSlotsApi
             ?? throw ApiErrors.MirrorGone(StatusCodes.Status404NotFound);
         return TypedResults.Ok(new MirrorContactView(contact.Id, Encode(contact.Key), await VaultsAsync(caller, token, ct)));
     }
+
+    /// <summary>Only the name changes: the slot keeps its key, token and vaults, so the device's copy stays as it is.</summary>
+    private static async Task<NoContent> RenameAsync(string id, RenameMirrorSlotRequest body, RequestCaller caller, MirrorSlots slots, CancellationToken ct) =>
+        await slots.RenameAsync(caller.User!.Id, id, Label(body.Label), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such offline copy.");
 
     /// <summary>
     /// "Remove offline copy". Another browser's copy with changes waiting at its last contact, or none reported yet, goes
@@ -151,6 +154,18 @@ public static class MirrorSlotsApi
         return [.. open
             .Where(v => !session.IsDiscreet(v.Id) && !v.Vault.Discreet)
             .Select(v => new MirrorVaultView(v.Id, MirrorSlots.VaultTag(token, v.Id, v.Vault.KeyId), v.Level >= AccessLevel.Write, v.Vault.Pending))];
+    }
+
+    /// <summary>A slot's label, trimmed: one line of 1 to <see cref="MirrorSlots.MaxLabelLength"/> characters, else a 400.</summary>
+    private static string Label(string? label)
+    {
+        label = label?.Trim();
+        if (string.IsNullOrEmpty(label) || label.Length > MirrorSlots.MaxLabelLength || label.Any(char.IsControl))
+        {
+            throw ApiErrors.BadRequest($"A label is one line of 1 to {MirrorSlots.MaxLabelLength} characters.");
+        }
+
+        return label;
     }
 
     /// <summary>The asking session, as <see cref="Sessions.SubjectOf"/> names it.</summary>
