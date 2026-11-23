@@ -184,7 +184,8 @@ describe("the share page", () => {
 
     await router.navigate(`/share#${other}`);
     expect(await screen.findByRole("heading", { name: "Join Work" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Your name for this vault")).toHaveValue("Work");
+    // The field takes the invitation's alias in an effect after the answer that renders the heading.
+    await waitFor(() => expect(screen.getByLabelText("Your name for this vault")).toHaveValue("Work"));
   });
 
   it("a refused secret is forgotten, so plain /share doesn't show it again", async () => {
