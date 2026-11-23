@@ -15,6 +15,13 @@ describe("the mirror slot port", () => {
     expect(fetch).toHaveBeenCalledWith("/api/account/mirror-slots/contact", expect.objectContaining({ method: "POST", body: JSON.stringify({ token: "tok", waiting: 3 }) }));
   });
 
+  test("leaves the count out when it has none, so the server records that it doesn't know", async () => {
+    const fetch = vi.fn().mockResolvedValue(json(200, { id: "s1", key: "k", vaults: [] }));
+    vi.stubGlobal("fetch", fetch);
+    await mirrorSlots.contact("tok", null);
+    expect(fetch).toHaveBeenCalledWith("/api/account/mirror-slots/contact", expect.objectContaining({ body: JSON.stringify({ token: "tok" }) }));
+  });
+
   test("hears the wipe signal as gone, and every other failure as the core's errors", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(404, { error: "removed", code: "mirror-wipe" })));
     expect(await mirrorSlots.contact("tok", 0)).toBe("gone");

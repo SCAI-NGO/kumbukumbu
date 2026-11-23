@@ -3,7 +3,7 @@
 // ports over them, the order of the first download, contact and purge, and the tabs of one browser.
 import { describe, expect, test, vi } from "vitest";
 import { SyncEngine } from "../src/engine/engine";
-import { AuthError } from "../src/engine/ports";
+import { AuthError, OfflineError } from "../src/engine/ports";
 import { versionOf } from "../src/engine/version";
 import { MirrorCopies, IDLE_MS, type SealedMirror } from "../src/store/mirror";
 import { IdleLock } from "../src/store/idle";
@@ -96,7 +96,28 @@ describe("a copy", () => {
     mirror.lock();
     browser.slots.contacts = [];
     await copies.unlockOnline(mirror.header);
-    expect(browser.slots.contacts.map((c) => c.waiting)).toEqual([0, 1]);
+    // The first says it doesn't know, never "none": the device list must not read it as nothing to lose.
+    expect(browser.slots.contacts.map((c) => c.waiting)).toEqual([null, 1]);
+  });
+
+  test("reports nothing waiting after an online unlock too, so the device list knows", async () => {
+    const { browser, copies, mirror } = await setup();
+    mirror.lock();
+    browser.slots.contacts = [];
+    await copies.unlockOnline(mirror.header);
+    expect(browser.slots.contacts.map((c) => c.waiting)).toEqual([null, 0]);
+  });
+
+  test("keeps the copy open when only the count after an online unlock fails to arrive", async () => {
+    const { browser, copies, mirror } = await setup();
+    await mirror.adopt(work.id);
+    mirror.lock();
+    const contact = browser.slots.contact.bind(browser.slots);
+    let calls = 0;
+    browser.slots.contact = (token, waiting) => (++calls === 2 ? Promise.reject(new OfflineError("gone away")) : contact(token, waiting));
+    const opened = await copies.unlockOnline(mirror.header);
+    expect(opened).not.toBe("wiped");
+    expect((opened as SealedMirror).held()).toHaveLength(1);
   });
 
   test("a wrap copied from another copy's header doesn't open this one", async () => {

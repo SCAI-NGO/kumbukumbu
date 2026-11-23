@@ -449,6 +449,29 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_contact_without_a_count_leaves_it_unknown_and_its_removal_asks_for_the_password()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var elsewhere = await alice.SignInAgainAsync();
+        var slot = await CreateAsync(elsewhere);
+        await ContactedAsync(elsewhere, slot.Token, waiting: 0);
+        // The browser unlocks again and can't count yet: "not known", never "none", even after a count of 0.
+        using (var uncounted = await elsewhere.SendAsync(HttpMethod.Post, Contact, new { token = slot.Token })) Assert.Equal(HttpStatusCode.OK, uncounted.StatusCode);
+
+        var entry = Assert.Single(await ListAsync(alice))!;
+        Assert.NotNull(entry["contactAt"]);
+        Assert.Null(entry["waiting"]);
+        using (var asked = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{slot.Id}"))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, asked.StatusCode);
+            Assert.Equal("changes-waiting", (await JsonAsync(asked))["code"]?.GetValue<string>());
+        }
+        // So does "End other sessions": the copy waits for a removal with the password.
+        using (var ended = await alice.SendAsync(HttpMethod.Post, "/api/sessions/end-others")) Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
+        Assert.Single(await ListAsync(alice));
+    }
+
+    [Fact]
     public async Task Removing_a_slot_not_yet_counted_asks_for_the_password_but_this_browsers_own_does_not()
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");

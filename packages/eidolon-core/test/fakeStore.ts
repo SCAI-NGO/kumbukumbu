@@ -55,9 +55,9 @@ export class MemoryStorage implements RecordStorage {
 
 /** The server's side of the mirror slots: one user's, with the vaults a contact lists. */
 export class FakeSlots implements MirrorSlotsPort {
-  readonly slots = new Map<string, { id: string; key: string; waiting: number }>();
+  readonly slots = new Map<string, { id: string; key: string; waiting: number | null }>();
   vaults: SlotVault[] = [];
-  contacts: { token: string; waiting: number }[] = [];
+  contacts: { token: string; waiting: number | null }[] = [];
   /** Thrown by the next call: AuthError or OfflineError. */
   fail: Error | null = null;
   private n = 0;
@@ -71,7 +71,7 @@ export class FakeSlots implements MirrorSlotsPort {
     return Promise.resolve({ id, key, token, vaults: structuredClone(this.vaults) });
   }
 
-  contact(token: string, waiting: number): Promise<SlotAnswer | "gone"> {
+  contact(token: string, waiting: number | null): Promise<SlotAnswer | "gone"> {
     if (this.fail) return Promise.reject(this.fail);
     this.contacts.push({ token, waiting });
     const slot = this.slots.get(token);

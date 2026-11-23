@@ -39,9 +39,10 @@ public sealed class MirrorSlotDocument
     [BsonElement("contactAt"), BsonIgnoreIfNull]
     public DateTime? ContactAt { get; set; }
 
-    /// <summary>The changes the browser had waiting to upload at its last contact: what a removal of the slot purges.</summary>
-    [BsonElement("waiting"), BsonIgnoreIfDefault]
-    public int Waiting { get; set; }
+    /// <summary>The changes the browser had waiting to upload at its last contact: what a removal of the slot purges.
+    /// Null: that contact couldn't count them (an unlock, before the copy opens), so nobody knows; never read as none.</summary>
+    [BsonElement("waiting")]
+    public int? Waiting { get; set; } = 0;
 
     /// <summary>The session (<see cref="Sessions.SubjectOf"/>) that made the slot or last contacted it: "end other
     /// sessions" keeps only the slots of the session that asks.</summary>
@@ -50,7 +51,7 @@ public sealed class MirrorSlotDocument
 }
 
 /// <summary>A slot as the device list shows it. <c>Current</c>: the session that asks made it or last contacted it.</summary>
-public sealed record MirrorSlot(string Id, string Label, DateTime CreatedAt, DateTime? ContactAt, int Waiting, bool Current);
+public sealed record MirrorSlot(string Id, string Label, DateTime CreatedAt, DateTime? ContactAt, int? Waiting, bool Current);
 
 /// <summary>
 /// The offline mirror's key slots (offline mode design §4.2, §4.4). One per browser: a random mirror key, made here and
@@ -133,7 +134,7 @@ public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
     /// doesn't open (sealed under a user key rotated since); such a slot is deleted, and the browser purges its mirror.
     /// </summary>
     public async Task<(string Id, byte[] Key)?> ContactAsync(
-        string userId, byte[] userKey, byte[] token, int waiting, string? sessionSubject, CancellationToken ct)
+        string userId, byte[] userKey, byte[] token, int? waiting, string? sessionSubject, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var lookup = Lookup(token);
@@ -169,7 +170,7 @@ public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
     }
 
     /// <summary>A slot whose last contact reported no change waiting: nothing but the copy goes with it.</summary>
-    public static bool Counted(int waiting, DateTime? contactAt) => waiting == 0 && contactAt is not null;
+    public static bool Counted(int? waiting, DateTime? contactAt) => waiting == 0 && contactAt is not null;
 
     /// <summary>Deletes the user's slot <paramref name="id"/> ("Remove offline copy"); false if the user has none of that id,
     /// or, <paramref name="onlyCounted"/>, if it isn't <see cref="Counted"/> (any more).</summary>

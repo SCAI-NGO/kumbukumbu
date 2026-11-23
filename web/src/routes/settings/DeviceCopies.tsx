@@ -160,16 +160,16 @@ function RenameDialog({ device, onClose, onRenamed }: { device: DeviceCopy; onCl
 }
 
 function removalText(d: DeviceCopy): string {
-  const lost = d.waiting > 0
+  const lost = d.waiting !== null && d.waiting > 0
     ? `${changes(d.waiting)} on that device haven't uploaded and will be lost. `
-    : d.contactAt === null ? "That device hasn't said yet whether it has changes waiting; any it has will be lost. " : "";
+    : d.waiting === null || d.contactAt === null ? "That device hasn't said yet whether it has changes waiting; any it has will be lost. " : "";
   return `${lost}The copy goes when that device next comes online.${needsPassword(d) ? " Enter your password to remove it." : ""}`;
 }
 
 /** "This device", or "last online 3 days ago · had 2 changes waiting". */
 function deviceDetail(d: DeviceCopy): string {
   const parts = [d.current ? "This device" : d.contactAt ? `last online ${ago(d.contactAt)}` : `set up ${ago(d.createdAt)}`];
-  if (!d.current && d.waiting > 0) parts.push(`had ${changes(d.waiting)} waiting`);
+  if (!d.current && d.waiting !== null && d.waiting > 0) parts.push(`had ${changes(d.waiting)} waiting`);
   return parts.join(" · ");
 }
 

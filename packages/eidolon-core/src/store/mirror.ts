@@ -102,7 +102,7 @@ export class MirrorCopies {
    * the slot was removed, and the copy with it.
    */
   async unlockOnline(header: CopyHeader, signIn?: { username: string; password: string; idleMs: number }): Promise<SealedMirror | "wiped"> {
-    const answer = await this.p.slots.contact(header.slot.token, 0);
+    const answer = await this.p.slots.contact(header.slot.token, null);
     if (answer === "gone") {
       await this.wipe(header.copy);
       return "wiped";
@@ -116,8 +116,13 @@ export class MirrorCopies {
       await this.writeHeader(header);
     }
     const mirror = await SealedMirror.unlocked(this.p, header, raw, answer.vaults);
-    // The first contact couldn't count them, before the key opened the copy: the device list hears of them now.
-    if (mirror.waiting() > 0) await mirror.contact();
+    // The first contact couldn't count them, before the key opened the copy: the device list hears of them now, none
+    // included. If that fails, the copy stays open; the device list says "not known yet" until the next contact.
+    try {
+      if ((await mirror.contact()) === "wiped") return "wiped";
+    } catch {
+      // Offline or signed out between the two: the next contact (socket, sign-in) counts them.
+    }
     return mirror;
   }
 
