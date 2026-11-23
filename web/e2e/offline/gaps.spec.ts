@@ -328,6 +328,7 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
   await turnOn(page);
   // Work's attachments here before: other tests' small ones come with the notes, so only the growth counts.
   const before = attachmentsMiB(await vaultLine(page, "Work").innerText());
+  expect(before, "the vault's attachment size before Keep offline").not.toBeNaN();
   await page.goto(notePage(`/Work/${folder}/Kept/Plan.md`));
   await expect(article(page)).toBeVisible();
 
@@ -353,8 +354,9 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
       },
       { message: "the kept folder's attachment is on this device", timeout: 30_000, intervals: [1000, 2000] },
     )
-    .toBeGreaterThanOrEqual(1.4);
-  expect(attachmentsMiB(await vaultLine(page, "Work").innerText()) - before, "the other folder's attachment isn't").toBeLessThan(3);
+    // Each image is about 1.65 MiB and the line rounds to 0.1 MB: one of them is 1.2 or more, both would be 3 or more.
+    .toBeGreaterThanOrEqual(1.2);
+  expect(attachmentsMiB(await vaultLine(page, "Work").innerText()) - before, "the other folder's attachment isn't").toBeLessThan(2.6);
 
   await page.goto(notePage(`/Work/${folder}/Kept/Plan.md`));
   await expect(article(page)).toBeVisible();
@@ -401,9 +403,11 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
   test.info().annotations.push({
     type: "finding",
     description:
-      "F-06: a vault purged from the copy (access lost) shows no notice. Seen with Bob online: the socket's {\"type\":\"mirror\"} frame comes within 20 ms of his leaving, the contact it starts answers one vault fewer, the copy no longer holds the vault (offline: \"… is not kept on this device.\"), yet no status region ever renders in 40 s and nothing is logged; the cause isn't visible from the page (mode.ts:253 sets the notice only when that contact's own purge counts a vault)",
+      "F-06: a vault purged from the copy (access lost) shows no notice. Seen with Bob online: the socket's {\"type\":\"mirror\"} frame comes within 20 ms of his leaving, the contact it starts answers one vault fewer, the copy no longer holds the vault (offline: \"… is not kept on this device.\"), yet no status region ever renders in 40 s and nothing is logged; the cause isn't visible from the page (mode.ts:253 sets the notice only when that contact's own purge counts a vault). Intermittent: the notice came in 2 of 8 runs with two workers, in 0 of 9 alone",
   });
-  test.fail();
+  // Intermittent, so neither a plain assertion nor test.fail would give the same result twice (as 0.6.0's F-10):
+  // fixme until the fix run, which lifts it.
+  test.fixme(true, "F-06: intermittent, see the annotation");
   test.setTimeout(240_000);
   // A vault of the test's own, shared with Bob; his device keeps it with All my vaults.
   const share = await shareWithBob("Purge", "write");
