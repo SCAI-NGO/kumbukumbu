@@ -15,7 +15,8 @@ import { FormError, inputClass, secondaryButtonClass } from "../../components/fo
 import { useOfflineCopy } from "../../offline/copy";
 import { chooseOffline } from "../../offline/engines";
 import { storageUse } from "../../offline/ports";
-import { openCopy, turnOff, turnOn } from "../../offline/turnOn";
+import { openCopy } from "../../offline/mode";
+import { turnOff, turnOn } from "../../offline/turnOn";
 import { useSession } from "../../state/session";
 import { isStandalone } from "../../update/InstallHint";
 import { changes, Confirm, DeviceCopies, failureText, plural } from "./DeviceCopies";

@@ -6,7 +6,7 @@ import { openRecordStorage } from "./idbStorage";
 import { browserKdf } from "./kdf";
 import { mirrorSlots } from "./slots";
 
-const locks: TabLocks = {
+export const locks: TabLocks = {
   // The grant callback returns a promise, which request() passes on: awaited, it is the callback's result.
   run: async (name, fn) => await navigator.locks.request(name, fn),
   hold(name) {
