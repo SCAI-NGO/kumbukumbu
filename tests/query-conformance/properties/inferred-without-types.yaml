@@ -10,6 +10,7 @@ notes:
     birthday: 1980-11-03
     met: 2026-11-23T14:30
     city: Vienna
+    zip: 01010
     nothing:
     related: [Brita, Cleo]
     ---
@@ -24,5 +25,6 @@ expect:
       birthday: date 1980-11-03
       met: datetime 2026-11-23T14:30:00
       city: text Vienna
+      zip: number 1010
       nothing: null
       related: [text Brita, text Cleo]
