@@ -11,6 +11,7 @@ import { RecoveryKeyReveal } from "../../components/RecoveryKeyReveal";
 import { useMarkDiscreet } from "../../discreet/api";
 import SetPinDialog from "../../discreet/SetPinDialog";
 import { useDiscreet } from "../../discreet/state";
+import { markPasswordChanged } from "../../offline/PasswordChangedCopies";
 import { useSession } from "../../state/session";
 import { Done, Section } from "./Section";
 
@@ -38,6 +39,8 @@ function PasswordSection() {
     onSuccess: ({ signedOut }) => {
       setCurrent("");
       setNext("");
+      // Copies on other devices still open with the old password: the next visit lists them.
+      markPasswordChanged();
       // The server ends every session, this one too: off to sign-in, the way back included.
       if (signedOut) useSession.getState().end("Your password is changed and every session has ended. Sign in with the new one.");
       else setChanged(true);
@@ -52,6 +55,10 @@ function PasswordSection() {
   return (
     <Section title="Password">
       <p className="text-text-body">Changing it ends every session, on your other devices and here: you sign in again with the new one.</p>
+      <p className="text-text-body">
+        An offline copy on another device still opens with the old password until that device next signs in. It stays, so
+        nothing it hasn't uploaded is lost; after the change you see those devices, and can remove a copy you don't trust.
+      </p>
       <form onSubmit={submit} className="flex flex-col gap-4">
         <PasswordField label="Current password" value={current} onChange={setCurrent} autoComplete="current-password" />
         <PasswordField label="New password" value={next} onChange={setNext} autoComplete="new-password" policy />
@@ -289,7 +296,9 @@ function SessionsSection() {
     <Section title="Sessions">
       <p className="text-text-body">Signs you out everywhere else, such as a browser you forgot to sign out of. This one stays.</p>
       {endOthers.isError && <FormError>{errorText(endOthers.error)}</FormError>}
-      {endOthers.isSuccess && <Done>Every other session has ended.</Done>}
+      {endOthers.isSuccess && (
+        <Done>Every other session has ended. Offline copies with changes waiting stay until you remove them in Settings, Offline.</Done>
+      )}
       <button type="button" disabled={endOthers.isPending} onClick={() => endOthers.mutate()} className={secondaryButtonClass}>
         Sign out other sessions
       </button>

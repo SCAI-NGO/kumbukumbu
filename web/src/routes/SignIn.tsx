@@ -9,6 +9,7 @@ import { PasswordField } from "../components/PasswordField";
 import { NEUTRAL } from "../discreet/neutralWindow";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { rememberSignIn } from "../offline/turnOn";
 
 /**
  * Where to go after signing in: `next` only if it is a path on this site. "//host" and "/\host" are
@@ -54,6 +55,8 @@ export default function SignIn() {
         useEditor.getState().reset();
         if (next.startsWith("/notes/") || next.startsWith("/n/")) next = "/";
       }
+      // The offline copy's idle limit follows it (offline mode design §3a).
+      rememberSignIn(remember);
       signedIn(view);
       navigate(next, { replace: true });
     },
