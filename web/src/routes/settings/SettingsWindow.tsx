@@ -8,8 +8,6 @@ import WindowNav, { type NavEntry } from "../../windows/WindowNav";
 const entries: NavEntry[] = [
   { to: "/settings/appearance", label: "Appearance", match: "/settings/appearance" },
   { to: "/settings/vaults", label: "Vaults", match: "/settings/vaults" },
-  // Beside Vaults, where its list was before it got a page of its own.
-  { to: "/settings/published", label: "Published", match: "/settings/published" },
   { to: "/settings/access/keys", label: "Access", match: "/settings/access" },
   { to: "/settings/skills/installed", label: "Skills", match: "/settings/skills" },
   { to: "/settings/calendar", label: "Calendar", match: "/settings/calendar" },

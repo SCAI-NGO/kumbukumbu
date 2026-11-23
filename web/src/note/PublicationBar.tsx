@@ -167,7 +167,7 @@ function BundledBar({ starts, enabled, lastWriteAt }: { starts: string[] | null;
   );
 }
 
-/** Asks before a link is withdrawn: here and in Settings → Published. */
+/** Asks before a link is withdrawn: here and in the Published window. */
 export function ConfirmWithdraw({ busy, onKeep, onWithdraw }: { busy: boolean; onKeep(): void; onWithdraw(): void }) {
   const dialog = useDialog<HTMLDivElement>(onKeep);
   const id = useId();

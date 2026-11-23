@@ -152,7 +152,7 @@ As in the mockups of 2026-11-05 (`.superpowers/brainstorm/`, not committed):
   - green: "Published, up to date", with **Unpublish**;
   - yellow: "Published copy is older than this note. Published 5 Nov, 14:32 · changed 16:05", with **Update copy**.
 - The link can be copied again from the bar, so the code is kept sealed in the vault (§5).
-- An overview of all publications of the owner's vaults (where it lives is the builder's call): note, snapshot time, older or not, published by whom (the owner, or which key or connection). Amended 2026-11-23: a page of its own, Settings → Published, with Update copy and Unpublish (`2026-11-23-published-overview-design.md`).
+- An overview of all publications of the owner's vaults (where it lives is the builder's call): note, snapshot time, older or not, published by whom (the owner, or which key or connection). Amended 2026-11-23: a window of its own, Published, with Update copy, Unpublish and Compare (`2026-11-23-published-overview-design.md`).
 - Setting and lifting **Unpublishable** on notes and folders, in their menus, with a visible mark in the tree.
 - Each publish, update and withdrawal is a vault event in the history (`Sharing/VaultEvents.cs`), owner only (§3.10), and naming the agent where one did it. History is an audit log: nothing hidden, duplicates included.
 

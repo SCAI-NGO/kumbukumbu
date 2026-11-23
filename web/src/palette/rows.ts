@@ -32,7 +32,6 @@ export function commandRows({ admin, shared, marketplaces, external }: { admin: 
   return [
     go("settings.appearance", "Settings", "Appearance", "/settings/appearance"),
     go("settings.vaults", "Settings", "Vaults", "/settings/vaults"),
-    go("settings.published", "Settings", "Published", "/settings/published"),
     go("settings.access.keys", "Settings / Access", "API keys", "/settings/access/keys"),
     go("settings.access.apps", "Settings / Access", "Apps", "/settings/access/apps"),
     go("settings.access.dav", "Settings / Access", "WebDAV", "/settings/access/dav"),
@@ -48,6 +47,7 @@ export function commandRows({ admin, shared, marketplaces, external }: { admin: 
     ...(admin ? [go("admin.users", "Admin", "Users", "/admin/users"), go("admin.invitations", "Admin", "Invitations", "/admin/invitations")] : []),
     go("open.recent", "Open", "Recent", "/recent"),
     go("open.whatson", "Open", "What's on", "/whats-on"),
+    go("open.published", "Open", "Published", "/published"),
     go("open.console", "Open", "Console", "/console"),
     ...schemes.map((s) => command(`scheme.${s.id}`, "Colour scheme", s.name, { scheme: s.id })),
   ];

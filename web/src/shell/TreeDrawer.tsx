@@ -431,7 +431,7 @@ function ResizeHandle({ sidebar, onDragging }: { sidebar: ReturnType<typeof useS
 
 function AccountRow() {
   const role = useSession((s) => s.user?.role);
-  // Off, nothing can be published, and what is out is still in Settings → Published to withdraw.
+  // Off, nothing can be published; what is out is still in the Published window (palette, /published) to withdraw.
   const publishEnabled = usePublishEnabled();
   const navigate = useNavigate();
   // The drawer's state outlives the page: left open, it would be open again on the way back to the notes.
@@ -478,7 +478,7 @@ function AccountRow() {
         Access
       </Link>
       {publishEnabled && (
-        <Link to="/settings/published" onClick={close} className={link}>
+        <Link to="/published" onClick={close} className={link}>
           <Share2 size={16} aria-hidden className="text-muted" />
           Published
         </Link>

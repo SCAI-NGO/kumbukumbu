@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe("Settings: Vaults", () => {
-  it("has the sections Vaults and Shared vaults; Published has a page of its own", async () => {
+  it("has the sections Vaults and Shared vaults; Published is a window of its own", async () => {
     api();
     renderApp("/settings/vaults");
     await screen.findByRole("region", { name: "Vaults" });
