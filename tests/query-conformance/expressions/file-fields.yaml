@@ -1,0 +1,18 @@
+description: A file's name keeps its extension, its basename doesn't; its folder is "" at the vault's root.
+source: spec
+notes:
+  People/Friends/Ann.md: ""
+  Brita.md: ""
+cases:
+  - expression: file.name
+    values: { People/Friends/Ann.md: text Ann.md, Brita.md: text Brita.md }
+  - expression: file.basename
+    values: { People/Friends/Ann.md: text Ann, Brita.md: text Brita }
+  - expression: file.path
+    values: { People/Friends/Ann.md: text People/Friends/Ann.md, Brita.md: text Brita.md }
+  - expression: file.folder
+    values: { People/Friends/Ann.md: text People/Friends, Brita.md: text }
+  - expression: file.ext
+    values: { People/Friends/Ann.md: text md, Brita.md: text md }
+  - expression: file
+    values: { People/Friends/Ann.md: file People/Friends/Ann.md, Brita.md: file Brita.md }

@@ -1,0 +1,14 @@
+description: What no note can make right is an error of the query, found before any note is read; a value of the wrong type is not.
+source: spec
+formulas:
+  a: formula.b
+  b: formula.a
+notes:
+  Ann.md: ""
+cases:
+  - { expression: nothing(1), error: unknown-function }
+  - { expression: name.shout(), error: unknown-method }
+  - { expression: formula.missing, error: unknown-formula }
+  - { expression: formula.a, error: formula-cycle }
+  - { expression: 'a = 1', error: syntax }
+  - { expression: 'name.matches(/(a/)', error: regex }

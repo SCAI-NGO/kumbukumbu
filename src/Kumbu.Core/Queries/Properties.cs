@@ -116,7 +116,8 @@ public static partial class Properties
         };
     }
 
-    private static Value Inferred(string raw) => Boolean(raw) ?? Number(raw) ?? Date(raw) ?? DateTime(raw) ?? new TextValue(raw);
+    /// <summary>What a plain scalar looks like: a checkbox, a number, a date, a datetime, or else text.</summary>
+    internal static Value Inferred(string raw) => Boolean(raw) ?? Number(raw) ?? Date(raw) ?? DateTime(raw) ?? new TextValue(raw);
 
     // YAML 1.2's core schema, which Obsidian's parser follows; hex, octal and infinities are left as text, as a person meant them.
     private static bool IsNull(string raw) => raw is "" or "~" or "null" or "Null" or "NULL";

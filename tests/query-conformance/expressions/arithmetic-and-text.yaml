@@ -1,0 +1,18 @@
+description: Arithmetic works on numbers; + with a text joins texts; a calculation on anything else, or without a finite result, is null.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    n: 7
+    name: Ann
+    ---
+cases:
+  - { expression: n * 2 + 1, values: { Ann.md: number 15 } }
+  - { expression: n % 4, values: { Ann.md: number 3 } }
+  - { expression: n / 2, values: { Ann.md: number 3.5 } }
+  - { expression: -n, values: { Ann.md: number -7 } }
+  - { expression: '"Hi " + name', values: { Ann.md: text Hi Ann } }
+  - { expression: name + n, values: { Ann.md: text Ann7 } }
+  - { expression: name * 2, values: { Ann.md: null } }
+  - { expression: missing + 1, values: { Ann.md: null } }
+  - { expression: n / 0, values: { Ann.md: null } }

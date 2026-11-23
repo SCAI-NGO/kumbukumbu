@@ -1,0 +1,12 @@
+description: Numbers round, floor, ceil and abs.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    n: -2.5
+    ---
+cases:
+  - { expression: n.abs(), values: { Ann.md: number 2.5 } }
+  - { expression: n.floor(), values: { Ann.md: number -3 } }
+  - { expression: n.ceil(), values: { Ann.md: number -2 } }
+  - { expression: 2.5.round(), values: { Ann.md: number 3 } }

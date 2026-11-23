@@ -1,0 +1,32 @@
+description: A date has year, month (1 to 12) and day; today() and now() follow the case's clock.
+source: spec
+now: 2026-11-23T14:30:00
+types:
+  birthday: date
+notes:
+  Ann.md: |
+    ---
+    birthday: 1980-11-03
+    met: 2026-11-23T09:15
+    ---
+  Brita.md: |
+    ---
+    birthday: soon
+    ---
+cases:
+  - expression: birthday.month
+    values: { Ann.md: number 11, Brita.md: null }
+  - expression: birthday.year
+    values: { Ann.md: number 1980, Brita.md: null }
+  - expression: met.hour * 60 + met.minute
+    values: { Ann.md: number 555, Brita.md: null }
+  - expression: birthday.month == today().month
+    values: { Ann.md: boolean true, Brita.md: boolean false }
+  - expression: today()
+    values: { Ann.md: date 2026-11-23, Brita.md: date 2026-11-23 }
+  - expression: now()
+    values: { Ann.md: datetime 2026-11-23T14:30:00, Brita.md: datetime 2026-11-23T14:30:00 }
+  - expression: birthday < date("1990-01-01")
+    values: { Ann.md: boolean true, Brita.md: boolean false }
+  - expression: met.date() == today()
+    values: { Ann.md: boolean true, Brita.md: boolean false }

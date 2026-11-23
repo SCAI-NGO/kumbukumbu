@@ -1,0 +1,20 @@
+description: if, number, list and date; a value of the wrong type gives null rather than an error.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    rating: "4.5"
+    done: true
+    related: Brita
+    ---
+cases:
+  - { expression: 'if(done, "yes", "no")', values: { Ann.md: text yes } }
+  - { expression: 'if(missing, "yes")', values: { Ann.md: null } }
+  - { expression: number(rating) * 2, values: { Ann.md: number 9 } }
+  - { expression: number(done), values: { Ann.md: number 1 } }
+  - { expression: number("soon"), values: { Ann.md: null } }
+  - { expression: list(related), values: { Ann.md: [text Brita] } }
+  - { expression: list(missing), values: { Ann.md: [] } }
+  - { expression: date("2026-11-23"), values: { Ann.md: date 2026-11-23 } }
+  - { expression: date("2026-11-23 10:00"), values: { Ann.md: datetime 2026-11-23T10:00:00 } }
+  - { expression: date("soon"), values: { Ann.md: null } }

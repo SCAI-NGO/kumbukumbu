@@ -1,0 +1,26 @@
+description: hasTag finds frontmatter and inline tags, nested ones under their parent, ignoring case and a leading '#'; inFolder includes subfolders.
+source: spec
+notes:
+  People/Ann.md: |
+    ---
+    tags: [person]
+    ---
+    Works on #Project/Kumbu.
+  People/Friends/Brita.md: |
+    #person
+  Peoples.md: ""
+cases:
+  - expression: file.hasTag("person")
+    values: { People/Ann.md: boolean true, People/Friends/Brita.md: boolean true, Peoples.md: boolean false }
+  - expression: file.hasTag("#project")
+    values: { People/Ann.md: boolean true, People/Friends/Brita.md: boolean false, Peoples.md: boolean false }
+  - expression: file.hasTag("project/kumbu", "nothing")
+    values: { People/Ann.md: boolean true, People/Friends/Brita.md: boolean false, Peoples.md: boolean false }
+  - expression: file.hasTag("proj")
+    values: { People/Ann.md: boolean false, People/Friends/Brita.md: boolean false, Peoples.md: boolean false }
+  - expression: file.inFolder("People")
+    values: { People/Ann.md: boolean true, People/Friends/Brita.md: boolean true, Peoples.md: boolean false }
+  - expression: file.inFolder("People/Friends/")
+    values: { People/Ann.md: boolean false, People/Friends/Brita.md: boolean true, Peoples.md: boolean false }
+  - expression: file.tags
+    values: { People/Ann.md: [text person, text Project/Kumbu], People/Friends/Brita.md: [text person], Peoples.md: [] }

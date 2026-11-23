@@ -27,6 +27,27 @@ expect:
 pending: [ts]         # optional: implementations that don't pass it yet; never skipped silently
 ```
 
+A case about expressions (in `expressions/`) gives a list of `cases` instead of `expect`, each an expression with its value for every note, or the error the expression is:
+
+```yaml
+description: A date has year, month (1 to 12) and day.
+source: spec
+now: 2026-11-23T14:30:00   # optional: the clock of now() and today(); without it, 2026-01-01T12:00:00
+this: Projects/Kumbu.md    # optional: the note the query is shown in, one of the notes
+formulas:                  # optional: the formulas formula.name refers to
+  double: n * 2
+notes:
+  Ann.md: |
+    ---
+    birthday: 1980-11-03
+    ---
+cases:
+  - expression: birthday.month
+    values: { Ann.md: number 11 }
+  - expression: nothing(1)
+    error: unknown-function   # or syntax, unknown-method, unknown-formula, formula-cycle, regex, too-deep
+```
+
 `source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian.
 
 ## Values
@@ -43,5 +64,6 @@ A typed value is written as its type and its normalised text, so a comparison te
 | `null` | no value |
 | `[text a, text b]` (a YAML list) | a list |
 | a YAML map of values | an object |
+| `file People/Ann.md` | a note's file, as `file` and `this.file` give it |
 
 A runner fails on an empty folder and on a file it can't read.

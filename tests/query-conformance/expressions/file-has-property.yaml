@@ -1,0 +1,11 @@
+description: hasProperty asks whether the note has the property at all, even with no value.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    due:
+    ---
+  Brita.md: ""
+cases:
+  - expression: file.hasProperty("due")
+    values: { Ann.md: boolean true, Brita.md: boolean false }
