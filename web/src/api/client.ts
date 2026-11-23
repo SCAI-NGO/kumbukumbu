@@ -76,10 +76,14 @@ export async function heard(key: string, response: Response) {
 // What a guarded request sent, by openapi-fetch's request id, to send again once the password is confirmed. Reads are
 // never guarded, so only the others are kept, and of those only the ones without a body or with a JSON one: every
 // guarded action sends JSON, while an upload's bytes (a file, a form) would be copied for nothing, as no upload is guarded.
+// Told apart by the Content-Type, not by `request.body`: Firefox has no `Request.body`, so a request without a body
+// (Update copy of a single note) would never be kept there, and its refusal would never ask for the password.
 const sent = new Map<string, Request>();
 
-const repeatable = (request: Request) =>
-  request.method !== "GET" && (request.body === null || (request.headers.get("Content-Type") ?? "").startsWith("application/json"));
+const repeatable = (request: Request) => {
+  const type = request.headers.get("Content-Type");
+  return request.method !== "GET" && (type === null || type.startsWith("application/json"));
+};
 
 /**
  * Asks for the password when a guarded action finds the window closed, and repeats the request once after it is
