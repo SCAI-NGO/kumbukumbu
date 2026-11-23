@@ -39,6 +39,11 @@ export interface VaultMeta {
   canWrite: boolean;
   /** Every note's text is here: from now on small attachments come too. */
   notesDone: boolean;
+  /**
+   * The vault's name as the user last saw it online (a member's alias, renamed at will): offline, paths name vaults
+   * by it, and the contact carries no names. The host sets it from the vault list whenever it is online.
+   */
+  name?: string;
 }
 
 /** The editor's unsaved text (WP7 fills it): `LocalFiles.read` gives it, and `writeIf` checks against it. */
@@ -135,6 +140,7 @@ export class VaultMirror {
   get id(): string { return this.meta.id; }
   get canWrite(): boolean { return this.meta.canWrite; }
   get tag(): string { return this.meta.tag; }
+  get name(): string | undefined { return this.meta.name; }
   get metaKey(): string { return this.keys.meta; }
   get dataPrefix(): string { return this.keys.data; }
   private get stateKey(): string { return `${this.keys.data}s`; }
@@ -163,6 +169,11 @@ export class VaultMirror {
     if (this.entries.get(path)?.local === undefined) return null;
     const body = await this.bodyKey(path);
     return this.r.open(body, await this.r.p.storage.get(body));
+  }
+
+  /** Removed on this device and not yet in Kumbu²: listed by the last version list, but gone for the person. */
+  removedHere(path: string): boolean {
+    return this.entries.get(path)?.local === undefined && this.state.bases[path] !== undefined;
   }
 
   /** Changes made here that Kumbu² doesn't have yet: paths whose bytes differ from the agreed version, deletions too. */
