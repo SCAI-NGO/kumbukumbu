@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The devices that keep an offline copy of the user's notes, each with "Remove offline copy" (design §4.4): in
+// The devices that keep an offline copy of the user's notes, each with Rename and "Remove offline copy" (design §3a, §4.4): in
 // Settings, Offline, and right after a password change, as a copy elsewhere still opens with the old password.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { OfflineError, RejectedError } from "eidolon-core/engine/ports";
 import { useId, useState, type ReactNode } from "react";
 import { errorText } from "../../api/error-text";
 import { PasswordField } from "../../components/PasswordField";
-import { FormError, primaryButtonClass, secondaryButtonClass } from "../../components/form";
+import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
 import { useDialog } from "../../hooks/useDialog";
 import { ago } from "../../note/AgentBanner";
-import { listDeviceCopies, needsPassword, PasswordNeededError, removeDeviceCopy, type DeviceCopy } from "../../offline/slots";
+import { listDeviceCopies, needsPassword, PasswordNeededError, removeDeviceCopy, renameDeviceCopy, type DeviceCopy } from "../../offline/slots";
 
 /** The store's and the slots' errors are the core's, not HttpError: their sentences are shown as errorText shows the API's. */
 export function failureText(e: unknown): string {
@@ -26,6 +26,7 @@ export function DeviceCopies(props: { othersOnly?: boolean }) {
   const queryClient = useQueryClient();
   const devices = useQuery({ queryKey: ["offline-devices"], queryFn: listDeviceCopies });
   const [removing, setRemoving] = useState<DeviceCopy | null>(null);
+  const [renaming, setRenaming] = useState<DeviceCopy | null>(null);
   const [password, setPassword] = useState("");
   // The server can ask too: the device reported changes after the list was read.
   const [asked, setAsked] = useState(false);
@@ -54,19 +55,31 @@ export function DeviceCopies(props: { othersOnly?: boolean }) {
       {shown && shown.length > 0 && (
         <ul aria-label="Devices with a copy" className="flex flex-col gap-2">
           {shown.map((d) => (
-            <li key={d.id} className="flex min-h-11 items-center gap-3">
+            <li key={d.id} className="flex min-h-11 flex-wrap items-center gap-3">
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="break-words text-text">{d.label}</span>
                 <span className="text-sm text-muted">{deviceDetail(d)}</span>
               </span>
-              {!d.current && (
-                <button type="button" onClick={() => setRemoving(d)} className={secondaryButtonClass}>
-                  Remove offline copy
+              <span className="flex gap-2">
+                <button type="button" aria-label={`Rename ${d.label}`} onClick={() => setRenaming(d)} className={secondaryButtonClass}>
+                  Rename
                 </button>
-              )}
+                {!d.current && (
+                  <button type="button" onClick={() => setRemoving(d)} className={secondaryButtonClass}>
+                    Remove offline copy
+                  </button>
+                )}
+              </span>
             </li>
           ))}
         </ul>
+      )}
+      {renaming && (
+        <RenameDialog
+          device={renaming}
+          onClose={() => setRenaming(null)}
+          onRenamed={() => queryClient.invalidateQueries({ queryKey: ["offline-devices"] })}
+        />
       )}
       {removing && (
         <Confirm
@@ -82,6 +95,67 @@ export function DeviceCopies(props: { othersOnly?: boolean }) {
         </Confirm>
       )}
     </>
+  );
+}
+
+/** A device's name in the list, as the board renames a column; the copy on that device stays as it is. */
+function RenameDialog({ device, onClose, onRenamed }: { device: DeviceCopy; onClose(): void; onRenamed(): Promise<unknown> }) {
+  const id = useId();
+  const dialog = useDialog<HTMLFormElement>(onClose);
+  const [name, setName] = useState(device.label);
+  const to = name.trim();
+  const ready = to !== "" && to !== device.label;
+  const rename = useMutation({
+    mutationFn: () => renameDeviceCopy(device.id, to),
+    onSuccess: async () => {
+      await onRenamed();
+      onClose();
+    },
+  });
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
+      <form
+        ref={dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${id}-title`}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ready) rename.mutate();
+        }}
+        className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
+      >
+        <h2 id={`${id}-title`} className="text-lg font-bold break-words text-text">
+          Rename {device.label}
+        </h2>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={`${id}-name`} className={labelClass}>
+            New name
+          </label>
+          <input
+            id={`${id}-name`}
+            data-autofocus
+            value={name}
+            maxLength={64}
+            autoComplete="off"
+            onChange={(e) => {
+              setName(e.target.value);
+              rename.reset();
+            }}
+            className={inputClass}
+          />
+        </div>
+        {rename.isError && <FormError>{failureText(rename.error)}</FormError>}
+        <div className="flex gap-3">
+          <button type="button" onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
+            Cancel
+          </button>
+          <button type="submit" disabled={!ready || rename.isPending} className={`${primaryButtonClass} flex-1`}>
+            Rename
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
