@@ -58,6 +58,30 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Stored_vectors_are_handed_out_without_embedding_anything()
+    {
+        var s = await StartAsync(start: false);
+        await s.Store.TryCreateAsync(New("/Work/gate.md", "# Gate\n## Rules\nThe service checks rules at the entrance.\n# Team\n## People\nAnna and Ben.\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats, dogs, hens and ducks.\n"), Ct);
+
+        // Before the index runs, nothing is embedded: both notes are pending.
+        var before = await s.Store.VectorsAsync(P("/Work"), Ct);
+        Assert.Equal((SemanticState.Ready, 0, 2), (before.State, before.Chunks.Count, before.Pending));
+
+        await s.Index.StartAsync(Ct);
+        await IdleAsync(s);
+        var embedded = s.Embedder.Embedded;
+        var after = await s.Store.VectorsAsync(P("/Work"), Ct);
+        var one = await s.Store.VectorsAsync(P("/Work/farm.md"), Ct);
+
+        Assert.Equal(embedded, s.Embedder.Embedded);
+        Assert.Equal(0, after.Pending);
+        Assert.Equal(3, after.Chunks.Count);
+        Assert.All(after.Chunks, c => Assert.Equal(after.Chunks[0].Space, c.Space));
+        Assert.Equal(P("/Work/farm.md"), Assert.Single(one.Chunks).Path);
+    }
+
+    [Fact]
     public async Task The_notes_of_an_unlocked_vault_are_split_ahead_of_the_first_search()
     {
         var s = await StartAsync();
