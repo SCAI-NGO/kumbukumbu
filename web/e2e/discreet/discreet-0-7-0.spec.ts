@@ -138,7 +138,8 @@ function answersOf(page: Page) {
   const bodies: Promise<string>[] = [];
   page.on("response", (r: Response) => {
     const path = new URL(r.url()).pathname;
-    if (/^\/api\/(similar|graph|console|publications)/.test(path)) bodies.push(r.text().catch(() => ""));
+    // The overview only: the owner's read of one publication carries its reader link.
+    if (/^\/api\/(similar|graph|console)|^\/api\/publications$/.test(path)) bodies.push(r.text().catch(() => ""));
   });
   return async () => (await Promise.all(bodies)).join("\n");
 }
@@ -379,8 +380,9 @@ test("discreet-0-7-0 published: hidden, the Published window has no row, count o
     run.written.push(lantern);
     // Published as the dialog does (the fresh sign-in opened the password window); the link stays in this answer.
     const made = await session.send("POST", `/api/publications/${encodePath(lantern)}`, { data: { depth: 0 } });
+    // Withdrawn at the end whatever the answer said, so no Home copy outlives the test.
+    if (made.ok()) run.published!.push(lantern);
     expect(made.status(), "the Home note published").toBe(201);
-    run.published!.push(lantern);
     // Changed after, so its copy is older and counts in the count line too.
     await session.putNote(lantern, "# Lantern\n\nThe lantern on the porch, lit.\n");
 
