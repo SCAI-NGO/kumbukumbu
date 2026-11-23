@@ -26,7 +26,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
     private static readonly Option[] Spec =
     [
         new('n', "max", TakesValue: true), new(null, "words"), new(null, "meaning"), new(null, "tag", TakesValue: true), new(null, "archive"),
-        new('C', "context"), new('l', "list"),
+        new('C', "context"), new('l', "list"), .. Exclusions.Spec,
     ];
 
     public string Name => "semsearch";
@@ -37,6 +37,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
 
     public string Help => $"""
         semsearch [-n N] [-C|-l] [--words|--meaning] [--tag T] [--archive] <query> [path]
+                  [--without-tag T] [--outside P]
           Ranked search for the sections that best match a question or a topic, in every vault or below
           a path. Combines two rankings: by meaning (embeddings: the same idea in other words, also across
           languages) and by words (BM25: exact terms, names, abbreviations). The meaning score gets a
@@ -55,6 +56,10 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
           --words    rank by words only        --meaning  rank by meaning only
           --tag T    only notes that carry #T (nested too, ignoring case; 'help tags'); repeat
                      for notes with all of them. The ranking is the same, over fewer notes.
+          --without-tag T  leave out the notes that carry #T (nested too); repeat to leave out more.
+                     PDF pages stay, as they carry no tags.
+          --outside P  leave out the notes and PDF pages at or below the path P, a silo such as the
+                     folder of the topic itself; repeat for more. similar finds by place what this finds by words.
           --archive  search a vault's archive (_archive/) too: its notes and PDF pages; a path inside it always is
 
           semsearch how do agents read notes
@@ -73,6 +78,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         }
 
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
+        if (!Exclusions.TryParse(Name, options, out var exclusions, out var exclusionError)) return exclusionError!;
         var max = DefaultMax;
         if (options.Value("max") is { } maxText && (!int.TryParse(maxText, out max) || max < 1))
         {
@@ -126,6 +132,12 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
             }
         }
 
+        if (exclusions.Any)
+        {
+            found = [.. found.Where(n => !exclusions.LeavesOut(n))];
+            archived = [.. archived.Where(n => !exclusions.LeavesOut(n))];
+        }
+
         if (options.Values("tag") is { Count: > 0 } tags)
         {
             var (carrying, tagError) = TagFilter.Narrow(found, tags, scope, (archived, $"{Archived(options, operands, scope)} searches them"));
@@ -138,7 +150,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         var bound = index.Bound;
         var byPath = found.ToDictionary(n => n.Path);
         var mode = options.Has("words") ? SearchMode.Words : options.Has("meaning") ? SearchMode.Meaning : SearchMode.Hybrid;
-        var (listed, semantic, notIndexed) = await SectionSearch.RankAsync(found, scope, query, mode, max, index, ct, pages, options.Has("archive")) switch
+        var (listed, semantic, notIndexed) = await SectionSearch.RankAsync(found, scope, query, mode, max, index, ct, pages, options.Has("archive"), exclusions.LeavesOut) switch
         {
             { MeaningUnavailable: true } r => (null, r.Semantic, false),
             var r => (r.Hits, r.Semantic, r.FellBackToWords),
@@ -300,7 +312,9 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         var max = options.Value("max") is { } n ? $" -n {n}" : "";
         var shown = options.Has("context") ? " -C" : options.Has("list") ? " -l" : "";
         var mode = options.Has("words") ? " --words" : options.Has("meaning") ? " --meaning" : "";
-        var tags = string.Concat(options.Values("tag").Select(t => $" --tag {Rg.Quote(t)}"));
+        var tags = string.Concat(options.Values("tag").Select(t => $" --tag {Rg.Quote(t)}"))
+            + string.Concat(options.Values("without-tag").Select(t => $" --without-tag {Rg.Quote(t)}"))
+            + string.Concat(options.Values("outside").Select(p => $" --outside {Rg.Quote(p)}"));
         var words = string.Join(' ', query.Select(Rg.Quote));
         return $"semsearch --archive{max}{shown}{mode}{tags} {words}{(scope.IsRoot ? "" : " " + Rg.Quote(scope.Value))}";
     }

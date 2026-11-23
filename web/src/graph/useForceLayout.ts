@@ -66,7 +66,10 @@ export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { po
     const keyOf = new Map(nodes.map((n) => [n.id, n.key]));
     // Only edges with both ends in the answer: forceLink throws on an id it cannot find.
     const kept = edges.filter((e) => keyOf.has(e.source) && keyOf.has(e.target));
-    const shape = JSON.stringify([centreKey, nodes.map((n) => [n.id, n.key, radius(n, sizeBy)]), kept.map((e) => [e.source, e.target])]);
+    // The edge's similarity (the server's, or the placeholder) is part of the shape: scores coming in pull the layout
+    // into place, warming it gently as a new answer does.
+    const strength = (e: GEdge) => e.s ?? similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score;
+    const shape = JSON.stringify([centreKey, nodes.map((n) => [n.id, n.key, radius(n, sizeBy)]), kept.map((e) => [e.source, e.target, Math.round(strength(e) * 100)])]);
     if (sim.current && shape === signature.current) return;
     signature.current = shape;
     halt();
@@ -81,7 +84,7 @@ export function useForceLayout(nodes: GNode[], edges: GEdge[], opts: Opts): { po
       const p = seeds.get(n.id)!;
       return { id: n.id, key: n.key, r: collideRadius(radius(n, sizeBy)), centre: p.fixed, x: p.x, y: p.y, ...(p.fixed ? { fx: 0, fy: 0 } : {}) };
     });
-    const links = kept.map((e): SimLink => ({ source: e.source, target: e.target, s: similarity(keyOf.get(e.source)!, keyOf.get(e.target)!).score }));
+    const links = kept.map((e): SimLink => ({ source: e.source, target: e.target, s: strength(e) }));
     const forces = (s: Simulation<SimNode, SimLink>) =>
       s
         .force("link", forceLink<SimNode, SimLink>(links).id((n) => n.id).distance((l) => linkDistance(l.s)).strength((l) => linkStrength(l.s)))

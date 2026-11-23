@@ -42,11 +42,11 @@ afterEach(() => {
 const settings = () => screen.findByRole("dialog", { name: "Settings" });
 
 describe("the settings window", () => {
-  it("lists the eight entries in order", async () => {
+  it("lists the nine entries in order", async () => {
     api();
     renderApp("/settings/appearance");
     const nav = within(await settings()).getByRole("navigation", { name: "Settings" });
-    expect(within(nav).getAllByRole("link").map((l) => l.textContent)).toEqual(["Appearance", "Vaults", "Access", "Skills", "Calendar", "Security", "Your data", "About"]);
+    expect(within(nav).getAllByRole("link").map((l) => l.textContent)).toEqual(["Appearance", "Vaults", "Offline", "Access", "Skills", "Calendar", "Security", "Your data", "About"]);
     expect(within(nav).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/settings/access/keys");
     expect(within(nav).getByRole("link", { name: "Skills" })).toHaveAttribute("href", "/settings/skills/installed");
     expect(within(nav).getByRole("link", { name: "Appearance" })).toHaveAttribute("aria-current", "page");
@@ -58,7 +58,7 @@ describe("the settings window", () => {
     const window = await settings();
     const nav = within(window).getByRole("navigation", { name: "Settings" });
     expect(await within(nav).findByRole("link", { name: "External" })).toHaveAttribute("aria-current", "page");
-    expect(within(nav).getAllByRole("link").map((l) => l.textContent)).toEqual(["Appearance", "Vaults", "Access", "Skills", "Calendar", "External", "Security", "Your data", "About"]);
+    expect(within(nav).getAllByRole("link").map((l) => l.textContent)).toEqual(["Appearance", "Vaults", "Offline", "Access", "Skills", "Calendar", "External", "Security", "Your data", "About"]);
     expect(await within(window).findByRole("region", { name: "Embeddings" })).toBeInTheDocument();
   });
 

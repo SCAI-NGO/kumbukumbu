@@ -5,6 +5,7 @@ import { fetchFile } from "../api/notes";
 import type { FileAt } from "../api/paths";
 import { wheelFactor } from "./gestures";
 import { openPdf, pageLinks, type PageLink } from "./pdf";
+import { notOnDevice, OPENS_ONLINE } from "../offline/source";
 
 /** What the lightbox shows of a PDF: the page in view, how many there are, the zoom. */
 export interface PdfStatus {
@@ -188,7 +189,7 @@ export default function PdfPages({
   if (failure) {
     return (
       <p role="alert" className="absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-[#d9d6cf]">
-        {failure === "unreadable" ? "This PDF can't be loaded. Check the connection and try again." : "This PDF can't be shown: it seems to be damaged."}
+        {failure === "unreadable" && notOnDevice(`/${vault}/${path}`) ? OPENS_ONLINE : failure === "unreadable" ? "This PDF can't be loaded. Check the connection and try again." : "This PDF can't be shown: it seems to be damaged."}
       </p>
     );
   }
