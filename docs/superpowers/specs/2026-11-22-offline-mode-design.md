@@ -218,7 +218,7 @@ A purge also removes changes that haven't uploaded yet, so the device list says 
 ### 4.5 What changes in the security architecture
 
 - The "Lost or stolen laptop" row: the web app now keeps sealed note content in IndexedDB on devices where offline is on; what a finder can do (guess the password against PBKDF2 offline) and can't.
-- "There is no service worker": now there is one, caching the built assets only; API answers stay `no-store` and are never cached.
+- "There is no service worker": now there is one, caching the built assets only; API answers stay `no-store` and are never cached. **It checks what it serves:** the build writes each kept file's SHA-256 beside its name into the worker, and a kept file whose bytes differ is deleted and fetched again, never served, offline neither. Why: CacheStorage is the origin's, so any page of it can write the worker's cache, and one script run in the origin (a compromised dependency in one build, a minute at someone's developer tools) would otherwise be served on every later start, across sign-outs, password changes and the next builds. Subresource Integrity on `index.html` would cover only its entry files, online only.
 - A new §6 entry "Offline mirror", and the 0.7.0 audit (Mythos, blue team) covers it, the service worker and the mirror slot endpoints.
 
 ### 4.6 The mirror slot API (work package 3, built)
