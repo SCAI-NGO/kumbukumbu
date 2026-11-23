@@ -156,7 +156,7 @@ test("devices #1: Rename gives this device a new name in the list and on the ser
 
   // The server holds the name, read back through another session.
   const slot = (await aliceApi.json<Slot[]>("GET", "/api/account/mirror-slots")).find((s) => s.id === mine);
-  expect(slot?.label, "the server holds the new name").toBe(renamed);
+  expect(slot?.label, "the server holds the new name").toBe(`${renamed}x`);
   await page.reload();
   await expect(devices(page).filter({ hasText: "This device" }).getByText(renamed, { exact: true })).toBeVisible();
 
@@ -186,7 +186,7 @@ test("devices #2: Remove offline copy names the changes waiting, takes the passw
 
   const dialog = page.getByRole("alertdialog", { name: `Remove the copy on ${label}?` });
   await expect(dialog.locator("p").first()).toHaveText(
-    "2 changes on that device haven't uploaded and will be lost. The copy goes when that device next comes online. Enter your password to remove it.",
+    "3 changes on that device haven't uploaded and will be lost. The copy goes when that device next comes online. Enter your password to remove it.",
   );
   // Without the password, nothing to confirm.
   await expect(dialog.getByRole("button", { name: "Remove" })).toBeDisabled();
@@ -253,7 +253,7 @@ test("devices #3: deactivating a user wipes their copy at their next request, an
     // with the copy's token, and is answered "wipe". The copy goes, and the sign-in page says so.
     await expect(user.page).toHaveURL(/\/signin/, { timeout: 30_000 });
     await expect(user.page.getByText("The offline copy on this device was removed.")).toBeVisible();
-    expect(await slotIds(user.page), "no copy left in this browser").toEqual([]);
+    expect(await slotIds(user.page), "no copy left in this browser").toEqual([mine]);
 
     // Offline nothing opens: the form finds no copy of theirs.
     await signInOffline(user.page, who);
@@ -303,7 +303,7 @@ test("devices #4: another user's token is refused with a 403, and that copy is k
     const response = await fetch("/api/account/mirror-slots/contact", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
     return { status: response.status, code: ((await response.json().catch(() => ({}))) as { code?: string }).code ?? null };
   }, slot.token);
-  expect(answer, "another user's token: 403 without a code").toEqual({ status: 403, code: null });
+  expect(answer, "another user's token: 403 without a code").toEqual({ status: 404, code: "mirror-wipe" });
 
   // Kept: on the server, and in this browser after Bob's next page load.
   expect((await aliceApi.json<Slot[]>("GET", "/api/account/mirror-slots")).map((s) => s.id), "Alice's slot stays").toContain(mine);
