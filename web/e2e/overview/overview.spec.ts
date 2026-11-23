@@ -97,11 +97,8 @@ const row = (page: Page, path: string) => rows(page).getByRole("listitem").filte
 /** The row's state line: the word, the bundle, the snapshot and who published it. */
 const state = (r: Locator) => r.getByText(/^(Up to date|Copy is older than the note) · /);
 
+/** `/published` itself. On the phone the install hint, shown once, stays behind the window, inert: nothing to answer. */
 async function openPublished(page: Page) {
-  const hint = page.getByRole("region", { name: "Install Kumbu² as an app" });
-  await page.addLocatorHandler(hint, async () => {
-    await hint.getByRole("button", { name: "Not now" }).click();
-  });
   await page.goto("/published");
   await expect(published(page)).toBeVisible();
 }
