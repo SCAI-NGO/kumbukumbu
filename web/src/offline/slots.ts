@@ -25,6 +25,43 @@ async function answer<T>(response: Response): Promise<T> {
   throw new RejectedError(error?.error ?? `Kumbu² answered ${response.status}.`, response.status);
 }
 
+/** A device with a copy, as Settings, Offline lists them (§4.6). `current`: this browser's. */
+export interface DeviceCopy { id: string; label: string; createdAt: string; contactAt: string | null; waiting: number; current: boolean; }
+
+async function send(method: "GET" | "DELETE", path: string): Promise<Response> {
+  try {
+    return await fetch(new Request(new URL(`${BASE}${path}`, window.location.origin), { method, credentials: "same-origin" }));
+  } catch {
+    throw new OfflineError("Kumbu² can't be reached.");
+  }
+}
+
+/** The devices with a copy of the user's notes. */
+export async function listDeviceCopies(): Promise<DeviceCopy[]> {
+  return answer<DeviceCopy[]>(await send("GET", ""));
+}
+
+/**
+ * Whether removing another device's copy needs the password: its last contact reported changes waiting, or it hasn't
+ * reported yet. Those changes are the one thing in Kumbu² without a trash or a history (design §4.4).
+ */
+export const needsPassword = (d: DeviceCopy) => !d.current && (d.waiting > 0 || d.contactAt === null);
+
+/** The server wants the password for this removal: the device has (just) reported changes waiting. */
+export class PasswordNeededError extends RejectedError {}
+
+/** Removes a device's copy: it goes when that device next comes online, with what it hadn't uploaded. */
+export async function removeDeviceCopy(id: string, password?: string): Promise<void> {
+  const path = `/${encodeURIComponent(id)}`;
+  const response = password === undefined ? await send("DELETE", path) : await post(`${path}/remove`, { password });
+  if (response.status === 404 || response.ok) return;
+  if (response.status === 400) {
+    const error = (await response.clone().json().catch(() => null)) as { error?: string; code?: string } | null;
+    if (error?.code === "changes-waiting") throw new PasswordNeededError(error.error ?? "Enter your password.", 400);
+  }
+  await answer(response);
+}
+
 export const mirrorSlots: MirrorSlotsPort = {
   async create(label) {
     return answer<SlotAnswer & { token: string }>(await post("", { label }));

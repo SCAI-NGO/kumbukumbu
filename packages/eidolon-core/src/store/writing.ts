@@ -86,7 +86,8 @@ export class NoteWriter {
     const [done] = await this.vault.change([path], (p, entry) => {
       if (entry === undefined) return Promise.resolve(false);
       if (entry.local === undefined) throw new NotHereError(path);
-      return Promise.resolve({ entry: { path: p, ...(entry.remote ? { remote: entry.remote } : {}) }, body: null });
+      // Marked as deleted here, so the engine trashes it in Kumbu² rather than take the missing text for damage.
+      return Promise.resolve({ entry: { path: p, ...(entry.remote ? { remote: entry.remote } : {}), deleted: true as const }, body: null });
     });
     if (done) this.written(path);
     return done!;

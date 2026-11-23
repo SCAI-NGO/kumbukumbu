@@ -12,6 +12,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { fetchFile, useLinks, useNote, useTree } from "../api/notes";
 import { openRecordStorage } from "./idbStorage";
 import { isNotOnDevice, nameVaults, notOnDevice, OfflineSource, setOfflineSource } from "./source";
+import { fastKdf } from "../test/fastKdf";
 
 const vaults = [{ id: "v1", tag: "t1", canWrite: true, pending: false }];
 
@@ -23,13 +24,13 @@ async function copy(): Promise<SealedMirror> {
   };
   const ports: StorePorts = {
     storage: await openRecordStorage("test", new IDBFactory()),
-    crypto: { subtle: crypto.subtle, randomBytes: (n) => crypto.getRandomValues(new Uint8Array(n)) },
+    crypto: { subtle: crypto.subtle, randomBytes: (n) => crypto.getRandomValues(new Uint8Array(n)), kdf: fastKdf },
     slots,
     locks: { run: (_name, fn) => fn(), hold: () => ({ acquired: Promise.resolve(), release() {} }) },
     channel: () => ({ post() {}, listen: () => () => {} }),
     clock: { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as number) },
   };
-  return new MirrorCopies(ports).create({ userId: "u1", username: "ada", password: "pw", label: "Test", idleMs: 60_000, iterations: 1000 });
+  return new MirrorCopies(ports).create({ userId: "u1", username: "ada", password: "pw", label: "Test", idleMs: 60_000 });
 }
 
 let mirror: SealedMirror;

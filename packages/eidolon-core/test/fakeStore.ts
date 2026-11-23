@@ -4,14 +4,26 @@
 // with the sync code: the store isn't vendored.
 import { webcrypto } from "node:crypto";
 import type { Clock } from "../src/engine/ports";
-import type { CryptoPort } from "../src/store/crypto";
+import type { CryptoPort, PasswordKdf } from "../src/store/crypto";
 import type { MirrorSlotsPort, RecordStorage, SlotAnswer, SlotVault, StorePorts, TabChannel, TabLocks, TabMessage } from "../src/store/ports";
 
 type Bytes = Uint8Array<ArrayBuffer>;
 
+/**
+ * A stand-in for the host's Argon2id, fast for the tests: SHA-256 over the parameters, salt and password. It keeps
+ * what the store relies on (another password, salt or parameter gives another key); the real one is the web app's.
+ */
+export const fakeKdf: PasswordKdf = {
+  async derive(password, salt, params) {
+    const label = new TextEncoder().encode(`${JSON.stringify(params)}\0${Buffer.from(salt).toString("base64url")}\0${password}`);
+    return new Uint8Array(await webcrypto.subtle.digest("SHA-256", label));
+  },
+};
+
 export const nodeCrypto: CryptoPort = {
   subtle: webcrypto.subtle,
   randomBytes: (n) => webcrypto.getRandomValues(new Uint8Array(n)),
+  kdf: fakeKdf,
 };
 
 export class MemoryStorage implements RecordStorage {

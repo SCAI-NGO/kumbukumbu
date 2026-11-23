@@ -28,6 +28,8 @@ import { FindBar } from "../note/NoteTools";
 import { DeleteNoteDialog } from "../note/NoteView";
 import SidePanel, { sidePanelId } from "../note/SidePanel";
 import InstallHint from "../update/InstallHint";
+import OfflineInvite from "../offline/OfflineInvite";
+import PasswordChangedCopies from "../offline/PasswordChangedCopies";
 import UpdateBar from "../update/UpdateBar";
 import { movedPath, useEditor, type Side } from "../state/editor";
 import { useSession } from "../state/session";
@@ -563,6 +565,8 @@ export default function MobileShell() {
       <StorageNotice />
       <SkillsNotice />
       <InstallHint />
+      <OfflineInvite />
+      <PasswordChangedCopies />
       {/* In the tab order the docked tree comes before the note, as it is shown: top bar, tree, note, dock. */}
       <div className="flex min-h-0 flex-1">
         {docked && <TreeDrawer docked hidden={collapsed} {...treeProps} />}

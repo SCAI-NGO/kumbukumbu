@@ -8,7 +8,7 @@ import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { atLeast, fileKindOfEntry, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder, type VaultView } from "../api/notes";
-import { boardUrl, calendarUrl, folderOf, galleryUrl, markerOf, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { boardUrl, calendarUrl, folderOf, galleryUrl, inVault, markerOf, publishableAsNote, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { usePublications, usePublishEnabled } from "../api/publications";
 import { storageText } from "../api/storage";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -53,6 +53,7 @@ import { flaggable } from "../flags/FlagMenu";
 import FlagIcon from "../flags/FlagIcon";
 import VaultSwitcher from "./VaultSwitcher";
 import { forgetLastNote } from "./lastNote";
+import { useKeepOffline } from "../offline/keepOffline";
 
 const PublishDialog = lazy(() => import("./PublishDialog"));
 
@@ -126,6 +127,8 @@ type FolderActions = {
   /** The caller's level in the vault: below `write` a folder has no actions, and the board's folder wants `maintain`. */
   level: Level;
   publishing: Publishing | null;
+  /** Keep offline for a folder (its path in the vault, "" the vault): only with a copy on this device. */
+  keepOffline(folder: string): MenuItem[];
 };
 
 /**
@@ -133,7 +136,7 @@ type FolderActions = {
  * entries to them). An empty folder shown in the tree is there only by its marker, so it can be removed: without
  * asking, as the trash keeps it.
  */
-function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing }: FolderActions): MenuItem[] {
+function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRemove, onPhoto, removing, level, publishing, keepOffline }: FolderActions): MenuItem[] {
   const inner = folder.path.split("/").length > 2;
   const writes = atLeast(level, "write");
   const moves = inner && mayChange(level, folder.path);
@@ -151,6 +154,7 @@ function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRem
     ...(moves && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
     // The vault itself is no folder to mark.
     ...(inner ? entriesOf(publishing, folder.path, false) : []),
+    ...keepOffline(inVault(folder.path)),
   ];
 }
 
@@ -575,6 +579,7 @@ export default function TreeDrawer(props: {
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const active = vaults.data?.find((v) => v.name === activeVault);
+  const keepOffline = useKeepOffline(active?.id);
   const membership = active?.membership;
   const embeddings = active?.embeddings;
   const level = levelOf(active);
@@ -679,6 +684,7 @@ export default function TreeDrawer(props: {
     removing: removeFolder.isPending,
     level,
     publishing: publishingActions,
+    keepOffline,
   };
   const hasBoard = !!(activeVault && tree.data && findFolder(tree.data.root, `/${activeVault}/Board`)?.notes.some((n) => n.name === "Board.md"));
   // The board is a page of its own: the drawer, left open, would be open again on the way back to the notes.
