@@ -64,7 +64,9 @@
 //   in over the app"; sign-out with changes waiting, and pending until online → offline.spec #5; Vitest unlock.test.tsx
 //   "keeps a mark until the server could be told", life.test.tsx "a sign-out made offline reaches the server …".
 // §3a Purges and discreet vaults
-// - A purge names no vault → gaps #3; with changes lost → Vitest mode.test.tsx "a purge names no vault"; a whole wipe
+// - A purge names no vault → gaps #3 (Bob online while he loses the vault: the socket's mirror frame and its contact);
+//   the reconnect path (Bob offline while he loses it, back after) → left out, unclear: tried once, no notice either,
+//   and nothing in the page tells which contact purged; with changes lost → Vitest mode.test.tsx "a purge names no vault"; a whole wipe
 //   → offline.spec #6, devices #3.
 // - A discreet note open when the connection drops → Vitest discreet/offlineEnd.test.tsx; left out here (the hold of
 //   discreet text in memory only can't be read from the page).
@@ -185,10 +187,13 @@ async function turnOn(page: Page, user: User = "alice", vault = "Work"): Promise
   await page.getByRole("button", { name: "Keep them here" }).click();
   // Recorded for the clean-up as soon as the copy is here, before anything else is asserted.
   let mine: { id: string; token: string }[] = [];
-  await expect
-    .poll(async () => (mine = (await copies(page)).filter((s) => !before.includes(s.id))).length, { message: "a copy made on this device", timeout: 30_000 })
-    .toBeGreaterThan(0);
-  made.push(...mine.map((s) => ({ user, id: s.id })));
+  try {
+    await expect
+      .poll(async () => (mine = (await copies(page)).filter((s) => !before.includes(s.id))).length, { message: "a copy made on this device", timeout: 30_000 })
+      .toBeGreaterThan(0);
+  } finally {
+    made.push(...mine.map((s) => ({ user, id: s.id })));
+  }
   expect(mine, "one copy made on this device").toHaveLength(1);
   await expect(keep(page)).toBeChecked();
   await untilHeld(page, vault);
@@ -395,9 +400,10 @@ test("gaps #2: offline, what needs a connection stays in its menu, dimmed, with 
 test("gaps #3: a vault's copy purged after access is lost: the notice names no vault @offline", async ({ bobPage, bobApi }) => {
   test.info().annotations.push({
     type: "finding",
-    description: "F-06: a vault purged from the copy (access lost) shows no notice: the engines drop it on their own refresh, and the notice comes only from a contact that purges",
+    description:
+      "F-06: a vault purged from the copy (access lost) shows no notice. Seen with Bob online: the socket's {\"type\":\"mirror\"} frame comes within 20 ms of his leaving, the contact it starts answers one vault fewer, the copy no longer holds the vault (offline: \"… is not kept on this device.\"), yet no status region ever renders in 40 s and nothing is logged; the cause isn't visible from the page (mode.ts:253 sets the notice only when that contact's own purge counts a vault)",
   });
-  // test.fail();
+  test.fail();
   test.setTimeout(240_000);
   // A vault of the test's own, shared with Bob; his device keeps it with All my vaults.
   const share = await shareWithBob("Purge", "write");
@@ -405,28 +411,12 @@ test("gaps #3: a vault's copy purged after access is lost: the notice names no v
   try {
     await bobApi.putNote(`/${share.vault}/Plan.md`, "# Plan\n\nBob's copy.\n");
     await prepare(bobPage);
-    bobPage.on("websocket", (ws) => ws.on("framereceived", (f) => { if (String(f.payload).includes("mirror")) console.log("DIAG frame", Date.now() % 100000, String(f.payload)); }));
-    bobPage.on("request", (r) => { if (r.url().includes("mirror-slots/contact") || r.url().endsWith("/api/vaults")) console.log("DIAG req", Date.now() % 100000, r.method(), new URL(r.url()).pathname); });
     await turnOn(bobPage, "bob", share.vault);
     await bobPage.goto(notePage(`/${share.vault}/Plan.md`));
     await expect(article(bobPage)).toContainText("Bob's copy.");
 
-    await bobPage.evaluate(() => {
-      const w = window as unknown as { seen: string[] };
-      w.seen = [];
-      new MutationObserver(() => {
-        for (const e of document.querySelectorAll("[role=status]")) {
-          const t = `${e.getAttribute("aria-label")}: ${e.textContent}`;
-          if (w.seen.at(-1) !== t) w.seen.push(`${Date.now() % 100000} ${t}`);
-        }
-      }).observe(document.body, { subtree: true, childList: true, characterData: true });
-    });
-    console.log("DIAG unshare at", Date.now() % 100000);
     // Bob leaves and Alice deletes the vault, from other sessions: his sockets lose it, and his browser purges it.
     await unshare(share);
-    console.log("DIAG unshared at", Date.now() % 100000);
-    await bobPage.waitForTimeout(40_000);
-    console.log("DIAG seen", JSON.stringify(await bobPage.evaluate(() => (window as unknown as { seen: string[] }).seen)));
     shared = false;
     const notice = bobPage.getByRole("status", { name: "Offline copy" });
     // Exact: the sentence of §3a, with no vault's name in it.
