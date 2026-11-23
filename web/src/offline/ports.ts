@@ -3,9 +3,10 @@
 // slot, Web Locks and a BroadcastChannel per copy, and the persistence the copy asks the browser for (§5).
 import type { StorePorts, TabChannel, TabLocks, TabMessage } from "eidolon-core/store/ports";
 import { openRecordStorage } from "./idbStorage";
+import { browserKdf } from "./kdf";
 import { mirrorSlots } from "./slots";
 
-const locks: TabLocks = {
+export const locks: TabLocks = {
   // The grant callback returns a promise, which request() passes on: awaited, it is the callback's result.
   run: async (name, fn) => await navigator.locks.request(name, fn),
   hold(name) {
@@ -35,7 +36,7 @@ function channel(copy: string): TabChannel {
 export async function browserPorts(): Promise<StorePorts> {
   return {
     storage: await openRecordStorage(),
-    crypto: { subtle: crypto.subtle, randomBytes: (n) => crypto.getRandomValues(new Uint8Array(n)) },
+    crypto: { subtle: crypto.subtle, randomBytes: (n) => crypto.getRandomValues(new Uint8Array(n)), kdf: browserKdf },
     slots: mirrorSlots,
     locks,
     channel,

@@ -16,7 +16,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
     [
         new(null, "path"), new(null, "orphans"), new(null, "hubs"), new(null, "unresolved"),
         new(null, "depth", true), new(null, "out"), new(null, "in"), new(null, "cap", true), new('n', "top", true),
-        new(null, "tag", true), new(null, "archive"), new(null, "no-days"), new(null, "no-attachments"), new(null, "no-ghosts"),
+        new(null, "tag", true), new(null, "without-tag", true), new(null, "archive"), new(null, "no-days"), new(null, "no-attachments"), new(null, "no-ghosts"),
     ];
 
     private static readonly string[] Modes = ["path", "orphans", "hubs", "unresolved"];
@@ -51,6 +51,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
           The links that lead to no note, by how many notes write them, with the notes and lines.
 
           --tag T         only notes with the tag (several: all of them); attachments and names stay when a kept note links to them
+          --without-tag T leave out the notes with the tag (several: any of them), e.g. earlier findings that link what they connect
           --archive       take in the notes and attachments of the archive (_archive/); a path inside it always does
           --no-days       leave out day and week notes
           --no-attachments, --no-ghosts   leave out attachments, or the links that lead to nothing
@@ -101,6 +102,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
         if (options.Has("out") && options.Has("in")) return "graph: --out and --in are exclusive: give one";
         if (options.Has("top") && mode != "hubs") return "graph: -n applies to --hubs only";
         if (options.Values("tag").Count > GraphFilter.MaxFilters) return $"graph: --tag can be given at most {GraphFilter.MaxFilters} times";
+        if (options.Values("without-tag").Count > GraphFilter.MaxFilters) return $"graph: --without-tag can be given at most {GraphFilter.MaxFilters} times";
         if (mode is "orphans" or "hubs" or "unresolved")
         {
             foreach (var local in new[] { "depth", "cap", "out", "in" }) if (options.Has(local)) return $"graph: --{local} applies to a local graph only";
@@ -116,7 +118,7 @@ public sealed class GraphCommand(INoteReader notes) : ICommand
 
     private static GraphFilter Filter(Options options, IReadOnlyList<VaultPath> paths, VaultPath scope) =>
         new(paths, options.Values("tag"), !options.Has("no-days"), !options.Has("no-attachments"), !options.Has("no-ghosts"),
-            ArchiveFolder.Shown(scope, options.Has("archive")));
+            ArchiveFolder.Shown(scope, options.Has("archive"))) { WithoutTags = options.Values("without-tag") };
 
     private static VaultPath VaultOf(VaultPath path) => VaultPath.Root.Child(path.Segments[0]);
 

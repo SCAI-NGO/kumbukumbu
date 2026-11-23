@@ -62,6 +62,7 @@ function signedIn(more: Parameters<typeof fakeApi>[0] = {}) {
     },
     "GET /api/version/*": () => json(200, { path: "/Work/a.md", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
     "GET /api/links/*": () => json(200, []),
+    "GET /api/similar/*": () => json(200, { state: "ready", notes: [{ path: "/Work/b.md", line: 1, text: "", score: 0.7 }], pending: 0 }),
     "GET /api/backlinks/*": () => json(200, []),
     "GET /api/changes": () => json(200, []),
     "GET /api/graph/local": (r) => {
@@ -186,7 +187,6 @@ describe("the graph in the shell, as a column or a dialog", () => {
   });
 
   it("Escape closes a suggestion's card in the dialog, and the dialog stays", async () => {
-    localStorage.setItem("kumbu.graph.mockSimilarity", "1");
     localStorage.setItem("kumbu.graphPrefs", JSON.stringify({ suggestions: true }));
     width = 90;
     await open();

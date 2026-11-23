@@ -8,6 +8,7 @@ export type GraphNodeView = components["schemas"]["GraphNodeView"];
 export type LocalGraphView = components["schemas"]["LocalGraphView"];
 export type GraphNodeDetailView = components["schemas"]["GraphNodeDetailView"];
 export type GraphPathsView = components["schemas"]["GraphPathsView"];
+export type GraphSimilarityView = components["schemas"]["GraphSimilarityView"];
 
 /** What the graph shows: how far the walk goes, and which kinds of node besides notes. */
 export type GraphFilters = { depth: 1 | 2 | 3; days: boolean; attachments: boolean; ghosts: boolean };
@@ -35,9 +36,7 @@ export function useLocalGraph(path: string | null, filters: GraphFilters, enable
       const known = queryClient.getQueryData<LocalGraphView>(queryKey);
       const etag = known ? etags.get(key) : undefined;
       const result = await api.GET("/api/graph/local", {
-        params: {
-          query: { path: path!, depth: filters.depth, dir: "both", cap: capFor(filters.depth), days: filters.days, attachments: filters.attachments, ghosts: filters.ghosts },
-        },
+        params: { query: localQuery(path!, filters) },
         headers: etag ? { "If-None-Match": etag } : {},
       });
       // call() throws on anything but 2xx, and a 304 is the answer we already have.
@@ -48,6 +47,31 @@ export function useLocalGraph(path: string | null, filters: GraphFilters, enable
       else etags.delete(key);
       return data;
     },
+  });
+}
+
+/** The query of the local graph `filters` ask for, as `/local` and `/similarity` both take it. */
+const localQuery = (path: string, filters: GraphFilters) => ({
+  path,
+  depth: filters.depth,
+  dir: "both" as const,
+  cap: capFor(filters.depth),
+  days: filters.days,
+  attachments: filters.attachments,
+  ghosts: filters.ghosts,
+});
+
+/**
+ * How close in meaning the notes of each edge of the same local graph are (spec 2026-11-22-graph-out-of-preview §1).
+ * Its own query, as the scores change with the prose while the graph's `ETag` doesn't; asked again with the graph on a
+ * `changed` nudge, as everything under `["graph"]` is. The last answer stays meanwhile.
+ */
+export function useGraphSimilarity(path: string | null, filters: GraphFilters, enabled = true) {
+  return useQuery<GraphSimilarityView>({
+    queryKey: ["graph", "similarity", path, filters],
+    enabled: enabled && path !== null,
+    placeholderData: (previous) => previous,
+    queryFn: () => call(api.GET("/api/graph/similarity", { params: { query: localQuery(path!, filters) } })),
   });
 }
 

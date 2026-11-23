@@ -7,6 +7,7 @@ import Badge from "../calendar/Badge";
 import { useBadge, type Share } from "../calendar/useBadge";
 import { useDialog } from "../hooks/useDialog";
 import { useTruncated } from "../hooks/useTruncated";
+import { OfflineMark } from "../offline/OfflineBar";
 import { useEditor } from "../state/editor";
 
 const entryClass = "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[8px] px-3 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
@@ -133,7 +134,7 @@ export default function VaultSwitcher({ onNewVault, onRename, onMoreVaults }: { 
   const [open, setOpen] = useState(false);
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(active ?? "");
   return (
-    <div className="relative min-w-0">
+    <div className="relative flex min-w-0 items-center gap-1">
       <button
         type="button"
         aria-label={active ? `Switch vault: ${active}` : "Switch vault"}
@@ -148,6 +149,7 @@ export default function VaultSwitcher({ onNewVault, onRename, onMoreVaults }: { 
         </span>
         <ChevronsUpDown size={16} aria-hidden className="flex-none text-muted" />
       </button>
+      <OfflineMark />
       {open && <Popout onClose={() => setOpen(false)} onNewVault={onNewVault} onRename={onRename} onMoreVaults={onMoreVaults} />}
     </div>
   );

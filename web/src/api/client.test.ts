@@ -120,6 +120,19 @@ describe("api client", () => {
     expect(useSession.getState().ended).toBe(false);
   });
 
+  it("repeats a guarded request without a body too, also where Request has no body property (Firefox)", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    // Firefox doesn't implement Request.body: it reads undefined, never null.
+    vi.spyOn(Request.prototype, "body", "get").mockReturnValue(undefined as never);
+    const answers = [passwordRequired, () => json(200, { link: "l", snapshotAt: "2026-11-05T14:32:00Z", plain: [] })];
+    const fetch = fakeApi({ "PUT /api/publications/Work/Questions.md": () => answers.shift()!() });
+    const result = call(api.PUT("/api/publications/{vault}/{path}", { params: { path: { vault: "Work", path: "Questions.md" } } }));
+    await answerPrompt(true);
+    expect(await result).toMatchObject({ link: "l" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.map((c) => c[0].method)).toEqual(["PUT", "PUT"]);
+  });
+
   it("keeps no copy of an upload's body to repeat: uploads are never guarded", async () => {
     useSession.getState().signedIn({ user, previousSignInAt: null });
     fakeApi({ "PUT /api/files/*": () => json(201, {}), "POST /api/upload/*": () => json(200, {}) });

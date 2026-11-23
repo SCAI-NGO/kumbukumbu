@@ -21,7 +21,8 @@ export type GNode = {
   leftOut: number;
 };
 
-export type GEdge = { source: string; target: string; flags: number };
+/** `s`: how alike the two ends are, 0 to 1, once known (`withSimilarity`); the placeholder until then. */
+export type GEdge = { source: string; target: string; flags: number; s?: number };
 
 /** The note or file at `path` in a folder's tree, if it is there. */
 export function treeEntry(root: TreeFolder, path: string): TreeNote | null {

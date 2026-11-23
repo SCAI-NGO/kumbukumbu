@@ -10,12 +10,15 @@ import PasswordPrompt from "./components/PasswordPrompt";
 import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hideAgain";
 import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
 import { followVaults } from "./discreet/state";
+import { useOfflineCopy } from "./offline/copy";
+import { openCopy, useOfflineMode } from "./offline/mode";
 import ForgotPassword from "./routes/ForgotPassword";
 import { Moved, SettingsMoved } from "./routes/settings/redirects";
 import SignIn from "./routes/SignIn";
 import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
 import { useApplyUpdates } from "./update/apply";
+import OfflineBar from "./offline/OfflineBar";
 import UpdateBar from "./update/UpdateBar";
 import { setWindowRoutes } from "./windows/store";
 import WindowHost from "./windows/WindowHost";
@@ -45,6 +48,7 @@ function Root() {
   const inShell = useMatches().some((m) => (m.handle as { shell?: boolean } | undefined)?.shell === true);
   return (
     <>
+      {!inShell && <OfflineBar />}
       {!inShell && <UpdateBar />}
       <Outlet />
       <PasswordPrompt />
@@ -59,6 +63,8 @@ function RequireSession({ children }: { children?: ReactNode }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useLatestPathname();
+  const offline = useOfflineMode((s) => s.offline);
+  const copyOpen = useOfflineCopy((s) => s.mirror !== null);
   useDiscreetMode();
   // Here, not in the shell: a deep link to the calendar presets the zone too.
   useZonePreset();
@@ -66,7 +72,11 @@ function RequireSession({ children }: { children?: ReactNode }) {
   useEffect(() => followVaults(queryClient), [queryClient]);
 
   useEffect(() => {
-    if (session.data) signedIn(session.data);
+    if (!session.data) return;
+    signedIn(session.data);
+    useOfflineMode.getState().signedIn();
+    // Signed in, the slot answers for the offline copy without asking (design §4.2); after the form, it opened already.
+    void openCopy(session.data.user.id);
   }, [session.data, signedIn]);
 
   // Each read: one answering as the last did is the same object, and may still need following (a hide unsent).
@@ -74,7 +84,12 @@ function RequireSession({ children }: { children?: ReactNode }) {
     if (session.data) followSession(queryClient, navigate, pathname(), session.data.discreet);
   }, [session.data, session.dataUpdatedAt, queryClient, navigate, pathname]);
 
+  // Offline, the copy on this device stands in for the session: at once rather than after the session's retries, and
+  // when the session read again fails while offline (a refetch keeps its old data, but reports the error); without
+  // the copy unlocked, the sign-in form opens it (§3a).
+  if (offline && copyOpen) return children ?? <Outlet />;
   if (session.isPending) return null;
+  if (session.isError && !session.data && offline) return <Navigate to={`/signin?next=${encodeURIComponent(pathname())}`} replace />;
   // A 401 has already sent the app to sign-in; anything else is shown.
   if (session.isError) return <p className="p-4 text-text">{errorText(session.error)}</p>;
   return children ?? <Outlet />;
@@ -145,6 +160,7 @@ export const routes: RouteObject[] = [
                 children: [
                   { path: "/settings/appearance", lazy: lazyPage(() => import("./routes/settings/Appearance")) },
                   { path: "/settings/vaults", lazy: lazyPage(() => import("./routes/settings/Vaults")) },
+                  { path: "/settings/offline", lazy: lazyPage(() => import("./routes/settings/Offline")) },
                   { path: "/settings/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },
                   { path: "/settings/access", element: <Navigate to="/settings/access/keys" replace /> },
                   { path: "/settings/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },

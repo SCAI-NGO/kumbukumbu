@@ -10,7 +10,7 @@ STACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trap '"$STACK_DIR/down.sh"; rm -rf "$STACK_DIR/../.auth" "$STACK_DIR/../.results"' EXIT
 "$STACK_DIR/up.sh" || exit 1
 cd "$STACK_DIR/../.."
-pnpm exec playwright test --project=setup --project=mcp --project=desktop --project=phone --pass-with-no-tests "$@"
+pnpm exec playwright test --project=setup --project=mcp --project=desktop --project=phone --project=offline-firefox --pass-with-no-tests "$@"
 parallel=$?
 [ -s e2e/.auth/secrets.json ] || exit "$parallel"
 pnpm exec playwright test --no-deps --workers=1 --project=serial --project=serial-phone --pass-with-no-tests "$@"
