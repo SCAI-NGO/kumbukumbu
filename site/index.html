@@ -119,10 +119,11 @@
             <g transform="scale(.62)"><use href="#petals"/></g><circle class="heart" r="8"/>
             <circle class="badge" cx="25" cy="25" r="10"/><path class="tick" d="M20 25 l4 4 l7 -8"/>
           </g></g></svg>
-          <b>v1 · 0.1.0</b><span>internally released · October ’26</span>
+          <b>Already in 0.6.0</b><span>What we already achieved</span>
           <div class="more">
-            <p>The base everything else grows from: your notes live in vaults, and any AI that speaks MCP (the common plug between AI apps and tools) can read, search and edit them.</p>
-            <p>Everything is stored encrypted, every change lands in the history, and checkpoints take you back to a good moment. We tried it out among ourselves first.</p>
+            <p>Your notes in vaults, encrypted, with every change in the history, and built agent-first: any AI that speaks MCP reads, searches and edits them through tools designed for agents rather than borrowed from people. Search by meaning finds a note by what it says, not only by its words, and agents keep their project memory as notes you own.</p>
+            <p>A campy little calendar made of your notes, Kanban boards where every card is a note, and a graph of how your notes link, still in preview. Obsidian sync, WebDAV, shared vaults and skills your AI can pick up.</p>
+            <p>And in 0.6.0 itself: every file type travels with your vault, Publish takes the notes a note links to along, Who wrote what shows each line’s author, plus a command palette, a split view and note templates.</p>
           </div></div>
       </li>
       <li style="--i:1">
@@ -131,13 +132,14 @@
         <div class="stop p2" role="button" tabindex="0" aria-haspopup="dialog">
           <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
             <path class="sprig" d="M8 20 C 18 34, 34 36, 42 30 C 34 18, 18 14, 8 20 Z"/>
-            <g transform="scale(.62)"><use href="#petals"/></g><circle class="heart" r="8"/>
-            <circle class="badge" cx="25" cy="25" r="10"/><path class="tick" d="M20 25 l4 4 l7 -8"/>
+            <path class="bud-shut" d="M0 -26 C 13 -14, 14 2, 0 14 C -14 2, -13 -14, 0 -26 Z"/><path class="bud-fold" d="M0 -22 C -5 -10, -5 2, 0 12"/>
+            <path class="sepal" d="M0 16 C -11 14, -18 5, -17 -3 C -9 0, -3 6, 0 16 Z"/><path class="sepal" d="M0 16 C 11 14, 18 5, 17 -3 C 9 0, 3 6, 0 16 Z"/>
           </g></g></svg>
-          <b>v2 · 0.2.0</b><span>first public release · October ’26</span>
+          <b>Coming in 0.7.0</b><span>November ’26</span>
           <div class="more">
-            <p>The first release for everyone. Obsidian syncs after a short pairing code, Kumbu² installs as an app and keeps itself up to date, vaults go out and come back in as a ZIP, and a welcome vault shows you around.</p>
-            <p>You can see what your AI changed, and look into a checkpoint to take a thought back with you.</p>
+            <p>Offline mode: keep your vaults on a device you trust and read and write them without a connection; your changes sync once you’re back. The copy on the device is sealed and encrypted, unlocked with your password (stretched with Argon2id), and you can rename or remove each device’s copy in Settings.</p>
+            <p>The graph view comes out of preview, and Kumbu² suggests links between notes that are close in meaning. A knowledge synthesis skill, in the spirit of Don Swanson, lets your AI find the connections your notes hold but never state.</p>
+            <p>And a Published window: every note you published, where it lives, and what changed since, side by side.</p>
           </div></div>
       </li>
       <li style="--i:2">
@@ -146,13 +148,13 @@
         <div class="stop p3" role="button" tabindex="0" aria-haspopup="dialog">
           <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
             <path class="sprig" d="M-8 20 C -18 34, -34 36, -42 30 C -34 18, -18 14, -8 20 Z"/>
-            <g transform="scale(.62)"><use href="#petals"/></g><circle class="heart" r="8"/>
-            <circle class="badge" cx="25" cy="25" r="10"/><path class="tick" d="M20 25 l4 4 l7 -8"/>
+            <path class="bud-shut" d="M0 -26 C 13 -14, 14 2, 0 14 C -14 2, -13 -14, 0 -26 Z"/><path class="bud-fold" d="M0 -22 C -5 -10, -5 2, 0 12"/>
+            <path class="sepal" d="M0 16 C -11 14, -18 5, -17 -3 C -9 0, -3 6, 0 16 Z"/><path class="sepal" d="M0 16 C 11 14, 18 5, 17 -3 C 9 0, 3 6, 0 16 Z"/>
           </g></g></svg>
-          <b>v2.5</b><span>Boards &amp; attachments · released with v3 · November ’26</span>
+          <b>Coming in 0.8.0</b><span>Early December ’26</span>
           <div class="more">
-            <p>A vault can become a Kanban board, a wall of columns where every card is simply a note. Markdown links count just as much as wiki links.</p>
-            <p>And attachments your AI can actually look at: pictures and PDFs arrive as what they are, not as a pile of text.</p>
+            <p>Queries over your notes, in the style of Obsidian’s Bases, with typed properties: dates that are dates, numbers that are numbers, tables and views you build from what your notes already say. And moving and renaming notes while offline.</p>
+            <p>Eidolon, the part of Kumbu² that keeps, syncs and searches your notes on your device, moves out into a library of its own under the LGPL. That brings Kumbu²’s notes into <a href="https://teaser.chatsundere.me" target="_blank" rel="noopener">Chatsundere</a>, where the same notes live end-to-end encrypted, with OPAQUE sign-in and Chatsundere’s C2Duress principle, rather than offline mode as one feature among many.</p>
           </div></div>
       </li>
       <li style="--i:3">
@@ -161,59 +163,28 @@
         <div class="stop p4" role="button" tabindex="0" aria-haspopup="dialog">
           <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
             <path class="sprig" d="M8 20 C 18 34, 34 36, 42 30 C 34 18, 18 14, 8 20 Z"/>
-            <g transform="scale(.62)"><use href="#petals"/></g><circle class="heart" r="8"/>
-            <circle class="badge" cx="25" cy="25" r="10"/><path class="tick" d="M20 25 l4 4 l7 -8"/>
+            <path class="bud-shut" d="M0 -26 C 13 -14, 14 2, 0 14 C -14 2, -13 -14, 0 -26 Z"/><path class="bud-fold" d="M0 -22 C -5 -10, -5 2, 0 12"/>
+            <path class="sepal" d="M0 16 C -11 14, -18 5, -17 -3 C -9 0, -3 6, 0 16 Z"/><path class="sepal" d="M0 16 C 11 14, 18 5, 17 -3 C 9 0, 3 6, 0 16 Z"/>
           </g></g></svg>
-          <b>v3 · 0.3.0</b><span>Think together · released · November ’26</span>
+          <b>1.0.0</b><span>We are out of beta · end of 2026</span>
           <div class="more">
-            <p>Share a vault with people you trust and work in it together.</p>
-            <p>Sharing reaches deep into how your notes are encrypted, so it got its own security review before it shipped.</p>
+            <p>The full release. No big new features here, on purpose: this is the release for polish, for the rough edges you told us about, and for what you’d like to see changed.</p>
+            <p>Your feedback shapes it, so tell us what gets in your way.</p>
           </div></div>
       </li>
       <li style="--i:4">
-        <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 10 C 36 15, 68 5, 100 10"/></svg>
-        <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 6 34, 14 66, 10 100"/></svg>
-        <div class="stop p1" role="button" tabindex="0" aria-haspopup="dialog">
-          <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
-            <path class="sprig" d="M-8 20 C -18 34, -34 36, -42 30 C -34 18, -18 14, -8 20 Z"/>
-            <g transform="scale(.62)"><use href="#petals"/></g><circle class="heart" r="8"/>
-            <circle class="badge" cx="25" cy="25" r="10"/><path class="tick" d="M20 25 l4 4 l7 -8"/>
-          </g></g></svg>
-          <b>v4 · 0.4.0</b><span>Skills, WebDAV &amp; discreet vaults · released · November ’26</span>
-          <div class="more">
-            <p>Know-how your AI can pick up for working with your notes, for the changes a plain search and replace can’t judge: renaming a project whose notes describe the name without ever spelling it, say. A skill reads before it changes anything, and asks where it can’t tell what you meant.</p>
-            <p>Your vaults as a drive in your file manager or on your phone, through WebDAV. And discreet vaults, which stay out of sight in the web app until a PIN of their own shows them.</p>
-          </div></div>
-      </li>
-      <li style="--i:5">
-        <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 10 C 32 5, 66 15, 100 10"/></svg>
-        <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 15 32, 5 66, 10 100"/></svg>
-        <div class="stop p3" role="button" tabindex="0" aria-haspopup="dialog">
-          <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
-            <path class="sprig" d="M6 14 C 16 28, 32 30, 40 24 C 32 12, 16 8, 6 14 Z"/>
-            <g transform="scale(.62)"><use href="#petals"/></g><circle class="heart" r="8"/>
-            <circle class="badge" cx="25" cy="25" r="10"/><path class="tick" d="M20 25 l4 4 l7 -8"/>
-          </g></g></svg>
-          <b>v5 · 0.5.0</b><span>A calendar &amp; diagrams · released · November ’26</span>
-          <div class="more">
-            <p>A calendar that is made of your notes: give a note a day, a time or a week, and it shows up there. Day and week notes are a tap away, a task can remind you a week ahead, and you see what’s on at a glance, without the stress of a big office calendar. Your AI reads and keeps it with you.</p>
-            <p>And closer to Obsidian: Mermaid diagrams, links to a single paragraph, embedded notes your AI can read, and the places a note is mentioned without a link.</p>
-          </div></div>
-      </li>
-      <li style="--i:6">
         <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 10 C 18 6, 38 14, 50 10 C 62 6, 72 3, 76 8 C 79 13, 73 15, 71 11"/></svg>
         <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 14 30, 6 60, 10 76 C 12 86, 16 92, 12 96 C 8 99, 6 94, 9 92"/></svg>
-        <div class="stop p4" role="button" tabindex="0" aria-haspopup="dialog">
+        <div class="stop p1" role="button" tabindex="0" aria-haspopup="dialog">
           <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
             <path class="sprig" d="M-6 14 C -16 28, -32 30, -40 24 C -32 12, -16 8, -6 14 Z"/>
             <path class="bud-shut" d="M0 -26 C 13 -14, 14 2, 0 14 C -14 2, -13 -14, 0 -26 Z"/><path class="bud-fold" d="M0 -22 C -5 -10, -5 2, 0 12"/>
             <path class="sepal" d="M0 16 C -11 14, -18 5, -17 -3 C -9 0, -3 6, 0 16 Z"/><path class="sepal" d="M0 16 C 11 14, 18 5, 17 -3 C 9 0, 3 6, 0 16 Z"/>
           </g></g></svg>
-          <b>v6 · 1.0</b><span>Time Machine &amp; sign in your way · when it’s ready, in ’27</span>
+          <b>The future</b><span>campy office · after 1.0</span>
           <div class="more">
-            <p>Your vault as it was on any day you pick, without having made a checkpoint beforehand.</p>
-            <p>And more ways to sign in, and to keep your account safe: optional two-factor sign-in with your phone, passkeys instead of a password, and signing in with the account your team already uses (single sign-on).</p>
-            <p>Both get all the time they need.</p>
+            <p>We’re planning a campy office: the cosy kind, not the big grey one.</p>
+            <p>A canvas to lay your notes out on, a campy board for pinning thoughts up together, tables that work as spreadsheets, and diagrams you can click and change instead of only look at.</p>
           </div></div>
       </li>
     </ol>
