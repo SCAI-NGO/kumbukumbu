@@ -42,7 +42,7 @@ public sealed record MirrorSlotView(string Id, string Label, DateTime CreatedAt,
 /// The offline mirror's key slots (offline mode design §4.2, §4.4), for a session only: an API key or a connected app
 /// gets the 403 of <see cref="SessionOnlyMetadata"/>, and the Origin check guards every POST and DELETE. The wipe
 /// signals: a contact answers 404 with code <see cref="ApiErrors.MirrorWipe"/> when the slot is gone (purge the whole
-/// mirror), and the vaults it lists say which mirrors to keep; the sync socket's <c>{"type":"mirror"}</c> asks a tab to
+/// mirror), a 403 without it when the slot is another user's (keep it), and the vaults it lists say which mirrors to keep; the sync socket's <c>{"type":"mirror"}</c> asks a tab to
 /// make contact now.
 /// </summary>
 public static class MirrorSlotsApi
@@ -85,9 +85,16 @@ public static class MirrorSlotsApi
     {
         if (MirrorSlots.DecodeToken(body.Token) is not { } token) throw ApiErrors.BadRequest("This is not a mirror slot's token.");
         if (body.Waiting is < 0 or > MirrorSlots.MaxWaiting) throw ApiErrors.BadRequest($"The changes waiting are 0 to {MirrorSlots.MaxWaiting}.");
-        var contact = await slots.ContactAsync(caller.User!.Id, caller.UserKey!, token, body.Waiting, Subject(http), ct)
-            ?? throw ApiErrors.MirrorGone(StatusCodes.Status404NotFound);
-        return TypedResults.Ok(new MirrorContactView(contact.Id, Encode(contact.Key), await VaultsAsync(caller, token, ct)));
+        var contact = await slots.ContactAsync(caller.User!.Id, caller.UserKey!, token, body.Waiting, Subject(http), ct);
+        if (contact is not { } found)
+        {
+            // Another user's slot is not "gone": the browser keeps that copy and only doesn't open it for this session.
+            // The token is random, so the answer tells nothing to whoever doesn't hold it.
+            if (await slots.ExistsAsync(token, ct)) throw new ApiException(StatusCodes.Status403Forbidden, "This offline copy belongs to another account.");
+            throw ApiErrors.MirrorGone(StatusCodes.Status404NotFound);
+        }
+
+        return TypedResults.Ok(new MirrorContactView(found.Id, Encode(found.Key), await VaultsAsync(caller, token, ct)));
     }
 
     /// <summary>Only the name changes: the slot keeps its key, token and vaults, so the device's copy stays as it is.</summary>

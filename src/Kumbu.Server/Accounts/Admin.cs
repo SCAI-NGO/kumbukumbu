@@ -59,7 +59,7 @@ public sealed class Admin(
     /// are so, so a repeated request costs nobody their keys. A real change in either direction ends every session
     /// and revokes every API key and WebDAV share of the user and the tokens of every connection (<see cref="ConnectionReasons.Deactivated"/>),
     /// in one transaction with the flag, and stamps <c>credentialsChangedAt</c>; deactivating also revokes the user's
-    /// open invitations there. Revoking again on reactivation catches a key or a code whose creation raced the
+    /// open invitations and deletes their offline copies' slots there. Revoking again on reactivation catches a key or a code whose creation raced the
     /// deactivation (its request's session resolved just before it): reactivating revives no key, no app, no session
     /// and no invitation.
     /// </summary>
@@ -93,6 +93,9 @@ public sealed class Admin(
                     var shareCount = await shares.RevokeAllAsync(s, userId, token);
                     var connectionCount = await connections.RevokeAllTokensAsync(s, userId, ConnectionReasons.Deactivated, token);
                     var invitationCount = active ? 0 : await Invitations.RevokeOpenOfAsync(db, s, userId, Now, token);
+                    // Her browsers' offline copies go too: without its slot, a browser is told to purge at its next
+                    // request, signed in or not (offline mode design §4.4). A reactivation can't bring them back.
+                    if (!active) await MirrorSlots.DeleteAllAsync(db, s, userId, token);
                     // Her shared vaults become read-only for their members (collab design §7.4): an event for each, which
                     // their activity shows and their agents are told once. Nothing of the memberships changes.
                     if (!active)

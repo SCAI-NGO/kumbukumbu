@@ -141,6 +141,8 @@ describe("Admin users", () => {
     renderApp("/admin/users");
     await userEvent.click(await within(await screen.findByRole("listitem", { name: "Bob" })).findByRole("button", { name: "Deactivate Bob" }));
     const dialog = screen.getByRole("alertdialog", { name: "Deactivate Bob?" });
+    // A deactivation removes the offline copies for good, with what they hadn't uploaded: the admin is told before.
+    expect(dialog).toHaveTextContent("Offline copies on their devices are deleted when those devices next reach Kumbu², with any changes not uploaded yet; reactivating doesn't bring them back.");
     const confirm = within(dialog).getByRole("button", { name: "Deactivate" });
     expect(confirm).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "bo");

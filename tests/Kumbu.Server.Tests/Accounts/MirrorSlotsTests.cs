@@ -152,7 +152,12 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
         var bob = await NewAsync(app.PublicApi, vault: "Garden");
         var slot = await CreateAsync(alice);
 
-        using (var stolen = await ContactAsync(bob, slot.Token, waiting: 99)) await AssertWipeAsync(stolen);
+        // Refused, but not "gone": the browser that hands in her token (his session over her tab, say) keeps her copy.
+        using (var stolen = await ContactAsync(bob, slot.Token, waiting: 99))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, stolen.StatusCode);
+            Assert.Null((await JsonAsync(stolen))["code"]);
+        }
 
         // Untouched: her key still answers, and his attempt recorded nothing on it.
         var contact = await ContactedAsync(alice, slot.Token);
@@ -263,6 +268,34 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
         await AssertWipeAsync(anonymous, HttpStatusCode.Unauthorized);
         using var plain = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin);
         Assert.Null((await JsonAsync(plain))["code"]);
+    }
+
+    [Fact]
+    public async Task Deactivating_a_user_removes_their_offline_copies()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var slot = await CreateAsync(alice);
+        var admin = await NewAsync(app.PublicApi, vault: "Admin");
+        var db = alice.Api.Services.GetRequiredService<IMongoDatabase>();
+        await db.GetCollection<UserDocument>("users").UpdateOneAsync(u => u.Id == admin.User.Id, Builders<UserDocument>.Update.Set(u => u.Role, Roles.Admin), cancellationToken: Ct);
+        var accounts = alice.Api.Services.GetRequiredService<Admin>();
+
+        Assert.True(await accounts.SetActiveAsync(admin.User, alice.User.Id, false, Ct));
+
+        // Her browsers are told to purge at their next request, with the session the deactivation ended or with none.
+        using (var ended = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, alice.Session, slot.Token))
+        {
+            await AssertWipeAsync(ended, HttpStatusCode.Unauthorized);
+        }
+
+        using (var anonymous = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, mirrorToken: slot.Token))
+        {
+            await AssertWipeAsync(anonymous, HttpStatusCode.Unauthorized);
+        }
+
+        // Reactivating brings no slot back: her next sign-in on that device starts a new copy.
+        Assert.True(await accounts.SetActiveAsync(admin.User, alice.User.Id, true, Ct));
+        Assert.Equal(0, await db.GetCollection<MirrorSlotDocument>(MirrorSlots.CollectionName).CountDocumentsAsync(m => m.User == alice.User.Id, cancellationToken: Ct));
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import react from "@vitejs/plugin-react";
@@ -45,11 +45,14 @@ function pdfDecoders(): Plugin {
 
 /**
  * The app shell's service worker (sw/worker.ts) as /sw.js, at the root so that its scope is the whole app, with the
- * list of this build's files written into it. Its cache is named by their content: a new build is a new /sw.js, which
- * the browser installs, and only an unchanged build keeps the old cache.
+ * list of this build's files written into it, each with its SHA-256, which the worker checks a kept file against
+ * before serving it. Its cache is named by their content: a new build is a new /sw.js, which the browser installs,
+ * and only an unchanged build keeps the old cache. Hashed from the files as written, once every plugin is done with
+ * them: a chunk's code in `generateBundle` isn't yet what is served.
  */
 function appShell(): Plugin {
   let publicDir = "";
+  let files: string[] = [];
   return {
     name: "kumbu-app-shell",
     apply: "build",
@@ -64,22 +67,27 @@ function appShell(): Plugin {
       const worker = bundle["sw.js"];
       if (worker?.type !== "chunk") return this.error("The app shell's worker wasn't built.");
       if (worker.imports.length > 0) return this.error("The app shell's worker must be one file: it imports none of the app.");
+      if (!/(["'`])__KUMBU_SHELL__\1/.test(worker.code)) return this.error("The app shell's worker has no place for its list of files.");
       const publicFiles = publicDir
         ? readdirSync(publicDir, { recursive: true, withFileTypes: true })
             .filter((entry) => entry.isFile())
             .map((entry) => relative(publicDir, join(entry.parentPath, entry.name)).split("\\").join("/"))
             .sort()
         : [];
-      const files = precache(Object.keys(bundle).sort(), publicFiles);
+      files = precache(Object.keys(bundle).sort(), publicFiles);
+    },
+    writeBundle(options) {
+      const outDir = options.dir ?? "";
       const hash = createHash("sha256");
+      const listed: Record<string, string> = {};
       for (const file of files) {
-        const item = bundle[file.slice(1)];
-        hash.update(file).update(item ? (item.type === "chunk" ? item.code : item.source) : readFileSync(join(publicDir, file)));
+        const content = readFileSync(join(outDir, file));
+        hash.update(file).update(content);
+        listed[file] = createHash("sha256").update(content).digest("hex");
       }
-      const shell = JSON.stringify({ name: `kumbu-shell-${hash.digest("hex").slice(0, 16)}`, files });
-      const code = worker.code.replace(/(["'`])__KUMBU_SHELL__\1/, () => shell);
-      if (code === worker.code) return this.error("The app shell's worker has no place for its list of files.");
-      worker.code = code;
+      const shell = JSON.stringify({ name: `kumbu-shell-${hash.digest("hex").slice(0, 16)}`, files: listed });
+      const worker = join(outDir, "sw.js");
+      writeFileSync(worker, readFileSync(worker, "utf8").replace(/(["'`])__KUMBU_SHELL__\1/, () => shell));
     },
   };
 }
