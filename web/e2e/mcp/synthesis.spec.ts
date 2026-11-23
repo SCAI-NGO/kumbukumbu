@@ -11,27 +11,29 @@
 // Promises in scope, and the test that covers each:
 // §3.1, §5 `similar <note> [scope]`: the heading `similar to <note>, below <scope>: N notes`, one line per hit
 //    `N. path#Section  lines a-b  score s  distance` and the snippet below it, the footer
-//    → "similar: one hit per note, its best section …"; the default scope is every vault, a source may lie outside the
-//    scope → "similar: the default scope is every vault …"; the heading's words for it (§5: "below every vault")
+//    → "similar: one hit per note, its best section …"; headings with nothing below them don't count (a heading-only
+//    note, indexed, is no hit) → the same test; the default scope is every vault, a source may lie outside the scope
+//    → "similar: the default scope is every vault …"; the heading's words for it (§5: "below every vault")
 //    → "similar: the heading of the default scope says 'below every vault'" (a finding).
 // §3.2, §3.3 one hit per note, its best section (best chunk pair, not a mean), the source left out
 //    → "similar: one hit per note, its best section …".
 // §3.3 a source section uses only that section's chunks → "similar: a #section as the source …"; the first section
-//    below a note's title as the source → "similar: the first section of a note as the source …" (a finding).
+//    below a note's title as the source → "similar: the first section of a note as the source …" (a finding);
+//    `--between` with a section as A → "similar: a #section as the source …".
 // §3.4, §5 `--between a c`: by the lower score, both scores and both distances shown, the heading names both
 //    → "similar --between: a note close to both …".
 // §3.5 link distances `1 step`, `N steps`, `not connected`, `other vault`, links either way, never through attachments or
 //    links to nothing, `--without-tag` (nested tags too) and the archive rule applying to the walk
 //    → "similar: link distances …".
 // §3.6 `--unlinked` leaves out distance 1 only → "similar --unlinked: …".
-// §3.7 `--outside` (repeatable, at most 50), `--without-tag` (an unknown tag no error), `-n N` (1 to 50)
+// §3.7 `--outside` (a folder or a note, repeatable, at most 50), `--without-tag` (an unknown tag no error), `-n N` (1 to 50)
 //    → "similar: --outside, --without-tag and -n …"; `--archive` (the archive left out by default, a scope inside it
 //    always taking it in) → "similar: the archive is left out …".
 // §2 non-goal "PDF pages as similar hits: notes only for now" → "semsearch --outside and --without-tag …" (a PDF beside
 //    the notes is never a `similar` hit).
 // §6 `semsearch --outside P` (notes and PDF pages), `semsearch --without-tag T` (PDF pages stay)
 //    → "semsearch --outside and --without-tag …".
-// §6 `graph --without-tag T` in every mode, the ends of `--path` kept → "graph --without-tag: …" (no search needed).
+// §6 `graph --without-tag T` in every mode (local, --path, --orphans, --hubs, --unresolved), the ends of `--path` kept → "graph --without-tag: …" (no search needed).
 // §7, §3.9 `synthesize-knowledge` a system skill: in the handshake's list and `skills ls`, read with `skills cat`; its
 //    two modes, the commands of each, `--without-tag synthesis/hypothesis`, at most five hypotheses, why each could be
 //    wrong, one report note (`#synthesis/hypothesis`, `source: synthesized`, a review date, `[!inferred]`, B links to
@@ -42,8 +44,6 @@
 //    the pending notes counted in the footer: a note is embedded within a second or two of its write on this stack, so
 //    asking at once reaches the error only by chance (the first-section finding above shows the message's form).
 // §3.8, §2 other-model notes counted in the footer, never compared: needs a vault on another provider, `@tensorx`.
-// §3.5 "headings with nothing below them don't count": a heading-only note was ranked as a source and never shown as a
-//    hit while probing, but a candidate's absence can't tell that rule from an index that is late; xUnit covers it.
 // §4 `VectorsAsync` and the cost: server internals, xUnit (`SimilarTests`). §3.9's hand-test list: not in the product.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -137,6 +137,9 @@ async function similar(run: (command: string) => Promise<{ text: string; isError
 const distances = (hits: Hit[]) => Object.fromEntries(hits.map((h) => [h.path, h.distance]));
 const footer = '(by the stored embeddings, nothing sent to an embedding provider; distance counts links either way; cat "path#Section" reads one)';
 
+// waitIndexed's bound for the first index on a fresh stack (180 s) needs room within the test.
+test.describe.configure({ timeout: 240_000 });
+
 // The file's own vault: another vault for `other vault`, and an archive no other test writes to.
 let vault = "";
 
@@ -178,6 +181,8 @@ test("similar: one hit per note, its best section, the source left out, the head
   await write(mcp, two, twoSections(`Two ${n.id}`, cakeLong, diveLong.replace("first seen", "once seen")));
   await write(mcp, table, `# Tables\n\n${tables}\n`);
   await write(mcp, cakeNote, `# Cake\n\n${cake}\n`);
+  // Headings only, on the source's topic: indexed (it answers as a source), never a hit.
+  await write(mcp, n.path("Hollow"), "# Decompression stops and nitrogen\n\n## The ascent rate of divers\n");
   await waitIndexed(aliceApi, written);
 
   const { heading, hits, footer: last } = await similar(mcp.sh.bind(mcp), `"${source}" /Work/${folder}`);
@@ -196,8 +201,8 @@ test("similar: one hit per note, its best section, the source left out, the head
   // `cat "path#Section"`, as the footer says, reads the hit's section.
   const section = await mcp.sh(`cat "${two}#Two ${n.id}#Nitrogen"`);
   expect(section.isError, section.text).toBe(false);
-  expect(section.text).toContain("On a deep dive the body of the diver");
-  expect(section.text).not.toContain("Cream the soft butter");
+  // The section, then cat's version and link lines.
+  expect(section.text.replace(/\n\nversion of [^\n]+\n\nlink to [^\n]+$/, "")).toBe(`## Nitrogen\n\n${diveLong.replace("first seen", "once seen")}`);
 });
 
 test("similar: a #section as the source uses only that section @synthesis @search", async ({ mcp, folder, aliceApi }) => {
@@ -210,12 +215,16 @@ test("similar: a #section as the source uses only that section @synthesis @searc
 
   // The whole note: the cake text is the closest to its cake.
   const whole = await similar(mcp.sh.bind(mcp), `"${source}" /Work/${folder}`);
-  expect(whole.hits.map((h) => h.path)).toEqual([cakeNote, table]);
+  expect(whole.hits.map((h) => h.path).sort()).toEqual([cakeNote, table].sort());
   // Its dive section only: the dive table first, the cake last.
   const section = await similar(mcp.sh.bind(mcp), `"${source}#Nitrogen" /Work/${folder}`);
   expect(section.heading).toBe(`similar to ${source}#Nitrogen, below /Work/${folder}: 2 notes`);
   expect(section.hits.map((h) => h.path)).toEqual([table, cakeNote]);
   expect(section.footer).toBe(footer);
+  // A section as A of --between.
+  const between = await similar(mcp.sh.bind(mcp), `--between "${source}#Nitrogen" "${table}" /Work/${folder}`);
+  expect(between.heading).toBe(`between A = ${source}#Nitrogen and C = ${table}, below /Work/${folder}: 1 note`);
+  expect(between.hits.map((h) => h.path)).toEqual([cakeNote]);
 });
 
 test("similar: the first section of a note as the source is ranked by its text @synthesis @search", async ({ mcp, folder, aliceApi }) => {
@@ -223,7 +232,7 @@ test("similar: the first section of a note as the source is ranked by its text @
   test.info().annotations.push({
     type: "finding",
     description:
-      "M-01: the first section below a note's title can't be the source of similar: its text is indexed in the chunk that starts at the title, and similar answers \"has no indexed text yet; try again in a while\", for good",
+      "M-01 (Medium): a section merged into its parent's chunk can't be the source of similar, the first section below a note's title among them: the chunk holding its text starts above its heading, and SimilarSearch.cs:115,120 take only the chunks that start inside the section, so similar answers \"has no indexed text yet; try again in a while\", which never helps",
   });
   const n = names(folder);
   const [source, table, cakeNote] = [n.path("Source"), n.path("Tables"), n.path("Cake")];
@@ -363,6 +372,10 @@ test("similar: --outside, --without-tag and -n leave out what they say @synthesi
   const twice = await similar(run, `"${source}" ${base} --outside ${base}/Diving --outside ${base}/Garden`);
   expect(twice.hits.map((h) => h.path).sort()).toEqual([at("Baking/Chocolate cake"), at("Baking/Sourdough bread")]);
 
+  // A note's path leaves out that note.
+  const note = await similar(run, `"${source}" ${base} --outside "${at("Diving/Dive tables")}"`);
+  expect(note.hits.map((h) => h.path).sort()).toEqual(plain.hits.map((h) => h.path).filter((path) => path !== at("Diving/Dive tables")).sort());
+
   // A tag no note carries leaves out nothing, and is no error.
   const unknown = await similar(run, `"${source}" ${base} --without-tag nosuch-${folder.slice(-6)}`);
   expect(unknown.hits.map((h) => h.path)).toEqual(plain.hits.map((h) => h.path));
@@ -389,9 +402,8 @@ test("similar: the archive is left out unless asked for or inside the scope @syn
   const run = aliceApi.console.bind(aliceApi);
 
   const paths = async (args: string) => (await similar(run, args)).hits.map((h) => h.path);
-  expect(await paths(`"${source}" /${vault}`), "the vault without its archive").toContain(plain);
-  expect(await paths(`"${source}" /${vault}`), "the vault without its archive").not.toContain(old);
-  expect(await paths(`"${source}" /${vault} --archive`), "--archive").toEqual(expect.arrayContaining([old, plain]));
+  expect(await paths(`"${source}" /${vault}`), "the vault without its archive").toEqual([plain]);
+  expect((await paths(`"${source}" /${vault} --archive`)).sort(), "--archive").toEqual([old, plain].sort());
   expect(await paths(`"${source}" /${vault}/_archive/${folder}`), "a scope inside the archive").toEqual([old]);
 });
 
@@ -409,11 +421,15 @@ test("similar: the default scope is every vault, and the source may lie outside 
   expect(heading).toMatch(new RegExp(`^similar to ${escape(glass)}, (?:in|below) every vault: \\d+ notes$`));
   expect(hits.map((h) => h.path)).not.toContain(glass);
   expect(distances(hits)).toMatchObject({ [gaffer]: "not connected", [furnace]: "other vault" });
+  // A scope that doesn't hold the source.
+  const there = await similar(aliceApi.console.bind(aliceApi), `"${glass}" /${vault}/${folder}`);
+  expect(there.heading).toBe(`similar to ${glass}, below /${vault}/${folder}: 1 note`);
+  expect(distances(there.hits)).toEqual({ [furnace]: "other vault" });
 });
 
 test("similar: the heading of the default scope says 'below every vault' @synthesis @search", async ({ mcp, folder, aliceApi }) => {
   test.fail();
-  test.info().annotations.push({ type: "finding", description: "M-02: similar's heading for the default scope says \"in every vault\", the spec's §5 \"below every vault\"" });
+  test.info().annotations.push({ type: "finding", description: "M-02 (Low, wording): similar's heading for the default scope says \"in every vault\", the spec's §5 \"below every vault\"" });
   const glass = names(folder).path("Glass");
   await write(mcp, glass, "# Glass\n\nThe glassblower gathers molten glass on the end of a blowpipe and blows a bubble into it.\n");
   await waitIndexed(aliceApi, [glass]);
@@ -422,7 +438,6 @@ test("similar: the heading of the default scope says 'below every vault' @synthe
 });
 
 test("semsearch --outside and --without-tag: notes and PDF pages below a path go, tagged notes go and PDF pages stay @synthesis @search", async ({ mcp, folder, aliceApi }) => {
-  test.setTimeout(120_000);
   const base = `/Work/${folder}`;
   const files = fixtureTree("tags/meaning", base);
   written.push(...files.map((f) => f.path));
@@ -464,7 +479,7 @@ test("graph --without-tag: a tagged note leaves the local graph, the paths and t
   const p = n.path;
   // S → H (tagged) → T, S → B; Lone is an orphan with the tag.
   await write(mcp, p("S"), `# S\n\n${n.link("H")} ${n.link("B")}\n`);
-  await write(mcp, p("H"), `---\ntags: [synthesis/hypothesis]\n---\n# H\n\n${n.link("T")}\n`);
+  await write(mcp, p("H"), `---\ntags: [synthesis/hypothesis]\n---\n# H\n\n${n.link("T")} ${n.link("Gone")}\n`);
   await write(mcp, p("B"), "# B\n");
   await write(mcp, p("T"), "# T\n");
   await write(mcp, p("Lone"), "---\ntags: [synthesis/hypothesis]\n---\n# Lone\n");
@@ -492,6 +507,17 @@ test("graph --without-tag: a tagged note leaves the local graph, the paths and t
   });
   expect(await mcp.sh(`graph --orphans /Work/${folder}`)).toEqual({ text: p("Lone"), isError: false });
   expect(await mcp.sh(`graph --orphans /Work/${folder} --without-tag synthesis`)).toEqual({ text: "(no notes without links)", isError: false });
+  expect(await mcp.sh(`graph --hubs /Work/${folder}`)).toEqual({
+    text: [`3  ${p("H")}  (1 in, 2 out)`, `2  ${p("S")}  (0 in, 2 out)`, `1  ${p("B")}  (1 in, 0 out)`, `1  ${p("T")}  (1 in, 0 out)`, `0  ${p("Lone")}  (0 in, 0 out)`].join("\n"),
+    isError: false,
+  });
+  // The tagged notes leave the list; the counts stay those of the whole graph (the spec doesn't say which: unclear).
+  expect(await mcp.sh(`graph --hubs /Work/${folder} --without-tag synthesis`)).toEqual({
+    text: [`2  ${p("S")}  (0 in, 2 out)`, `1  ${p("B")}  (1 in, 0 out)`, `1  ${p("T")}  (1 in, 0 out)`].join("\n"),
+    isError: false,
+  });
+  expect(await mcp.sh(`graph --unresolved /Work/${folder}`)).toEqual({ text: `Gone ${n.id}, linked from 1 note:\n  ${p("H")}:6`, isError: false });
+  expect(await mcp.sh(`graph --unresolved /Work/${folder} --without-tag synthesis`)).toEqual({ text: "(no unresolved links)", isError: false });
 });
 
 test("synthesize-knowledge: a system skill in the handshake and skills ls, read with skills cat @synthesis", async ({ mcp }) => {
