@@ -766,6 +766,7 @@ The sidecar's image is signed by the same workflow: the same command with `ghcr.
 ## More
 
 - [docs/concept.md](docs/concept.md): the full concept and threat model
+- [docs/adr/](docs/adr/README.md): the architecture decisions, one record each, with why
 - [CONCEPTS.md](CONCEPTS.md): a growing glossary of what was learned while building this
 
 ## License

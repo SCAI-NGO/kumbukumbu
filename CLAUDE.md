@@ -49,6 +49,7 @@ Against a shared mongod (`KUMBU_TEST_MONGO`, where Docker can't run) start it wi
 - A branch per change, a pull request, squash merge. Commit messages imperative and free-form ("Let the admin choose the default embedding provider"), no Conventional Commits prefix.
 - CI (`.github/workflows/ci.yml`) and the image build (`docker.yml`) run on every pull request. A push to `master` publishes `:master` and `:sha-…` images; only a version tag publishes `:latest`, which deployments follow.
 - Specs go to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, plans to `docs/superpowers/plans/`.
+- A decision that shapes the architecture, the security model, the data format or a lasting behaviour gets an architecture decision record in `docs/adr/` (`template.md`, the next number, listed in `docs/adr/README.md`), in the pull request that makes or specifies it. A changed decision is a new record that supersedes the old one, never an edit of it. Specs keep their reasons as before; the record is the short, findable version.
 
 ## Kumbu² as our shared memory
 
