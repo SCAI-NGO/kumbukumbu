@@ -14,10 +14,10 @@
 //     embedded within about a second); `state` `ready` → "graph-similarity #1"
 //  2. The score: a diving pair above a diving note and the cake (order of a clear case only, never a value)
 //     → "graph-similarity #2"
-//  3. A read member gets the scores of a vault he has → "graph-similarity #3"
+//  3. A read member gets the scores of a vault they have → "graph-similarity #3"
 //  4. 404 for a vault the caller hasn't: Bob (a read member of Work) for Alice's own vault, answered as for a vault
 //     that doesn't exist; 400 for bad parameters, as `/local` answers them → "graph-similarity #4" (no `@search`,
-//     `@since-0-7-0`: both come before any vector is read, GraphApi.cs:145, so it runs in either phase)
+//     `@since-0-7-0`: both come before any vector is read, GraphApi.cs:145, so the phase with search off is enough)
 //  5. `off` with a `reason` and no pairs when search by meaning is off → "graph-similarity #5" (no `@search`, and
 //     `@since-0-7-0`: it runs in the phase with search off, and fails on a stack with it on)
 // Left out: `preparing` (the model is loaded before the tests run, plan review point 5); a note embedded by another
