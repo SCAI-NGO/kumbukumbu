@@ -28,9 +28,10 @@ async function answer<T>(response: Response): Promise<T> {
 /** A device with a copy, as Settings, Offline lists them (§4.6). `current`: this browser's. */
 export interface DeviceCopy { id: string; label: string; createdAt: string; contactAt: string | null; waiting: number; current: boolean; }
 
-async function send(method: "GET" | "DELETE", path: string): Promise<Response> {
+async function send(method: "GET" | "PUT" | "DELETE", path: string, body?: unknown): Promise<Response> {
+  const json = body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
   try {
-    return await fetch(new Request(new URL(`${BASE}${path}`, window.location.origin), { method, credentials: "same-origin" }));
+    return await fetch(new Request(new URL(`${BASE}${path}`, window.location.origin), { method, credentials: "same-origin", ...json }));
   } catch {
     throw new OfflineError("Kumbu² can't be reached.");
   }
@@ -49,6 +50,12 @@ export const needsPassword = (d: DeviceCopy) => !d.current && (d.waiting > 0 || 
 
 /** The server wants the password for this removal: the device has (just) reported changes waiting. */
 export class PasswordNeededError extends RejectedError {}
+
+/** Gives a device's copy another name in the list; the copy itself stays as it is. */
+export async function renameDeviceCopy(id: string, label: string): Promise<void> {
+  const response = await send("PUT", `/${encodeURIComponent(id)}/label`, { label });
+  if (!response.ok) await answer(response);
+}
 
 /** Removes a device's copy: it goes when that device next comes online, with what it hadn't uploaded. */
 export async function removeDeviceCopy(id: string, password?: string): Promise<void> {
