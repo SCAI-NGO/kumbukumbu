@@ -91,6 +91,10 @@ function show({
     "GET /api/graph/similarity": similarity,
     "GET /api/graph/node": () => json(200, detail),
     "GET /api/vaults/Work/tree": () => json(200, tree),
+    "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, level: "owner" }]),
+    // Plan is in the graph already, so only Elsewhere is offered.
+    "GET /api/similar/Work/Budget.md": () =>
+      json(200, { state: "ready", notes: [{ path: PLAN, line: 1, text: "", score: 0.9 }, { path: "/Work/Elsewhere.md", line: 1, text: "", score: 0.7 }], pending: 0 }),
     ...(paths ? { "GET /api/graph/paths": paths } : {}),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -340,7 +344,6 @@ describe("GraphColumn", () => {
   });
 
   it("offers suggested links with the layer on, and opens a suggestion's card", async () => {
-    localStorage.setItem("kumbu.graph.mockSimilarity", "1");
     localStorage.setItem("kumbu.graphPrefs", JSON.stringify({ suggestions: true }));
     show();
     await userEvent.click(await screen.findByRole("button", { name: "suggestion Elsewhere" }));
@@ -367,19 +370,10 @@ describe("GraphColumn", () => {
     expect(await screen.findByText("Similarity not measured: search by meaning is off on this server")).toBeInTheDocument();
   });
 
-  it("hides the Suggestions switch in a production build, until link prediction gives it data", async () => {
-    vi.stubEnv("DEV", false);
-    localStorage.setItem("kumbu.graphPrefs", JSON.stringify({ suggestions: true }));
-    show();
-    await screen.findByRole("button", { name: "node Plan" });
-    expect(screen.queryByRole("button", { name: "Suggestions" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Ghosts" })).toBeInTheDocument();
-  });
-
-  it("suggests nothing with the layer off", async () => {
-    localStorage.setItem("kumbu.graph.mockSimilarity", "1");
-    show();
+  it("suggests nothing, and asks for nothing, with the layer off", async () => {
+    const { fetch } = show();
     await screen.findByRole("button", { name: "node Plan" });
     expect(screen.queryByRole("button", { name: /^suggestion / })).toBeNull();
+    expect(asked(fetch, "/api/similar/Work/Budget.md")).toHaveLength(0);
   });
 });

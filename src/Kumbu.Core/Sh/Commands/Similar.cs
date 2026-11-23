@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
@@ -40,7 +41,8 @@ public sealed class Similar(INoteReader notes, ISearchIndex index) : ICommand
           comparable within one run. cat "path#Section" reads a hit.
           Close in meaning and far in links is what nobody connected yet: a candidate, not a finding.
           -n N           how many notes (default {DefaultMax}, at most {MaxMax})
-          --unlinked     leave out the notes that link yours or that yours links (1 step)
+          --unlinked     leave out the notes that link yours or that yours links (1 step), and those
+                         a person called not related to it (the not-related property of either note)
           --outside P    leave out the notes at or below P, such as your note's own folder; repeat for more
           --without-tag T  leave out the notes that carry #T (nested too), also from the link distances;
                          repeat for more. Earlier findings that link what they connect go so.
@@ -96,8 +98,18 @@ public sealed class Similar(INoteReader notes, ISearchIndex index) : ICommand
             sources.Add(new SimilarSource(path, fragment));
         }
 
+        // A person's "Not related" (link prediction) counts as a link here: a pair they rejected isn't suggested again.
+        Func<Note, bool>? leftOut = exclusions.LeavesOut;
+        if (options.Has("unlinked"))
+        {
+            var rejected = new List<Func<Note, bool>>();
+            foreach (var source in sources) rejected.Add(NotRelated.LeftOutFor(new Note(source.Path, (await notes.ReadAsync(source.Path, ct))!)));
+            var outside = leftOut;
+            leftOut = n => outside?.Invoke(n) == true || rejected.Any(r => r(n));
+        }
+
         var result = await SimilarSearch.RunAsync(notes, index, new SimilarQuery(
-            sources, scope, max, options.Has("unlinked"), options.Has("archive"), exclusions.LeavesOut, exclusions.WithoutTags), ct);
+            sources, scope, max, options.Has("unlinked"), options.Has("archive"), leftOut, exclusions.WithoutTags), ct);
         if (result.Error is { } error) return ShellResult.Error($"similar: {error}");
 
         var lines = new List<string> { Heading(sources, scope, result.Hits.Count) };

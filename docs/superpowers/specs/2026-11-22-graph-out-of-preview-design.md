@@ -14,7 +14,7 @@ Everything else the spec asked for is built and tested: widths, column and dialo
 ## What "out of preview" means here
 
 - **Measured edges**: each edge between two notes carries the similarity the server computes from their embeddings; where it can't (no embeddings yet, search by meaning off), the edge is drawn as now and the foot says why, in a line that is true.
-- **No empty switch**: Suggestions is hidden in production builds until link prediction (its own thread, 0.7.0) gives it data; that work lifts the guard.
+- **No empty switch**: Suggestions was hidden in production builds until link prediction (its own thread, 0.7.0) gave it data; link prediction lifted the guard, so the switch shows everywhere.
 - **Offline**: the graph says it needs a connection (offline mode design §3a), once the mode's state is on `master`.
 - **The wording**: the release note entry and the README drop "preview".
 
