@@ -6,9 +6,10 @@
 // remove them again at the end. Its Home notes lie below /Home/<folder>/, its Work notes below /Work/<folder>/.
 //
 // The notes are on beekeeping, a topic no other test writes (plan review point 6), inline: a copy of a shared fixture
-// in another test's folder would score 1.00 against ours. Two Work notes (Hive inspection, Varroa) and one Home note
-// (Swarm) on it, close in meaning to each other, no links between them; the graph's test adds a second Home note
-// (Honey harvest) that Swarm links, so Home's local graph has an edge to measure.
+// in another test's folder would score 1.00 against ours. Two Work notes (Hive inspection, Brood frames) and one Home note
+// (Swarm) on it, close in meaning to each other, no links between them (measured with arctic-m: Hive inspection to Brood
+// frames 0.83, to Swarm 0.57, above Similar notes' floor of 0.5, so in one vault Swarm would be suggested); the graph's
+// test adds a second Home note (Honey harvest) that links Swarm, so Home's local graph has an edge to measure.
 //
 // An agent's key and discreet vaults (discreet vaults design, "No change to … API keys"; UserCredential in
 // src/Kumbu.Server/Vaults/Credentials.cs carries a DiscreetFilter for a web session only): a key reads Home exactly when
@@ -48,7 +49,7 @@ function notesOf(folder: string) {
   return {
     id,
     hive: `/Work/${folder}/Hive inspection ${id}.md`,
-    varroa: `/Work/${folder}/Varroa ${id}.md`,
+    brood: `/Work/${folder}/Brood frames ${id}.md`,
     swarm: `/Home/${folder}/Swarm ${id}.md`,
     harvest: `/Home/${folder}/Honey harvest ${id}.md`,
   };
@@ -56,7 +57,7 @@ function notesOf(folder: string) {
 
 const texts = {
   hive: "# Hive inspection\n\nEvery week in summer the beekeeper opens the hive, lifts out the brood frames one by one and looks for the queen, her eggs and the capped brood.\n\nA puff from the smoker keeps the bees calm. A crowded colony gets another honey super before it builds queen cells and swarms.\n",
-  varroa: "# Varroa mites\n\nThe varroa mite feeds on honey bee larvae inside the capped brood cells and weakens the whole colony.\n\nThe beekeeper counts the mites that fall onto a board below the hive, and treats the bees with oxalic acid in winter, when the queen lays no brood.\n",
+  brood: "# Brood frames\n\nOnce a week the beekeeper lights the smoker, opens the hive and lifts out each brood frame, looking for the queen, fresh eggs and capped brood.\n\nIf the colony is crowded and starts queen cells, she adds a honey super so the bees have room and don't swarm.\n",
   swarm: "# Catching a swarm\n\nIn May the bees in my hive raised new queen cells, and half the colony swarmed with the old queen into the apple tree.\n\nI shook the cluster of bees into a box and hived them on fresh frames. Next spring I give the colony its honey supers earlier, so it has room and doesn't swarm.\n",
 };
 
@@ -103,7 +104,7 @@ function answersOf(page: Page) {
 async function start(freshSession: (user: "alice") => Promise<{ context: BrowserContext; page: Page }>, aliceApi: Api, folder: string, home: string[], written: string[]) {
   const n = notesOf(folder);
   await aliceApi.putNote(n.hive, texts.hive);
-  await aliceApi.putNote(n.varroa, texts.varroa);
+  await aliceApi.putNote(n.brood, texts.brood);
   const { context, page } = await freshSession("alice");
   await dismissInstallHint(page);
   await page.goto(noteUrl(n.hive));
@@ -122,7 +123,7 @@ async function start(freshSession: (user: "alice") => Promise<{ context: Browser
         await session.putNote(path, path === n.swarm ? texts.swarm : harvestText(folder, n.id));
       }
       await waitIndexed(session, [n.hive], firstIndex);
-      await waitIndexed(session, [n.varroa, ...home], nextIndex);
+      await waitIndexed(session, [n.brood, ...home], nextIndex);
     },
   };
 }
@@ -138,7 +139,7 @@ async function removeHome(session: Api | undefined, written: string[]) {
 
 async function removeWork(aliceApi: Api, folder: string) {
   const n = notesOf(folder);
-  for (const path of [n.hive, n.varroa]) await aliceApi.deleteNote(path).catch(() => undefined);
+  for (const path of [n.hive, n.brood]) await aliceApi.deleteNote(path).catch(() => undefined);
 }
 
 /** The note paths `similar`'s or `semsearch`'s answer lists, in its order. */
@@ -158,7 +159,7 @@ test("discreet-0-7-0 similar: hidden, the console's similar over every vault and
     // Shown: the session's credential opens Home like any other vault, so the default scope takes it in.
     const shownSimilar = await session.console(ask);
     expect(shownSimilar.isError, shownSimilar.text.split("\n")[0]).toBe(false);
-    expect(hitsOf(shownSimilar.text), "shown: Work's neighbour and the Home note are hits").toEqual(expect.arrayContaining([n.varroa, n.swarm]));
+    expect(hitsOf(shownSimilar.text), "shown: Work's neighbour and the Home note are hits").toEqual(expect.arrayContaining([n.brood, n.swarm]));
     expect(hitsOf((await session.console(topic)).text), "shown: semsearch finds the Home note").toContain(n.swarm);
     // An agent's key granted Home, made while Home is shown (a key on Work too stays listed, and revocable, once hidden).
     agent = await Mcp.create(session, `e2e discreet ${n.id}`, { Work: "read", Home: "read" });
@@ -168,10 +169,10 @@ test("discreet-0-7-0 similar: hidden, the console's similar over every vault and
     // Hidden: the session's console, in its answers' text, names nothing of Home.
     const hidden = await session.console(ask);
     expect(hidden.isError, hidden.text.split("\n")[0]).toBe(false);
-    expect(hitsOf(hidden.text), "hidden: Work's neighbour is still a hit").toContain(n.varroa);
+    expect(hitsOf(hidden.text), "hidden: Work's neighbour is still a hit").toContain(n.brood);
     expect(hidden.text, "hidden: similar over every vault names nothing of Home").not.toMatch(/\/Home\/|Swarm/);
     const words = await session.console(topic);
-    expect(hitsOf(words.text), "hidden: semsearch still finds Work's notes").toEqual(expect.arrayContaining([n.hive, n.varroa]));
+    expect(hitsOf(words.text), "hidden: semsearch still finds Work's notes").toEqual(expect.arrayContaining([n.hive, n.brood]));
     expect(words.text, "hidden: semsearch names nothing of Home").not.toMatch(/\/Home\/|Swarm/);
     // The Home note itself answers as a note of a vault that doesn't exist.
     const made = `Nowhere${n.id}`;
@@ -190,7 +191,7 @@ test("discreet-0-7-0 similar: hidden, the console's similar over every vault and
     await command.press("Enter");
     await expect(output).toContainText(`similar to ${n.hive}, in every vault:`);
     await expect(output).toHaveAttribute("aria-busy", "false");
-    await expect(output).toContainText(titleOf(n.varroa));
+    await expect(output).toContainText(titleOf(n.brood));
     await expect(output, "hidden: the console's page shows nothing of Home").not.toContainText(/\/Home\/|Swarm/);
     expect(await got(), "hidden: nothing of Home in the console's answers").not.toMatch(/\/Home\/|Swarm/);
     await shot(page, testInfo, "discreet");
@@ -199,7 +200,7 @@ test("discreet-0-7-0 similar: hidden, the console's similar over every vault and
     const byKey = await agent.sh(ask);
     expect(hitsOf(byKey.text), "an agent's key granted Home reads it while the session hides it").toContain(n.swarm);
   } finally {
-    await removeHome(session, written).catch(() => undefined);
+    await removeHome(session, written).catch((e: Error) => test.info().annotations.push({ type: "cleanup", description: `Home notes not removed: ${e.message}` }));
     await agent?.dispose().catch(() => undefined);
     await endHidden(page);
     await session.dispose();
@@ -231,11 +232,11 @@ test("discreet-0-7-0 similar notes: hidden, /api/similar on a Home note answers 
     await expect(button).toHaveAttribute("aria-expanded", "true");
     const rows = section.getByRole("listitem");
     await expect(rows.first()).toBeVisible();
-    expect(await rows.allInnerTexts(), "hidden: the Links tab's rows").toEqual([expect.stringContaining(titleOf(n.varroa))]);
+    expect(await rows.allInnerTexts(), "hidden: the Links tab's rows").toEqual([expect.stringContaining(titleOf(n.brood))]);
     await expect(section, "hidden: the Links tab shows nothing of Home").not.toContainText(/Home|Swarm/);
     expect(await got(), "hidden: nothing of Home in the page's answers").not.toMatch(/\/Home\/|Swarm/);
   } finally {
-    await removeHome(session, written).catch(() => undefined);
+    await removeHome(session, written).catch((e: Error) => test.info().annotations.push({ type: "cleanup", description: `Home notes not removed: ${e.message}` }));
     await endHidden(page);
     await session.dispose();
     await removeWork(aliceApi, folder);
@@ -276,14 +277,14 @@ test("discreet-0-7-0 graph: hidden, /api/graph/similarity and /api/graph/local o
     await switched.click();
     await expect(switched).toHaveAttribute("aria-pressed", "true");
     const suggested = drawing.getByRole("button", { name: /^Suggested link: / });
-    await expect(suggested).toHaveCount(1);
-    await expect(suggested).toHaveAccessibleName(`Suggested link: ${titleOf(n.varroa)}`);
+    await expect(suggested).toHaveCount(2);
+    await expect(suggested).toHaveAccessibleName(`Suggested link: ${titleOf(n.brood)}`);
     await expect(dialog, "hidden: the graph shows nothing of Home").not.toContainText(/Swarm|Honey harvest/);
     const labels = await drawing.getByRole("button").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
     expect(labels.filter((l) => /Swarm|Honey harvest|Home/.test(l)), "hidden: no node or suggestion of Home in the drawing").toEqual([]);
     expect(await got(), "hidden: nothing of Home in the page's answers").not.toMatch(/\/Home\/|Swarm|Honey harvest/);
   } finally {
-    await removeHome(session, written).catch(() => undefined);
+    await removeHome(session, written).catch((e: Error) => test.info().annotations.push({ type: "cleanup", description: `Home notes not removed: ${e.message}` }));
     await endHidden(page);
     await session.dispose();
     await removeWork(aliceApi, folder);
