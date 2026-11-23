@@ -28,7 +28,7 @@ import { baseURL, secrets, type User } from "../support/env";
 import { nextIndex, waitIndexed } from "../support/search";
 import { reservePassword } from "../support/session";
 import { expect, shot, shotsDir070, test } from "../support/test";
-import { invitedUser, type TestUser } from "../support/users";
+import { invitedUser, type TestUser } from "./users-tmp";
 
 test.use({ shotsDir: shotsDir070 });
 
