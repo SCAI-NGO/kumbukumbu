@@ -197,6 +197,19 @@ describe("Settings: Offline", () => {
     expect(asked).toBe(1);
   });
 
+  it("asks for the password when the device's count isn't known yet, and says so", async () => {
+    const fake = api({ "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: null }]) });
+    renderApp("/settings/offline");
+    const devices = await screen.findByRole("list", { name: "Devices with a copy" });
+    expect(devices).not.toHaveTextContent("waiting");
+    await userEvent.click(within(devices).getByRole("button", { name: "Remove offline copy" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("That device hasn't said yet whether it has changes waiting; any it has will be lost.");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots/s2/remove")).toHaveLength(1));
+  });
+
   it("shows the server's sentence when a removal is refused", async () => {
     api({
       "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: 0 }]),

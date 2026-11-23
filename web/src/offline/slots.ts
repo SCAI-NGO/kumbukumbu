@@ -25,8 +25,8 @@ async function answer<T>(response: Response): Promise<T> {
   throw new RejectedError(error?.error ?? `Kumbu² answered ${response.status}.`, response.status);
 }
 
-/** A device with a copy, as Settings, Offline lists them (§4.6). `current`: this browser's. */
-export interface DeviceCopy { id: string; label: string; createdAt: string; contactAt: string | null; waiting: number; current: boolean; }
+/** A device with a copy, as Settings, Offline lists them (§4.6). `current`: this browser's. `waiting` null: not known yet. */
+export interface DeviceCopy { id: string; label: string; createdAt: string; contactAt: string | null; waiting: number | null; current: boolean; }
 
 async function send(method: "GET" | "PUT" | "DELETE", path: string, body?: unknown): Promise<Response> {
   const json = body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -44,9 +44,9 @@ export async function listDeviceCopies(): Promise<DeviceCopy[]> {
 
 /**
  * Whether removing another device's copy needs the password: its last contact reported changes waiting, or it hasn't
- * reported yet. Those changes are the one thing in Kumbu² without a trash or a history (design §4.4).
+ * reported a count yet. Those changes are the one thing in Kumbu² without a trash or a history (design §4.4).
  */
-export const needsPassword = (d: DeviceCopy) => !d.current && (d.waiting > 0 || d.contactAt === null);
+export const needsPassword = (d: DeviceCopy) => !d.current && (d.waiting !== 0 || d.contactAt === null);
 
 /** The server wants the password for this removal: the device has (just) reported changes waiting. */
 export class PasswordNeededError extends RejectedError {}
@@ -74,7 +74,7 @@ export const mirrorSlots: MirrorSlotsPort = {
     return answer<SlotAnswer & { token: string }>(await post("", { label }));
   },
   async contact(token, waiting) {
-    const response = await post("/contact", { token, waiting });
+    const response = await post("/contact", waiting === null ? { token } : { token, waiting });
     if (response.status === 404) {
       const error = (await response.clone().json().catch(() => null)) as { code?: string } | null;
       if (error?.code === "mirror-wipe") return "gone";

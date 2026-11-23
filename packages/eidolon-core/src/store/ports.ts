@@ -26,8 +26,11 @@ export interface SlotAnswer { id: string; key: string; vaults: SlotVault[]; }
  */
 export interface MirrorSlotsPort {
   create(label: string): Promise<SlotAnswer & { token: string }>;
-  /** "gone": the 404 with `mirror-wipe`, the slot was removed; the whole copy goes. */
-  contact(token: string, waiting: number): Promise<SlotAnswer | "gone">;
+  /**
+   * "gone": the 404 with `mirror-wipe`, the slot was removed; the whole copy goes. `waiting` null: not counted, as
+   * before the copy is open; the server then records that it doesn't know, never "nothing waiting".
+   */
+  contact(token: string, waiting: number | null): Promise<SlotAnswer | "gone">;
 }
 
 /** Web Locks: one holder per name across the browser's tabs. */

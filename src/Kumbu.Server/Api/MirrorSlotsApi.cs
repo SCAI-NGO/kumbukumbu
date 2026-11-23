@@ -15,8 +15,9 @@ public sealed record CreateMirrorSlotRequest(string? Label);
 public sealed record RenameMirrorSlotRequest(string? Label);
 
 /// <summary><c>token</c>: the one the slot was made with. <c>waiting</c>: the changes the browser has waiting to upload,
-/// for the device list's warning before a removal.</summary>
-public sealed record MirrorContactRequest(string? Token, int Waiting = 0);
+/// for the device list's warning before a removal; left out when it can't count them yet (an unlock, before the copy
+/// opens), and the slot then records that it doesn't know.</summary>
+public sealed record MirrorContactRequest(string? Token, int? Waiting = null);
 
 /// <summary>A vault the browser may mirror now. <c>tag</c> changes when the vault is re-keyed: the browser purges a
 /// vault it mirrored under another tag. <c>canWrite</c>: false for a read-only member, whose mirror queues no write.
@@ -35,8 +36,9 @@ public sealed record MirrorContactView(
 public sealed record RemoveMirrorSlotRequest(string? Password);
 
 /// <summary>A slot in the device list: never its key or token. <c>waiting</c>: the changes the browser had waiting at its
-/// last contact, lost if the slot is removed before they upload. <c>current</c>: this browser's.</summary>
-public sealed record MirrorSlotView(string Id, string Label, DateTime CreatedAt, DateTime? ContactAt, int Waiting, bool Current);
+/// last contact, lost if the slot is removed before they upload; null when that contact couldn't count them.
+/// <c>current</c>: this browser's.</summary>
+public sealed record MirrorSlotView(string Id, string Label, DateTime CreatedAt, DateTime? ContactAt, int? Waiting, bool Current);
 
 /// <summary>
 /// The offline mirror's key slots (offline mode design §4.2, §4.4), for a session only: an API key or a connected app
