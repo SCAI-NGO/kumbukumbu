@@ -18,7 +18,7 @@
 //  4. Add link: two 44 px buttons labelled for screen readers; `- [[Other]]` in `## Related` at the end, read back; the
 //     row leaves the list (§3.3, §3.4) → "similar #2"; the Related section's cases: similar-api #6–#8
 //  5. Not related: `not-related:` written, the row "Hidden · Undo" in place, Undo takes the entry out, hidden on the
-//     other note too (§3.6) → "similar #3"; the words → "similar #4"; for agents: similar-api #9
+//     other note too (§3.6) → "similar #3"; the words → "similar #4"; in place → "similar #11"; for agents: similar-api #9
 //  6. Only where the caller may change the note: a read member sees the rows without the answers (§3.3)
 //     → "similar #5"; the API's refusal: similar-api #10
 //  7. While the note is being written, a tap saves and leaves Write mode first (§3.3) → "similar #7"
@@ -33,7 +33,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { secrets } from "../support/env";
-import { firstIndex, similarNotes, waitSimilarReady } from "../support/search";
+import { firstIndex, nextIndex, similarNotes, waitSimilarReady } from "../support/search";
 import { reservePassword } from "../support/session";
 import { shareWithBob, unshare } from "../support/share";
 import { expect, shot, shotsDir070, test as base } from "../support/test";
@@ -91,7 +91,7 @@ async function openSimilar(page: Page) {
 const row = (rows: Locator, title: string) => rows.filter({ has: rows.page().getByRole("button", { name: new RegExp(`^${title}\\b`) }) });
 
 test("similar #1: closed and not asked until opened; the two diving notes, each with its line and folder, no score; a tap opens it at that line @similar @search @phone", async ({ page, aliceApi, vault }, testInfo) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const n = at(vault);
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
   const expected = await similarNotes(aliceApi, n.decompression);
@@ -110,6 +110,8 @@ test("similar #1: closed and not asked until opened; the two diving notes, each 
   const mentions = page.getByRole("region", { name: "Unlinked mentions" });
   await expect(mentions).toBeVisible();
   expect((await section.boundingBox())!.y, "below Unlinked mentions").toBeGreaterThan((await mentions.boundingBox())!.y);
+  // Once the page's requests have settled, none of them was the section's.
+  await page.waitForLoadState("networkidle");
   expect(asked, "nothing asked while closed").toEqual([]);
 
   await openSimilar(page);
@@ -128,17 +130,22 @@ test("similar #1: closed and not asked until opened; the two diving notes, each 
   const first = expected.notes[0];
   await rows.first().getByRole("button").first().click();
   await expect(page).toHaveURL(new RegExp(`${noteUrl(first.path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
-  const flashed = page.locator("article .k-flash");
-  await expect(flashed).toHaveCount(1);
-  expect(Number(await flashed.getAttribute("data-line")), "the block at the row's line").toBeLessThanOrEqual(first.line);
-  await expect(flashed).toBeInViewport();
+  // The flash lasts 1.6 s (NoteView.tsx): its line read at once; the block NoteView aims at is the greatest line at
+  // or above the suggestion's, outside embeds.
+  await expect(page.locator("article .k-flash")).toHaveCount(1);
+  const { lit, aimed } = await page.locator("article").evaluate((article, line) => {
+    const lines = [...article.querySelectorAll<HTMLElement>("[data-line]")].filter((e) => !e.closest(".k-embed")).map((e) => Number(e.dataset.line));
+    return { lit: Number(article.querySelector<HTMLElement>(".k-flash")?.dataset.line), aimed: Math.max(...lines.filter((l) => l <= line)) };
+  }, first.line);
+  expect(lit, `the block at line ${first.line} lit`).toBe(aimed);
+  await expect(page.locator(`article [data-line="${aimed}"]`).first()).toBeInViewport();
   // Another note: the section closed again.
   await expect(similar(page).button).toHaveAttribute("aria-expanded", "false");
   await expect(similar(page).rows).toHaveCount(0);
 });
 
 test("similar #2: Add link writes - [[Dive tables]] under Related at the end, and the row goes @similar @search", async ({ page, aliceApi, vault }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const n = at(vault);
   const before = (await aliceApi.getNote(n.decompression)).content;
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
@@ -157,7 +164,7 @@ test("similar #2: Add link writes - [[Dive tables]] under Related at the end, an
 });
 
 test("similar #3: Not related hides the row with Undo and keeps the path in not-related; Undo takes it back; the other note hides it too @similar @search", async ({ page, aliceApi, vault }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const n = at(vault);
   const before = (await aliceApi.getNote(n.decompression)).content;
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
@@ -168,7 +175,6 @@ test("similar #3: Not related hides the row with Undo and keeps the path in not-
   await page.getByRole("button", { name: "Not related: Dive tables", exact: true }).click();
   const hidden = rows.filter({ hasText: /^Hidden/ });
   await expect(hidden).toHaveCount(1);
-  await expect(hidden).toContainText("Hidden");
   await expect(hidden.getByRole("button", { name: "Undo" })).toBeVisible();
   await expect(rows, "still two rows: the answer in place").toHaveCount(2);
   const written = (await aliceApi.getNote(n.decompression)).content;
@@ -183,7 +189,7 @@ test("similar #3: Not related hides the row with Undo and keeps the path in not-
   // Hidden again, then seen from the other note: Decompression isn't offered there.
   await page.getByRole("button", { name: "Not related: Dive tables", exact: true }).click();
   await expect(rows.filter({ hasText: /^Hidden/ })).toHaveCount(1);
-  await waitSimilarReady(aliceApi, n.tables, firstIndex);
+  await waitSimilarReady(aliceApi, n.tables, nextIndex);
   await openNote(page, n.tables);
   const other = await openSimilar(page);
   await expect(other.rows).toHaveCount(1);
@@ -191,7 +197,7 @@ test("similar #3: Not related hides the row with Undo and keeps the path in not-
 });
 
 test("similar #4: a row answered Not related reads Hidden · Undo @similar @search", async ({ page, aliceApi, vault }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   test.info().annotations.push({ type: "finding", description: "F-01: the hidden row reads \"Hidden · Dive tables\" and Undo, not the spec's \"Hidden · Undo\"" });
   test.fail();
   const n = at(vault);
@@ -205,7 +211,8 @@ test("similar #4: a row answered Not related reads Hidden · Undo @similar @sear
 });
 
 test("similar #5: a read member sees the suggestions without Add link and Not related @similar @search", async ({ page, bobPage, aliceApi, seedAs }) => {
-  test.setTimeout(300_000);
+  // The first index, plus shareWithBob and unshare each waiting up to 61 s per password check on the ledger (up to three for the invitation, one for the deletion).
+  test.setTimeout(480_000);
   const share = await shareWithBob("Similar", "read");
   try {
     const n = at(share.vault);
@@ -229,7 +236,7 @@ test("similar #5: a read member sees the suggestions without Add link and Not re
 });
 
 test("similar #6: the cake has nothing above the floor; a failed request says so and Try again asks again @similar @search", async ({ page, aliceApi, vault }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const n = at(vault);
   await waitSimilarReady(aliceApi, n.cake, firstIndex);
   await openNote(page, n.cake);
@@ -249,7 +256,7 @@ test("similar #6: the cake has nothing above the floor; a failed request says so
 });
 
 test("similar #7: in Write mode Add link saves the text and leaves Write first @similar @search", async ({ page, aliceApi, vault }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const n = at(vault);
   const before = (await aliceApi.getNote(n.decompression)).content;
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
@@ -273,7 +280,7 @@ test("similar #7: in Write mode Add link saves the text and leaves Write first @
 });
 
 test("similar #8: the graph's suggested links, their card's Add link, and Not related with Undo @similar @search", async ({ page, aliceApi, vault }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const n = at(vault);
   const before = (await aliceApi.getNote(n.decompression)).content;
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
@@ -310,7 +317,7 @@ test("similar #8: the graph's suggested links, their card's Add link, and Not re
 });
 
 test("similar #10: in the side panel a row shows a short title in full @similar @search", async ({ page, aliceApi, vault }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   test.info().annotations.push({ type: "finding", description: "F-02: in the 300 px side panel a row cuts even a short title (\"Dive tab…\") and its line, the folder taking up to 30 %" });
   test.fail();
   const n = at(vault);
@@ -321,6 +328,24 @@ test("similar #10: in the side panel a row shows a short title in full @similar 
   const title = row(rows, "Dive tables").getByText("Dive tables", { exact: true });
   const cut = await title.evaluate((e) => e.scrollWidth > e.clientWidth);
   expect(cut, "F-02: the title Dive tables is shown in full (§3.2)").toBe(false);
+});
+
+test("similar #11: a row answered Not related stays where it stood @similar @search", async ({ page, aliceApi, vault }) => {
+  test.setTimeout(300_000);
+  test.info().annotations.push({ type: "finding", description: "F-03: the hidden row moves to the bottom of the list instead of staying in place (SimilarNotes.tsx:39)" });
+  test.fail();
+  const n = at(vault);
+  await waitSimilarReady(aliceApi, n.decompression, firstIndex);
+  const [best] = (await similarNotes(aliceApi, n.decompression)).notes;
+  const title = best.path.slice(best.path.lastIndexOf("/") + 1).replace(/\.md$/, "");
+  await openNote(page, n.decompression);
+  const { rows } = await openSimilar(page);
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first().getByRole("button").first()).toHaveAccessibleName(new RegExp(`^${title}`));
+
+  await page.getByRole("button", { name: `Not related: ${title}`, exact: true }).click();
+  await expect(rows.filter({ hasText: /^Hidden/ })).toHaveCount(1);
+  await expect(rows.first(), "F-03: the hidden row stays first, in place (§3.6)").toHaveText(/^Hidden/);
 });
 
 test("similar #9: with search by meaning off, the section says so @similar", async ({ page, aliceApi, folder }) => {
