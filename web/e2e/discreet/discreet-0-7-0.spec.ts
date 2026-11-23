@@ -187,7 +187,8 @@ test("discreet-0-7-0 similar: hidden, the console's similar over every vault and
     const output = page.getByRole("log", { name: "Console output" });
     const command = page.getByRole("textbox", { name: "Command" });
     await expect(command).toBeEnabled();
-    await command.fill(ask);
+    // Five hits, so the screen shows them whole: shown, Swarm (0.57) would be the second, after Brood frames (0.83).
+    await command.fill(`similar "${n.hive}" -n 5`);
     await command.press("Enter");
     await expect(output).toContainText(`similar to ${n.hive}, in every vault:`);
     await expect(output).toHaveAttribute("aria-busy", "false");
@@ -277,7 +278,7 @@ test("discreet-0-7-0 graph: hidden, /api/graph/similarity and /api/graph/local o
     await switched.click();
     await expect(switched).toHaveAttribute("aria-pressed", "true");
     const suggested = drawing.getByRole("button", { name: /^Suggested link: / });
-    await expect(suggested).toHaveCount(2);
+    await expect(suggested).toHaveCount(1);
     await expect(suggested).toHaveAccessibleName(`Suggested link: ${titleOf(n.brood)}`);
     await expect(dialog, "hidden: the graph shows nothing of Home").not.toContainText(/Swarm|Honey harvest/);
     const labels = await drawing.getByRole("button").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
