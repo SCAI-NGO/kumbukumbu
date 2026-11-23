@@ -1,0 +1,30 @@
+description: Without a declared type, a plain scalar reads as what it looks like; a quoted one stays text.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    age: 46
+    height: 1.70
+    quoted: "46"
+    done: true
+    birthday: 1980-11-03
+    met: 2026-11-23T14:30
+    city: Vienna
+    zip: 01010
+    nothing:
+    related: [Brita, Cleo]
+    ---
+    Body.
+expect:
+  properties:
+    Ann.md:
+      age: number 46
+      height: number 1.7
+      quoted: text 46
+      done: boolean true
+      birthday: date 1980-11-03
+      met: datetime 2026-11-23T14:30:00
+      city: text Vienna
+      zip: number 1010
+      nothing: null
+      related: [text Brita, text Cleo]

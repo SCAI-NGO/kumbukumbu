@@ -1,0 +1,24 @@
+description: A note without frontmatter has no properties; one whose frontmatter doesn't parse has none either, and a problem.
+source: spec
+notes:
+  Plain.md: |
+    # Plain
+
+    rating: 5
+  Broken.md: |
+    ---
+    rating: [5
+    ---
+  Twice.md: |
+    ---
+    rating: 5
+    rating: 6
+    ---
+expect:
+  properties:
+    Plain.md: {}
+    Broken.md: {}
+    Twice.md: {}
+  problems:
+    - Broken.md
+    - Twice.md

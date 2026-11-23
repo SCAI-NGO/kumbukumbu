@@ -1,0 +1,19 @@
+description: A value that doesn't fit its declared type stays the text it is, rather than being lost.
+source: spec
+types:
+  birthday: date
+  rating: number
+  done: checkbox
+notes:
+  Ann.md: |
+    ---
+    birthday: soon
+    rating: high
+    done: yes
+    ---
+expect:
+  properties:
+    Ann.md:
+      birthday: text soon
+      rating: text high
+      done: text yes
