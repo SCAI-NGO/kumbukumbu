@@ -91,7 +91,7 @@ test("sw #1: a kept asset changed in the cache is never served: online the serve
   // Online: the changed entry is deleted, the server's bytes are served and kept again.
   await tamper(page, name, path!, CHANGED, "text/javascript");
   expect(await keptHash(page, name, path!), "the cache holds the changed bytes now").not.toBe(original);
-  expect(await served(page, path!, CHANGED), "online, the server's bytes").toEqual({ hash: original, changed: true });
+  expect(await served(page, path!, CHANGED), "online, the server's bytes").toEqual({ hash: original, changed: false });
   expect(await keptHash(page, name, path!), "the server's bytes are kept again").toBe(original);
   await shot(page, testInfo, "sw");
 
@@ -138,7 +138,7 @@ test("sw #2: the kept app page changed in the cache is never shown at an offline
     else await page.waitForLoadState();
     const shown = await page.content();
     test.info().annotations.push({ type: "offline start", description: failed ? "the reload failed" : "the reload answered" });
-    expect(shown, "offline, never the changed page").toContain(CHANGED);
+    expect(shown, "offline, never the changed page").not.toContain(CHANGED);
     await expect(page).not.toHaveTitle("Changed");
   } finally {
     await page.context().setOffline(false);
