@@ -36,12 +36,12 @@ afterEach(() => {
 });
 
 describe("Settings: Vaults", () => {
-  it("has the sections Vaults, Shared vaults and Published notes", async () => {
+  it("has the sections Vaults and Shared vaults; Published has a page of its own", async () => {
     api();
     renderApp("/settings/vaults");
     await screen.findByRole("region", { name: "Vaults" });
     const titles = within(screen.getByRole("dialog", { name: "Settings" })).getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
-    expect(titles.slice(1)).toEqual(["Vaults", "Shared vaults", "Published notes"]);
+    expect(titles.slice(1)).toEqual(["Vaults", "Shared vaults"]);
   });
 
   it("shows storage used of the limit", async () => {

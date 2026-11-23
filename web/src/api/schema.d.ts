@@ -13380,6 +13380,11 @@ export interface components {
             /** Format: date-time */
             changedAt: null | string;
             publishedBy: string;
+            /** Format: int32 */
+            notes?: null | number | string;
+            /** Format: int32 */
+            depth?: null | number | string;
+            without?: null | string[];
         };
         PublicationView: {
             path: string;

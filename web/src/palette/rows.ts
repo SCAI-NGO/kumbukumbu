@@ -32,6 +32,7 @@ export function commandRows({ admin, shared, marketplaces, external }: { admin: 
   return [
     go("settings.appearance", "Settings", "Appearance", "/settings/appearance"),
     go("settings.vaults", "Settings", "Vaults", "/settings/vaults"),
+    go("settings.published", "Settings", "Published", "/settings/published"),
     go("settings.access.keys", "Settings / Access", "API keys", "/settings/access/keys"),
     go("settings.access.apps", "Settings / Access", "Apps", "/settings/access/apps"),
     go("settings.access.dav", "Settings / Access", "WebDAV", "/settings/access/dav"),

@@ -51,8 +51,10 @@ public sealed record PublicationView(
 /// <summary>A vault's publications and, for its owner, its unpublishable notes and folders.</summary>
 public sealed record VaultPublicationsView(PublicationView[] Publications, string[] Unpublishable, BundledView[]? Bundled = null);
 
-/// <summary>A publication of one of the owner's own vaults, for the overview; never the link.</summary>
-public sealed record PublicationOverviewView(string Path, DateTime SnapshotAt, bool Older, DateTime? ChangedAt, string PublishedBy);
+/// <summary>A publication of one of the owner's own vaults, for the overview; never the link. Its walk (<c>notes</c>,
+/// <c>depth</c>, <c>without</c>) as on the note's own read, so that Update copy can show a bundle's list from there.</summary>
+public sealed record PublicationOverviewView(
+    string Path, DateTime SnapshotAt, bool Older, DateTime? ChangedAt, string PublishedBy, int? Notes = null, int? Depth = null, string[]? Without = null);
 
 /// <summary>
 /// The owner's publications in the REST API (publish spec §3.5, §3.11): sessions only, over <see cref="Publications"/>,
@@ -82,7 +84,8 @@ public static class PublicationApi
         foreach (var access in (await store.UnlockedVaultsAsync(ct)).Where(Owned))
         {
             views.AddRange((await publications.ListAsync(access, store, VaultPath.Root.Child(access.Name), null, ct))
-                .Select(s => new PublicationOverviewView(s.Note.Value, s.SnapshotAt!.Value, s.Older!.Value, s.ChangedAt, s.PublishedBy!)));
+                .Select(s => new PublicationOverviewView(
+                    s.Note.Value, s.SnapshotAt!.Value, s.Older!.Value, s.ChangedAt, s.PublishedBy!, s.Notes, s.Depth, s.Without is null ? null : [.. s.Without.Select(w => w.Value)])));
         }
 
         return TypedResults.Ok(views.OrderBy(v => v.Path, StringComparer.Ordinal).ToArray());

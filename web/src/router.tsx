@@ -143,6 +143,7 @@ export const routes: RouteObject[] = [
                 children: [
                   { path: "/settings/appearance", lazy: lazyPage(() => import("./routes/settings/Appearance")) },
                   { path: "/settings/vaults", lazy: lazyPage(() => import("./routes/settings/Vaults")) },
+                  { path: "/settings/published", lazy: lazyPage(() => import("./routes/settings/Published")) },
                   { path: "/settings/access/:tab", lazy: lazyPage(() => import("./routes/Access")) },
                   { path: "/settings/access", element: <Navigate to="/settings/access/keys" replace /> },
                   { path: "/settings/skills/:tab", lazy: lazyPage(() => import("./routes/Skills")) },
