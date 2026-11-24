@@ -220,7 +220,8 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
   if (opening?.userId === userId) return opening.done;
   // Another user's opening still under way (signed out and someone else in): this one waits for it to end first.
   const before = opening?.done ?? Promise.resolve();
-  const done = (async () => {
+  const entry = { userId, done: Promise.resolve() };
+  entry.done = (async () => {
     try {
       await before;
       const all = await mirrorCopies();
@@ -243,11 +244,11 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
       // Offline or signed out meanwhile: the next sign-in or reconnect opens it.
       if (!(e instanceof OfflineError || e instanceof AuthError)) console.error("Kumbu² offline copy:", e);
     } finally {
-      if (opening?.done === done) opening = null;
+      if (opening === entry) opening = null;
     }
   })();
-  opening = { userId, done };
-  return done;
+  opening = entry;
+  return entry.done;
 }
 
 /** Makes contact with the unlocked copy's slot: on every socket (re)connect and each `mirror` frame. */
