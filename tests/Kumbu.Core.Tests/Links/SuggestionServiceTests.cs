@@ -68,6 +68,17 @@ public class SuggestionServiceTests
     }
 
     [Fact]
+    public async Task Add_link_writes_the_path_when_a_note_of_the_name_lies_in_another_folder()
+    {
+        // The resolver prefers the note beside the source, but the bare name would still name two notes of the vault.
+        var store = new InMemoryNoteStore(("/Work/Diving/a.md", "A\n"), ("/Work/Diving/b.md", "B\n"), ("/Work/Furniture/B.md", "B elsewhere\n"));
+
+        Ok(await Service(store).AddLinkAsync("/Work/Diving/a.md", "/Work/Diving/b.md", Ct));
+
+        Assert.EndsWith("- [[Diving/b]]\n", await Content(store, "/Work/Diving/a.md"));
+    }
+
+    [Fact]
     public async Task Add_link_again_writes_nothing()
     {
         var store = new InMemoryNoteStore(("/Work/a.md", "A\n\n## Related\n\n- [[b]]\n"), ("/Work/b.md", "B\n"));
