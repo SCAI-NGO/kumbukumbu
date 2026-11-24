@@ -33,6 +33,9 @@ public static class PropertyTypes
         ["datetime"] = PropertyType.Datetime,
     };
 
+    /// <summary>The type of an Obsidian type name ("date"), matched exactly as types.json writes it; null for another name.</summary>
+    public static PropertyType? Named(string name) => Names.TryGetValue(name, out var type) ? type : null;
+
     /// <summary>The <c>types</c> of a <c>types.json</c>; a file that isn't one, or a type name Obsidian doesn't have, declares nothing.</summary>
     public static IReadOnlyDictionary<string, PropertyType> Read(string json)
     {

@@ -1,0 +1,62 @@
+description: A query note declares a parameter; the caller's value is bound into this, typed as declared.
+source: spec
+types:
+  birthday: date
+query: Queries/Birthdays.md
+notes:
+  Queries/Birthdays.md: |
+    ---
+    type: query
+    params:
+      month:
+        type: number
+        required: true
+        description: The month, 1 to 12.
+    ---
+    # Birthdays
+
+    The people whose birthday is in a month, by day.
+
+    ```base
+    filters:
+      and:
+        - file.inFolder("People")
+        - birthday.month == this.month
+    views:
+      - type: table
+        name: By day
+        order: [file.basename, birthday]
+        sort:
+          - property: birthday
+            direction: ASC
+    ```
+  People/Ann.md: |
+    ---
+    birthday: 1980-11-23
+    ---
+  People/Brita.md: |
+    ---
+    birthday: 1975-04-12
+    ---
+  People/Cleo.md: |
+    ---
+    birthday: 1990-11-03
+    ---
+params:
+  month: { type: number, required: "true", description: "The month, 1 to 12." }
+runs:
+  - args: { month: "11" }
+    columns: [file.basename, birthday]
+    rows:
+      - [text Ann, date 1980-11-23]
+      - [text Cleo, date 1990-11-03]
+  - args: { month: "4" }
+    columns: [file.basename, birthday]
+    rows:
+      - [text Brita, date 1975-04-12]
+  - args: {}
+    error: missing-param
+  - args: { month: "eleven" }
+    error: param-value
+  - args: { month: "11", year: "1980" }
+    error: unknown-param

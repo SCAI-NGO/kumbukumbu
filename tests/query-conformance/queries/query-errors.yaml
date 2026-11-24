@@ -1,0 +1,13 @@
+description: A query that can't run says why, whatever the arguments.
+source: spec
+query: Queries/Broken.md
+notes:
+  Queries/Broken.md: |
+    ---
+    type: query
+    ---
+    # Nothing to run here
+  Ann.md: |
+    # Ann
+runs:
+  - error: no-base

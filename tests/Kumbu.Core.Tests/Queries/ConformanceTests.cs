@@ -36,6 +36,12 @@ public class ConformanceTests
 
         var types = PropertyTypes.Read(TypesJson(root));
         var notes = ((YamlMappingNode)root["notes"]).Children.ToDictionary(n => Text(n.Key), n => Properties.Read(Text(n.Value), types));
+        if (root.Children.TryGetValue("query", out _) || root.Children.TryGetValue("runs", out var r) && ((YamlSequenceNode)r).Children.Any(c => ((YamlMappingNode)c).Children.ContainsKey("query")))
+        {
+            Queries(root, types);
+            return;
+        }
+
         if (root.Children.TryGetValue("runs", out var runs))
         {
             Bases(root, types, (YamlSequenceNode)runs);
@@ -138,6 +144,64 @@ public class ConformanceTests
             var actual = result.Rows.Select(r => string.Join(" | ", r.Cells.Select(Describe)));
             Assert.Equal(string.Join("\n", expected), string.Join("\n", actual));
         }
+    }
+
+    private static void Queries(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types)
+    {
+        var notes = ((YamlMappingNode)root["notes"]).Children
+            .ToDictionary(n => Text(n.Key), n => new QueryNote(Text(n.Key), Text(n.Value), Properties.Read(Text(n.Value), types)));
+        var now = root.Children.TryGetValue("now", out var n)
+            ? DateTime.ParseExact(Text(n), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
+            : DefaultNow;
+        var main = root.Children.TryGetValue("query", out var q) ? Text(q) : null;
+
+        if (root.Children.TryGetValue("params", out var declared))
+        {
+            var expected = ((YamlMappingNode)declared).Children.Select(p => $"{Text(p.Key)}: {Describe(p.Value)}");
+            var actual = Query.Read(notes[main!]).Params.Select(p => $"{p.Name}: {Describe(p)}");
+            Assert.Equal(string.Join("\n", expected), string.Join("\n", actual));
+        }
+
+        if (root.Children.TryGetValue("views", out var views))
+            Assert.Equal(((YamlSequenceNode)views).Children.Select(Text), Query.Read(notes[main!]).ViewNames);
+
+        foreach (var run in ((YamlSequenceNode)root["runs"]).Children.Cast<YamlMappingNode>())
+        {
+            var path = run.Children.TryGetValue("query", out var own) ? Text(own) : main!;
+            var view = run.Children.TryGetValue("view", out var v) ? Text(v) : null;
+            var arguments = run.Children.TryGetValue("args", out var a)
+                ? ((YamlMappingNode)a).Children.ToDictionary(e => Text(e.Key), e => (IReadOnlyList<string>)(e.Value is YamlSequenceNode list ? list.Children.Select(Text).ToList() : [Text(e.Value)]))
+                : new Dictionary<string, IReadOnlyList<string>>();
+            QueryResult Run() => Query.Read(notes[path]).Run(view, arguments, notes.Values, now);
+            var label = $"{path} {string.Join(" ", arguments.Select(e => $"{e.Key}={string.Join(",", e.Value)}"))}";
+            if (run.Children.TryGetValue("error", out var error))
+            {
+                var code = Assert.ThrowsAny<Exception>(() => Run()) switch
+                {
+                    QuerySyntaxError => "syntax",
+                    QueryError e => e.Code,
+                    var e => e.GetType().Name,
+                };
+                Assert.True(Text(error) == code, $"{label}: expected the error {Text(error)}, got {code}.");
+                continue;
+            }
+
+            var result = Run();
+            Assert.Equal(((YamlSequenceNode)run["columns"]).Children.Select(Text), result.Columns);
+            var expectedRows = ((YamlSequenceNode)run["rows"]).Children.Select(r => string.Join(" | ", ((YamlSequenceNode)r).Children.Select(Describe)));
+            var actualRows = result.Rows.Select(r => string.Join(" | ", r.Cells.Select(Describe)));
+            Assert.True(string.Join("\n", expectedRows) == string.Join("\n", actualRows), $"{label}: expected\n{string.Join("\n", expectedRows)}\ngot\n{string.Join("\n", actualRows)}");
+        }
+    }
+
+    // A parameter as a case writes it: a map of its type, required, and its default, options and description where it has them.
+    private static string Describe(QueryParam p)
+    {
+        var parts = new List<string> { $"type: {Query.Name(p.Type)}", $"required: {(p.Required ? "true" : "false")}" };
+        if (p.Default is not null) parts.Add($"default: {Describe(p.Default)}");
+        if (p.Options.Count > 0) parts.Add($"options: [{string.Join(", ", p.Options)}]");
+        if (p.Description is not null) parts.Add($"description: {p.Description}");
+        return "{" + string.Join(", ", parts.Order(StringComparer.Ordinal)) + "}";
     }
 
     private static YamlMappingNode Load(string file)

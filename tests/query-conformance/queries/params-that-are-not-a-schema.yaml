@@ -1,0 +1,73 @@
+description: params that can't be read as a schema make the query fail before it runs, each case for its own reason.
+source: spec
+query: Queries/A.md
+notes:
+  Queries/A.md: |
+    ---
+    type: query
+    params:
+      month:
+        type: colour
+    ---
+    ```base
+    views:
+      - type: table
+    ```
+  Queries/B.md: |
+    ---
+    type: query
+    params: [month]
+    ---
+    ```base
+    views:
+      - type: table
+    ```
+  Queries/C.md: |
+    ---
+    type: query
+    params:
+      month:
+        type: number
+        default: eleven
+    ---
+    ```base
+    views:
+      - type: table
+    ```
+  Queries/D.md: |
+    ---
+    type: query
+    params:
+      month:
+        type: number
+        required: true
+        default: 11
+    ---
+    ```base
+    views:
+      - type: table
+    ```
+  Queries/E.md: |
+    ---
+    type: query
+    params:
+      kind:
+        type: text
+        options: [task, event]
+        default: meeting
+    ---
+    ```base
+    views:
+      - type: table
+    ```
+runs:
+  - query: Queries/A.md
+    error: params
+  - query: Queries/B.md
+    error: params
+  - query: Queries/C.md
+    error: params
+  - query: Queries/D.md
+    error: params
+  - query: Queries/E.md
+    error: params

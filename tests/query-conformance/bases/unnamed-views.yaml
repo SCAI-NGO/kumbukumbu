@@ -1,0 +1,30 @@
+description: A view without a name is called View and its place, counted from 1, and runs by that name.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    age: 40
+    ---
+  Ben.md: |
+    ---
+    age: 30
+    ---
+base: |
+  views:
+    - type: table
+      order: [file.basename]
+    - type: table
+      order: [file.basename, age]
+      sort:
+        - property: age
+runs:
+  - view: View 2
+    columns: [file.basename, age]
+    rows:
+      - [text Ben, number 30]
+      - [text Ann, number 40]
+  - view: View 1
+    columns: [file.basename]
+    rows:
+      - [text Ann]
+      - [text Ben]
