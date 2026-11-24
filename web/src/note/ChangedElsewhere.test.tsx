@@ -37,7 +37,9 @@ type Server = {
   gate: Promise<void> | null;
 };
 const newServer = (): Server => ({ version: "v1", writer: "ada", kind: null, at: 0, gone: null, failNotes: false, noteReads: 0, gate: null });
-const iso = (minute: number) => new Date(Date.UTC(2026, 9, 25, 9, minute)).toISOString();
+// Writes are minutes before the test runs, not on a fixed day: the bar says how long ago, and a fixed day ages into "last month".
+const START = Math.floor(Date.now() / 60_000) * 60_000 - 30 * 60_000;
+const iso = (minute: number) => new Date(START + minute * 60_000).toISOString();
 const note = (s: Server) => ({ path: PLAN, content: texts[s.version], version: s.version, lastWriter: s.writer, lastWriteAt: iso(s.at), current: true });
 
 /** Someone writes `version` elsewhere, a minute after the last write. */
