@@ -20,8 +20,8 @@
 //    protection, the client's: Bob's sign-in, the sign-in page's sweep and a reload never make a contact with Alice's
 //    token, and don't wipe her copy, which still opens for her offline. The second line, the server's: that contact
 //    (sent from the page with Bob's session, as the app never sends it) is refused with a 403 without a code, and the
-//    slot stays listed → "devices #4: another user's copy …"; that no contact hands in her token → "devices #6" (F-10,
-//    intermittent, fixme; #4 records the count as an annotation). No Vitest covers the client's handling of a 403 contact
+//    slot stays listed → "devices #4: another user's copy …"; that no contact hands in her token → "devices #6" (F-10, fixed:
+//    the slot port checks the token against the signed-in user's copy before every contact; #4 records the count). No Vitest covers the client's handling of a 403 contact
 //    (it never happens through the app), and this test can't either.
 // Left out: the device list's "had N changes waiting" from a real browser's offline edits (the contact that reports
 // them needs the browser online again, which uploads them first); #2 reports them through the contact route instead.
@@ -407,7 +407,5 @@ test("devices #6: another user's copy: Bob's session never hands in Alice's toke
     description:
       "F-10: in one of the two final runs a contact of Bob's session, signed in over a tab that held Alice's copy, handed in her slot's token (offline spec §4.11: \"their token is never handed in\"); the server refused it with 403 (ADR 0020), so the copy stayed. Intermittent: it passed in the other final run and in every run while the test was written",
   });
-  // Intermittent, so neither a plain assertion nor test.fail would give the same result twice (as F-06).
-  test.fixme(true, "F-10: intermittent, see the annotation");
   await anotherUsersCopy({ freshSession, aliceApi, folder }, true);
 });

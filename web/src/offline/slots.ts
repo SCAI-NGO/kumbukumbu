@@ -4,6 +4,7 @@
 // reached or fails; the 404 with `mirror-wipe` is the answer "gone".
 import { AuthError, OfflineError, RejectedError } from "eidolon-core/engine/ports";
 import type { MirrorSlotsPort, SlotAnswer } from "eidolon-core/store/ports";
+import { useSession } from "../state/session";
 
 const BASE = "/api/account/mirror-slots";
 
@@ -82,3 +83,20 @@ export const mirrorSlots: MirrorSlotsPort = {
     return answer<SlotAnswer>(response);
   },
 };
+
+/**
+ * The slot as the copies reach it: every contact passes here, whichever path started it (sign-in, page load, socket,
+ * `mirror` frame), and goes out only with the token of the signed-in user's copy (§4.11: another user's token is never
+ * handed in). Looked at last, just before the request: the user may have changed while the contact waited.
+ */
+export function signedInSlots(slots: MirrorSlotsPort, tokenOf: (userId: string) => Promise<string | null>): MirrorSlotsPort {
+  return {
+    create: (label) => slots.create(label),
+    async contact(token, waiting) {
+      const userId = useSession.getState().user?.id;
+      const own = userId ? await tokenOf(userId) : null;
+      if (own !== token || useSession.getState().user?.id !== userId) throw new AuthError("This offline copy isn't the signed-in user's.");
+      return slots.contact(token, waiting);
+    },
+  };
+}

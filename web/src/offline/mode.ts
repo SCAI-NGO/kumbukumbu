@@ -187,7 +187,8 @@ function contacted(mirror: SealedMirror) {
   for (const fn of [...contactedListeners]) fn(mirror);
 }
 
-let opening: Promise<void> | null = null;
+/** The copy being opened in this tab, and for whom. */
+let opening: { userId: string; done: Promise<void> } | null = null;
 
 /** Holds an unlocked copy in this tab, following what other tabs do to it; a copy it held before is locked. */
 export function keep(opened: SealedMirror) {
@@ -214,8 +215,12 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
   // Signed in offline: the session knows the username only (id ""), and the copy is open already. Looking it up by
   // that id would find none and lock it.
   if (userId === "") return Promise.resolve();
-  opening ??= (async () => {
+  if (opening?.userId === userId) return opening.done;
+  // Another user's opening still under way (signed out and someone else in): this one waits for it to end first.
+  const before = opening?.done ?? Promise.resolve();
+  const done = (async () => {
     try {
+      await before;
       const all = await mirrorCopies();
       const header = await all.forUser(userId);
       const held = useOfflineCopy.getState().mirror;
@@ -228,25 +233,26 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
         username: signIn.username, password: signIn.password, idleMs: signIn.remember ? REMEMBERED_IDLE_MS : IDLE_MS,
       });
       if (opened === "wiped") return wiped();
+      // Signed out, or someone else signed in, while it opened: it isn't kept for the session there is now.
+      if (useSession.getState().user?.id !== userId) return opened.lock();
       keep(opened);
       contacted(opened);
     } catch (e) {
       // Offline or signed out meanwhile: the next sign-in or reconnect opens it.
       if (!(e instanceof OfflineError || e instanceof AuthError)) console.error("Kumbu² offline copy:", e);
     } finally {
-      opening = null;
+      if (opening?.done === done) opening = null;
     }
   })();
-  return opening;
+  opening = { userId, done };
+  return done;
 }
 
 /** Makes contact with the unlocked copy's slot: on every socket (re)connect and each `mirror` frame. */
 export async function contact(): Promise<void> {
   const mirror = useOfflineCopy.getState().mirror;
   if (mirror === null || mirror.locked) return;
-  // A contact under another user's session would hand in this copy's token for them, and be answered "wipe".
-  const userId = useSession.getState().user?.id;
-  if (!userId || (await (await mirrorCopies()).forUser(userId))?.copy !== mirror.header.copy) return;
+  // Under another user's session the slot port refuses it (slots.ts): their token is never handed in.
   try {
     const result = await mirror.contact();
     if (result === "wiped") return wiped();

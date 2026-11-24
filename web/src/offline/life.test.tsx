@@ -103,6 +103,32 @@ describe("a session's end", () => {
     expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).not.toBeNull();
   });
 
+  test("a contact begun under Ada's session doesn't go out once Bob is the one signed in", async () => {
+    await openedOnline();
+    const calls = server({ "POST /api/account/mirror-slots/contact": slot });
+    const contacting = contact();
+    useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+    await contacting;
+    expect(calls.filter((c) => c.body?.includes("tok-ada"))).toEqual([]);
+  });
+
+  test("Ada's copy, still opening when Bob signs in, is never kept for him, and her token goes out no more", async () => {
+    await adasCopy();
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    const calls = server({ "POST /api/account/mirror-slots/contact": async () => (await answered, slot()) });
+    const adas = openCopy(user.id);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+    const bobs = openCopy(bob.id);
+    answer();
+    await Promise.all([adas, bobs]);
+    expect(useOfflineCopy.getState().mirror).toBeNull();
+    // The one contact made while she was signed in, none after.
+    expect(calls.filter((c) => c.body?.includes("tok-ada"))).toHaveLength(1);
+  });
+
   test("a sign-in in a tab that holds the copy wraps it again under the password", async () => {
     await openedOnline();
     const held = useOfflineCopy.getState().mirror;
