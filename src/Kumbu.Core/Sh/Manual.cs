@@ -24,6 +24,7 @@ public static class Manual
           tags [--archive] [tag] [path]   the tags below a path with counts; with a tag, the notes that carry it
           board <vault>                   the vault's board: instructions, then each column's cards
           calendar <vault>                the vault's notes with a time, this week (--month, --from/--to); calendar notifications: what's on; calendar set|move|close|reopen|unset <note> changes one (help calendar)
+          query ls|inspect|execute|check  named queries over the notes' typed properties, Obsidian Bases in a note with parameters; query properties [path]: which properties notes have (help query)
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes

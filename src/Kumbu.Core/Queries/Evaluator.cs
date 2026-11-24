@@ -8,23 +8,67 @@ namespace Kumbu.Core.Queries;
 /// and the clock, fixed for one run so every row sees the same <c>now()</c>.</summary>
 public sealed record Scope(QueryNote Note, QueryNote? This, DateTime Now);
 
+/// <summary>One function, method or field of the language: its name, how it is written, and what it gives.</summary>
+public sealed record LanguageEntry(string Name, string Written, string Gives);
+
 /// <summary>Evaluates expressions of the Bases language over a note. One rule decides what fails: what no note can
 /// make right (a function, method or formula that doesn't exist, formulas in a circle, a regular expression that
 /// doesn't compile) is a <see cref="QueryError"/> when the expression is compiled, before any note is read; a value
 /// of the wrong type, which messy notes always have, gives null. The cases are in <c>tests/query-conformance/expressions</c>.</summary>
 public sealed class Evaluator
 {
-    private static readonly HashSet<string> Functions = ["if", "now", "today", "date", "number", "list"];
-
-    private static readonly HashSet<string> Methods =
+    /// <summary>The functions, as <c>help query</c> shows them: the help and what compiles are one list, so they can't drift.</summary>
+    public static readonly IReadOnlyList<LanguageEntry> FunctionReference =
     [
-        "isEmpty", "toString",
-        "contains", "startsWith", "endsWith", "lower", "upper", "trim", "matches",
-        "join",
-        "abs", "floor", "ceil", "round",
-        "date",
-        "hasTag", "inFolder", "hasProperty",
+        new("if", "if(condition, then, else)", "then when the condition holds, else else; only the branch taken is evaluated"),
+        new("now", "now()", "the date and time of the run, in your time zone"),
+        new("today", "today()", "the date of the run"),
+        new("date", "date(text)", "the date or date and time a text writes (2026-11-23, 2026-11-23T14:00), else null"),
+        new("number", "number(value)", "a number from a number, a checkbox (1 or 0) or a text that writes one, else null"),
+        new("list", "list(value)", "the value as a list: a list stays one, null is the empty list"),
     ];
+
+    /// <summary>The methods, by what they are called on, as <c>help query</c> shows them.</summary>
+    public static readonly IReadOnlyList<LanguageEntry> MethodReference =
+    [
+        new("isEmpty", "any.isEmpty()", "true for null, the empty text, list or object"),
+        new("toString", "any.toString()", "the value as text"),
+        new("contains", "text.contains(text)", "whether the text holds the other, case counting"),
+        new("startsWith", "text.startsWith(text)", "whether the text starts with the other"),
+        new("endsWith", "text.endsWith(text)", "whether the text ends with the other"),
+        new("lower", "text.lower()", "the text in lower case"),
+        new("upper", "text.upper()", "the text in upper case"),
+        new("trim", "text.trim()", "the text without spaces at either end"),
+        new("matches", "text.matches(/regex/flags)", "whether a regular expression matches (flags g, i, m, s, u)"),
+        new("contains", "list.contains(value)", "whether the list holds the value"),
+        new("join", "list.join(text)", "the items as one text, the text between them (a comma without one)"),
+        new("abs", "number.abs()", "the number without its sign"),
+        new("floor", "number.floor()", "the number rounded down"),
+        new("ceil", "number.ceil()", "the number rounded up"),
+        new("round", "number.round()", "the number rounded, halves up"),
+        new("date", "datetime.date()", "the date of a date and time"),
+        new("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it"),
+        new("inFolder", "file.inFolder(folder)", "whether the note lies in the folder or below it"),
+        new("hasProperty", "file.hasProperty(name)", "whether the note's frontmatter has the property"),
+    ];
+
+    /// <summary>The fields, by what they are read on.</summary>
+    public static readonly IReadOnlyList<LanguageEntry> FieldReference =
+    [
+        new("name", "file.name", "the file's name with its extension (Ann.md)"),
+        new("basename", "file.basename", "the file's name without its extension (Ann)"),
+        new("path", "file.path", "the path in the vault (People/Ann.md)"),
+        new("folder", "file.folder", "the folder in the vault (People)"),
+        new("ext", "file.ext", "the extension (md)"),
+        new("tags", "file.tags", "the note's tags, frontmatter and text"),
+        new("properties", "file.properties", "the frontmatter as an object"),
+        new("length", "text.length, list.length", "how many characters or items"),
+        new("year", "date.year, .month, .day", "a date's parts; a date and time also has .hour, .minute, .second"),
+    ];
+
+    private static readonly HashSet<string> Functions = [.. FunctionReference.Select(f => f.Name)];
+
+    private static readonly HashSet<string> Methods = [.. MethodReference.Select(m => m.Name)];
 
     private readonly IReadOnlyDictionary<string, string> formulaTexts;
     private readonly Dictionary<string, Expr> formulas = new(StringComparer.Ordinal);

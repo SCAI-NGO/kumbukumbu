@@ -127,6 +127,15 @@ export const commandTable: Record<string, CommandEntry> = {
     values: [],
     find: (o) => ({ paths: o.length > 1 ? [1] : [], missing: o[0] === "ls" ? "cwd" : undefined }),
   },
+  // QueryCommand.cs: operand 0 is the form; a query's name stays a name, so only what looks like a path is resolved.
+  // ls and properties cover every vault without a path, so the working directory goes in.
+  query: {
+    values: ["--view", "--param"],
+    find: (o) => ({
+      paths: o.length > 1 && looksLikePath(o[1]) ? [1] : [],
+      missing: o.length === 1 && (o[0] === "ls" || o[0] === "properties") ? "cwd" : undefined,
+    }),
+  },
   // SkillsCommand.cs: operand 0 is the subcommand; a skill's name stays a name, so only what looks like a path is
   // resolved, and never find's request. No default: without a path, skills ls and check cover every vault.
   skills: {

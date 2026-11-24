@@ -36,7 +36,7 @@ public class SkillDirectoryTests
 
     [Fact]
     public async Task Lists_system_then_Skills_then_vaults() =>
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-query", "create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
 
     [Fact]
     public async Task A_skill_in_the_Skills_vault_takes_the_place_of_the_system_skill()
@@ -178,7 +178,7 @@ public class SkillDirectoryTests
     [Fact]
     public async Task System_skills_say_so()
     {
-        var skill = (await dir.ListAsync(null, Ct))[0];
+        var skill = (await dir.ListAsync(null, Ct)).Single(s => s.Name == "create-skill");
         Assert.True(skill.IsSystem);
         Assert.Null(skill.Vault);
         Assert.StartsWith("create-skill (system): Write a new skill for the user", skill.Line());
@@ -191,7 +191,7 @@ public class SkillDirectoryTests
         Put("/Private/_skills/a-skill/SKILL.md", "---\nname: a-skill\ndescription: A.\n---\n");
         Put("/Archiv/_skills/old/SKILL.md", "---\nname: old\ndescription: Old.\n---\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "old", "a-skill", "b-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-query", "create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "old", "a-skill", "b-skill", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
     }
 
     [Fact]
@@ -386,7 +386,7 @@ public class SkillDirectoryTests
         Put("/Skills/readme.md", "# Readme\n");
         Put("/Work/_skills/readme.md", "# Readme\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-query", "create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
     }
 
     [Fact]
@@ -409,7 +409,7 @@ public class SkillDirectoryTests
         // Only the vault Skills has its archive in a skill's place.
         Put("/Work/_skills/_archive/SKILL.md", "---\nname: _archive\ndescription: Kept.\n---\n");
 
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "_archive", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-query", "create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "write-as-alice", "_archive", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
         Assert.Equal(["write-as-alice"], (await dir.ListAsync("Skills", Ct)).Select(s => s.Name));
     }
 
@@ -418,7 +418,7 @@ public class SkillDirectoryTests
     {
         _store.SkillsVault = null;
 
-        Assert.Equal(["create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
+        Assert.Equal(["create-query", "create-skill", "ingest-attachments", "kumbu-binary-upload", "project-memory", "synthesize-knowledge", "release-notes"], (await dir.ListAsync(null, Ct)).Select(s => s.Name));
         Assert.Empty(await dir.ListAsync("Skills", Ct));
     }
 
@@ -438,7 +438,7 @@ public class SkillDirectoryTests
     [Fact]
     public async Task A_system_skills_files_and_manifest_come_from_the_server()
     {
-        var skill = (await dir.ListAsync(null, Ct))[0];
+        var skill = (await dir.ListAsync(null, Ct)).Single(s => s.Name == "create-skill");
 
         Assert.Equal([new SkillFile("SKILL.md", true)], await dir.FilesAsync(skill, Ct));
         Assert.Equal(SystemSkills.Find("create-skill")!.Files[0].Content, await dir.ManifestAsync(skill, Ct));

@@ -153,6 +153,15 @@ describe("resolveLine", () => {
     expect(resolveLine('skills find "../anything"', "/Work")).toBe('skills find "../anything"');
   });
 
+  it("keeps query names as names, resolves what looks like a path, and lists the working directory's queries", () => {
+    expect(resolveLine("query execute Birthdays --param month=11", "/Work")).toBe("query execute Birthdays --param month=11");
+    expect(resolveLine("query check ./Queries/Open.md", "/Work")).toBe("query check /Work/Queries/Open.md");
+    expect(resolveLine("query execute ../Q.md --view Cities", "/Work/notes")).toBe("query execute /Work/Q.md --view Cities");
+    expect(resolveLine("query ls", "/Work")).toBe("query ls /Work");
+    expect(resolveLine("query properties", "/Work/People")).toBe("query properties /Work/People");
+    expect(resolveLine("query inspect", "/Work")).toBe("query inspect");
+  });
+
   it("sends a line unchanged when every path is already absolute", () => {
     expect(resolveLine('rg  -n   foo "/Work/a.md"', cwd)).toBe('rg  -n   foo "/Work/a.md"');
   });
