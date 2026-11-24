@@ -83,7 +83,10 @@ public sealed class SuggestionService(INoteStore store, NoteWriter writer)
         var notes = await store.ListNotesUnderAsync(VaultPath.Root.Child(path!.Vault!), ct);
         var title = LinkResolver.StripMd(target!.Name);
         var resolved = new LinkResolver(path.Vault!, notes).Resolve(path, title);
-        var link = resolved is { Kind: LinkKind.Note } && resolved.Target == target ? title : LinkResolver.LinkText(target);
+        // The title only when no other note of the vault has that name (spec §3.4), even where the resolver would prefer the
+        // target, as it does beside the source.
+        var unique = notes.Count(n => LinkResolver.StripMd(n.Name).Equals(title, StringComparison.OrdinalIgnoreCase)) == 1;
+        var link = unique && resolved is { Kind: LinkKind.Note } && resolved.Target == target ? title : LinkResolver.LinkText(target);
         return await RewriteAsync(path, content => WithRelated(content, $"- [[{link}]]"), $"linked {target.Value} from {path.Value}", ct);
     }
 

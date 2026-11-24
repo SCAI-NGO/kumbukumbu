@@ -86,7 +86,7 @@ public class SimilarTests
         var result = await Run("similar /R/Fish.md");
 
         Assert.False(result.IsError, result.Output);
-        Assert.StartsWith("similar to /R/Fish.md, in every vault: 4 notes\n", result.Output);
+        Assert.StartsWith("similar to /R/Fish.md, below every vault: 4 notes\n", result.Output);
         Assert.Equal(
             [
                 "1. /R/Viscosity.md  lines 1-1  score 0.90  1 step",
@@ -161,7 +161,7 @@ public class SimilarTests
         var result = await Run("similar --between /R/Fish.md /R/Island.md");
 
         Assert.False(result.IsError, result.Output);
-        Assert.StartsWith("between A = /R/Fish.md and C = /R/Island.md, in every vault: 3 notes\n", result.Output);
+        Assert.StartsWith("between A = /R/Fish.md and C = /R/Island.md, below every vault: 3 notes\n", result.Output);
         Assert.Equal(
             [
                 "1. /R/Viscosity.md  lines 1-1  score 0.89 (0.90 to A, 0.89 to C)  1 step from A, not connected to C",
@@ -182,6 +182,20 @@ public class SimilarTests
 
         Assert.StartsWith("1. /R/Far.md", oil[0]);
         Assert.StartsWith("1. /R/Mixed.md#Oil", Hits(await Run("similar /R/Fish.md", store))[0]);
+    }
+
+    [Fact]
+    public async Task A_section_merged_into_its_parents_chunk_compares_that_chunk()
+    {
+        // ## Ovens is short, so it shares the chunk that starts at the title; ## Nitrogen is long enough for its own.
+        var nitrogen = string.Join(' ', Enumerable.Repeat("fish oil and its effects on blood", 40));
+        var store = Store(("/R/Kitchen.md", $"# Kitchen\n\n## Ovens\n\nfar too hot\n\n## Nitrogen\n\n{nitrogen}\n"));
+
+        var result = await Run("similar \"/R/Kitchen.md#Ovens\"", store);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.StartsWith("1. /R/Far.md", Hits(result)[0]);
+        Assert.StartsWith("1. /R/Fish.md", Hits(await Run("similar \"/R/Kitchen.md#Nitrogen\"", store))[0]);
     }
 
     [Fact]
@@ -261,5 +275,20 @@ public class SimilarTests
         Assert.Equal(
             "/R/Fish.md and /R/Island.md are not connected at all (no path of any length)",
             (await Run("graph --path /R/Fish.md /R/Island.md --without-tag synthesis/hypothesis", store)).Output);
+    }
+
+    [Fact]
+    public async Task Graph_hubs_without_tag_counts_only_the_links_of_the_notes_kept()
+    {
+        var store = Store(("/R/Finding.md", "#synthesis/hypothesis\n\n[[Fish]] and [[Island]]\n"));
+
+        var with = (await Run("graph --hubs /R", store)).Output;
+        var without = (await Run("graph --hubs /R --without-tag synthesis", store)).Output;
+
+        Assert.Contains("2  /R/Fish.md  (1 in, 1 out)", with);
+        Assert.Contains("1  /R/Island.md  (1 in, 0 out)", with);
+        Assert.Contains("1  /R/Fish.md  (0 in, 1 out)", without);
+        Assert.Contains("0  /R/Island.md  (0 in, 0 out)", without);
+        Assert.DoesNotContain("/R/Finding.md", without);
     }
 }
