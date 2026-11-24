@@ -82,7 +82,7 @@ export class MirrorEngines {
     if (!this.leading || this.stopped || this.o.mirror.locked) return;
     await this.host.refresh();
     const m = this.o.mirror;
-    for (const vault of m.held()) if (!mirrors(m.choice, vault.id)) await m.purge(vault.id);
+    for (const vault of m.held()) if (!mirrors(m.choice, vault.id)) await m.purge(vault.id, false);
     if (recheck) await Promise.all([...this.engines.values()].map((e) => e.check(true)));
     await this.keepBudget();
   }

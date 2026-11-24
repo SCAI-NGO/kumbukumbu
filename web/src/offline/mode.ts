@@ -17,7 +17,7 @@ import { browserPorts, locks } from "./ports";
 export const WIPED = "The offline copy on this device was removed.";
 
 interface OfflineModeState extends ModeState {
-  /** A contact purged vaults: how many changes went with them. The notice names no vault (§3a). */
+  /** Vaults' copies were removed (SealedMirror.listenRemoved): how many changes went with them. The notice names no vault (§3a). */
   purged: { lost: number } | null;
   failed(): void;
   reached(): void;
@@ -199,6 +199,8 @@ export function keep(opened: SealedMirror) {
     if (vault === null) wiped();
     else useOfflineMode.getState().waitingChanged();
   };
+  // The notice follows the removal, whichever path made it (a contact, the engines' vault list, another tab).
+  opened.listenRemoved(({ lost }) => useOfflineMode.setState(({ purged }) => ({ purged: { lost: (purged?.lost ?? 0) + lost } })));
   opened.onChanged = () => useOfflineMode.getState().waitingChanged();
   opened.onLockAsked = () => void lockCopy();
   useOfflineCopy.getState().set(opened.header, opened);
@@ -256,7 +258,6 @@ export async function contact(): Promise<void> {
   try {
     const result = await mirror.contact();
     if (result === "wiped") return wiped();
-    if (result.vaults > 0) useOfflineMode.setState({ purged: { lost: result.lost } });
     contacted(mirror);
   } catch (e) {
     if (!(e instanceof OfflineError || e instanceof AuthError)) console.error("Kumbu² offline copy:", e);

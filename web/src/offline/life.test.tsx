@@ -4,12 +4,12 @@
 // of removed copies.
 import "fake-indexeddb/auto";
 import { MirrorCopies } from "eidolon-core/store/mirror";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "../api/client";
 import { useSession } from "../state/session";
 import { json, noContent, user } from "../test/app";
 import { useOfflineCopy } from "./copy";
-import { contact, lockCopy, onBeforeLock, openCopy } from "./mode";
+import { contact, lockCopy, onBeforeLock, openCopy, useOfflineMode } from "./mode";
 import { browserPorts } from "./ports";
 import { signOutPending, sweepRemovedCopies } from "./unlock";
 
@@ -56,6 +56,7 @@ async function openedOnline(idleMs = 60_000) {
 afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  useOfflineMode.getState().dismissPurged();
   await lockCopy();
   useOfflineCopy.getState().clear();
   useSession.getState().reset();
@@ -79,6 +80,30 @@ describe("a copy opened with the slot's key", () => {
     await openedOnline(1_000);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(useOfflineCopy.getState().mirror?.locked).toBe(false);
+  });
+});
+
+describe("a vault's copy removed", () => {
+  // The copy's writes take a Web Lock, which jsdom hasn't: one tab, so each runs at once.
+  beforeEach(() => vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } })));
+
+  test("by the engines' vault list before a contact: the notice shows all the same", async () => {
+    await openedOnline();
+    const mirror = useOfflineCopy.getState().mirror!;
+    await mirror.adopt("v1");
+    // As the engines do for a vault the vault list no longer has (store/engines.ts); the contact then finds none.
+    await mirror.purge("v1");
+    server({ "POST /api/account/mirror-slots/contact": () => json(200, { id: "s1", key, vaults: [] }) });
+    await contact();
+    expect(useOfflineMode.getState().purged).toEqual({ lost: 0 });
+  });
+
+  test("not by the device's own choice: no notice", async () => {
+    await openedOnline();
+    const mirror = useOfflineCopy.getState().mirror!;
+    await mirror.adopt("v1");
+    await mirror.purge("v1", false);
+    expect(useOfflineMode.getState().purged).toBeNull();
   });
 });
 
