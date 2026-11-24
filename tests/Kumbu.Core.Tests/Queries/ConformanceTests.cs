@@ -36,6 +36,12 @@ public class ConformanceTests
 
         var types = PropertyTypes.Read(TypesJson(root));
         var notes = ((YamlMappingNode)root["notes"]).Children.ToDictionary(n => Text(n.Key), n => Properties.Read(Text(n.Value), types));
+        if (root.Children.TryGetValue("runs", out var runs))
+        {
+            Bases(root, types, (YamlSequenceNode)runs);
+            return;
+        }
+
         if (root.Children.TryGetValue("cases", out var cases))
         {
             Expressions(root, types, (YamlSequenceNode)cases);
@@ -97,6 +103,40 @@ public class ConformanceTests
                 var actual = Describe(evaluator.Evaluate(expr, new Scope(notes[Text(path)], self, now)));
                 Assert.True(Describe(value) == actual, $"{text} on {Text(path)}: expected {Describe(value)}, got {actual}.");
             }
+        }
+    }
+
+    private static void Bases(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types, YamlSequenceNode runs)
+    {
+        var notes = ((YamlMappingNode)root["notes"]).Children
+            .ToDictionary(n => Text(n.Key), n => new QueryNote(Text(n.Key), Text(n.Value), Properties.Read(Text(n.Value), types)));
+        var self = root.Children.TryGetValue("this", out var t) ? notes[Text(t)] : null;
+        var now = root.Children.TryGetValue("now", out var n)
+            ? DateTime.ParseExact(Text(n), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
+            : DefaultNow;
+        var yaml = Text(root["base"]);
+
+        foreach (var run in runs.Children.Cast<YamlMappingNode>())
+        {
+            var view = run.Children.TryGetValue("view", out var v) ? Text(v) : null;
+            QueryResult Run() => Base.Parse(yaml).Run(view, notes.Values, self, now);
+            if (run.Children.TryGetValue("error", out var error))
+            {
+                var code = Assert.ThrowsAny<Exception>(() => Run()) switch
+                {
+                    QuerySyntaxError => "syntax",
+                    QueryError e => e.Code,
+                    var e => e.GetType().Name,
+                };
+                Assert.True(Text(error) == code, $"View {view ?? "(first)"}: expected the error {Text(error)}, got {code}.");
+                continue;
+            }
+
+            var result = Run();
+            Assert.Equal(((YamlSequenceNode)run["columns"]).Children.Select(Text), result.Columns);
+            var expected = ((YamlSequenceNode)run["rows"]).Children.Select(r => string.Join(" | ", ((YamlSequenceNode)r).Children.Select(Describe)));
+            var actual = result.Rows.Select(r => string.Join(" | ", r.Cells.Select(Describe)));
+            Assert.Equal(string.Join("\n", expected), string.Join("\n", actual));
         }
     }
 

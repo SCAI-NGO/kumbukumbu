@@ -1,0 +1,66 @@
+description: A filter is an expression or a group; and needs all, or needs one, not needs none of its items; groups nest.
+source: spec
+notes:
+  A.md: |
+    ---
+    status: open
+    priority: 1
+    ---
+  B.md: |
+    ---
+    status: done
+    priority: 1
+    ---
+  C.md: |
+    ---
+    status: open
+    priority: 3
+    ---
+  D.md: |
+    ---
+    status: waiting
+    ---
+base: |
+  views:
+    - type: table
+      name: Expression
+      filters: status == "open"
+      order: [file.basename]
+    - type: table
+      name: And
+      filters:
+        and: [status == "open", priority == 1]
+      order: [file.basename]
+    - type: table
+      name: Or
+      filters:
+        or: [status == "done", priority == 3]
+      order: [file.basename]
+    - type: table
+      name: Not
+      filters:
+        not: [status == "done", status == "waiting"]
+      order: [file.basename]
+    - type: table
+      name: Nested
+      filters:
+        or:
+          - status == "waiting"
+          - and: [status == "open", priority > 2]
+      order: [file.basename]
+runs:
+  - view: Expression
+    columns: [file.basename]
+    rows: [[text A], [text C]]
+  - view: And
+    columns: [file.basename]
+    rows: [[text A]]
+  - view: Or
+    columns: [file.basename]
+    rows: [[text B], [text C]]
+  - view: Not
+    columns: [file.basename]
+    rows: [[text A], [text C]]
+  - view: Nested
+    columns: [file.basename]
+    rows: [[text C], [text D]]

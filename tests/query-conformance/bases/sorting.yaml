@@ -1,0 +1,50 @@
+description: Sorts compare within a type; empty values come last in either direction; ties keep the notes in path order; later sort keys break earlier ties.
+source: spec
+notes:
+  a.md: |
+    ---
+    rank: 2
+    group: x
+    ---
+  b.md: |
+    ---
+    rank: 1
+    group: y
+    ---
+  c.md: |
+    ---
+    group: x
+    ---
+  d.md: |
+    ---
+    rank: 2
+    group: y
+    ---
+base: |
+  views:
+    - type: table
+      name: Up
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: ASC }
+    - type: table
+      name: Down
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: DESC }
+    - type: table
+      name: Two keys
+      order: [file.basename]
+      sort:
+        - { property: group, direction: DESC }
+        - { property: file.basename, direction: DESC }
+runs:
+  - view: Up
+    columns: [file.basename, rank]
+    rows: [[text b, number 1], [text a, number 2], [text d, number 2], [text c, null]]
+  - view: Down
+    columns: [file.basename, rank]
+    rows: [[text a, number 2], [text d, number 2], [text b, number 1], [text c, null]]
+  - view: Two keys
+    columns: [file.basename]
+    rows: [[text d], [text b], [text c], [text a]]

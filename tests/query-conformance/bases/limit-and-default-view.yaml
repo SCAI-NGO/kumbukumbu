@@ -1,0 +1,21 @@
+description: limit keeps the first rows after sorting; without a view name the first view runs; without views, a table of file.name over the filtered notes.
+source: spec
+notes:
+  a.md: ""
+  b.md: ""
+  c.md: ""
+base: |
+  views:
+    - type: table
+      name: Two
+      order: [file.name]
+      limit: 2
+    - type: table
+      name: All
+      order: [file.name]
+runs:
+  - columns: [file.name]
+    rows: [[text a.md], [text b.md]]
+  - view: All
+    columns: [file.name]
+    rows: [[text a.md], [text b.md], [text c.md]]

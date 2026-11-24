@@ -48,6 +48,24 @@ cases:
     error: unknown-function   # or syntax, unknown-method, unknown-formula, formula-cycle, regex, too-deep
 ```
 
+A case about bases (in `bases/`) gives the base and a list of `runs`, each a view (the first when left out) with its columns and rows in order, or the error it is:
+
+```yaml
+base: |
+  filters: file.inFolder("People")
+  views:
+    - type: table
+      name: By name
+      order: [file.basename, birthday]
+runs:
+  - view: By name
+    columns: [file.basename, birthday]
+    rows:
+      - [text Ann, date 1980-11-03]
+  - view: Missing
+    error: unknown-view        # or base, and the expressions' codes
+```
+
 `source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian.
 
 ## Values
