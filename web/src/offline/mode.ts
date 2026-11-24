@@ -235,9 +235,10 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
       const opened = await all.unlockOnline(header, signIn && {
         username: signIn.username, password: signIn.password, idleMs: signIn.remember ? REMEMBERED_IDLE_MS : IDLE_MS,
       });
+      // Signed out, or someone else signed in, while it opened: it isn't kept for the session there is now, and a copy
+      // found gone (removed from the device already) ends no one else's session.
+      if (useSession.getState().user?.id !== userId) return opened === "wiped" ? undefined : opened.lock();
       if (opened === "wiped") return wiped();
-      // Signed out, or someone else signed in, while it opened: it isn't kept for the session there is now.
-      if (useSession.getState().user?.id !== userId) return opened.lock();
       keep(opened);
       contacted(opened);
     } catch (e) {

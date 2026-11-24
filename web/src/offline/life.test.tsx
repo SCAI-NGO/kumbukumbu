@@ -154,6 +154,21 @@ describe("a session's end", () => {
     expect(calls.filter((c) => c.body?.includes("tok-ada"))).toHaveLength(1);
   });
 
+  test("Ada's copy, found gone while Bob signed in, goes from the device but leaves his session alone", async () => {
+    await adasCopy();
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    const calls = server({ "POST /api/account/mirror-slots/contact": async () => (await answered, json(404, { error: "Gone.", code: "mirror-wipe" })) });
+    const adas = openCopy(user.id);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+    answer();
+    await adas;
+    expect(useSession.getState()).toMatchObject({ user: bob, ended: false, notice: null });
+    expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).toBeNull();
+  });
+
   test("a sign-in in a tab that holds the copy wraps it again under the password", async () => {
     await openedOnline();
     const held = useOfflineCopy.getState().mirror;
