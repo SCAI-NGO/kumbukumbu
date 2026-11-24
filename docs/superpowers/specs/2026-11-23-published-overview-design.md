@@ -34,7 +34,7 @@ As CLAUDE.md asks for a new functional block of the UI; each finding with its re
 
 **F4. Skills shared by link.** *Recommendation:* not on this page. They have their own list in Settings → Skills → Shared, with their own actions. *Alternative:* one page for both; more complete, but two kinds of rows with different actions.
 
-**F5. Compare (step 2).** *Recommendation:* the copy is compared as the note's own text at the version the copy was made from, against the note now, with the activity's side-by-side view (`CompareVersions`): the owner sees what they changed, including what the copy's filter takes out (comments, tags). Where that version is no longer kept in the note's history, the column says so. For a bundle, a picker of its notes that changed. *Alternative:* the stored copy against a fresh filtered copy of the note: shows exactly what Update copy would change, but needs the copy decrypted for the owner and the filter run on every view.
+**F5. Compare (step 2).** *Recommendation:* the copy is compared as the note's own text at the version the copy was made from, against the note now, with the activity's side-by-side view (`CompareVersions`): the owner sees what they changed, including what the copy's filter takes out (comments, tags). Where that version is no longer kept in the note's history, the column says so. Publishing and Update copy keep the version they copied, of every note of the copy: the next write of the note leaves that version in its history, even within the same changeset, as a restore keeps the state it brings back. Decided by Chris on 2026-11-24, because the copy points at a version that must exist, and this is the smallest rule that guarantees it; "no longer kept" then means only that the history pruned it (ADR 0025). For a bundle, a picker of its notes that changed. *Alternative:* the stored copy against a fresh filtered copy of the note: shows exactly what Update copy would change, but needs the copy decrypted for the owner and the filter run on every view.
 
 ## 4. Built
 
@@ -46,4 +46,4 @@ Step 2, Compare (its own commit, so that it can be reverted to move it to 0.8.0)
 - The owner's reads of a publication (`GET /api/publications`, `GET /api/publications/{vault}/{path}`) carry `copied`, each note of the copy with the version it was made from, the start first.
 - `web/src/note/CompareCopy.tsx`, a sheet over `CompareVersions` (with `fixed`: no mode switch, and a version no longer kept says so). **Compare** sits on the row and on the note's bar wherever the copy is older.
 
-Decision records: `docs/adr/0017-published-is-a-window-of-its-own.md`, `docs/adr/0018-compare-a-copy-by-its-note-version.md`.
+Decision records: `docs/adr/0017-published-is-a-window-of-its-own.md`, `docs/adr/0018-compare-a-copy-by-its-note-version.md`, `docs/adr/0025-publishing-keeps-the-copied-version.md`.

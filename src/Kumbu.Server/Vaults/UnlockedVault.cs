@@ -879,7 +879,8 @@ internal sealed record HistoryPayload(
     [property: JsonPropertyName("msg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null);
 
 /// <remarks>Changeset is missing in notes written before step 6b; such a state joins no changeset. Restored is
-/// missing unless set (<see cref="StoredNote.Restored"/>), so a note that wasn't restored is sealed as before.</remarks>
+/// missing unless set (<see cref="StoredNote.Restored"/>), so a note that wasn't restored is sealed as before; so is Copied
+/// (<see cref="StoredNote.Copied"/>).</remarks>
 internal sealed record NotePayload(
     string Path, string Content, string LastWriter, DateTime LastWriteAt, List<HistoryPayload> History, string? SeedContent,
     ChangesetPayload? Changeset = null,
@@ -889,14 +890,15 @@ internal sealed record NotePayload(
     [property: JsonPropertyName("msg"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
     [property: JsonPropertyName("created"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? CreatedAt = null,
     [property: JsonPropertyName("createdLeast"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? CreatedAtLeast = null,
-    [property: JsonPropertyName("by"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AuthorshipPayload? By = null)
+    [property: JsonPropertyName("by"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AuthorshipPayload? By = null,
+    [property: JsonPropertyName("copied"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Copied = null)
 {
     public StoredNote ToNote(long revision) => new(
         Payload.Path(Path), Content, revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
         [.. History.Select(h => new HistoryEntry(
             h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset(), WriterRefPayload.Read(h.V, h.Ref), h.Message))],
         SeedContent, Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref), Restored == true, Message,
-        CreatedAt is { } created ? DateTime.SpecifyKind(created, DateTimeKind.Utc) : null, CreatedAtLeast == true, By?.ToAuthorship());
+        CreatedAt is { } created ? DateTime.SpecifyKind(created, DateTimeKind.Utc) : null, CreatedAtLeast == true, By?.ToAuthorship(), Copied == true);
 }
 
 /// <summary>
@@ -1099,7 +1101,7 @@ internal static class Payload
         [.. n.History.Select(h => new HistoryPayload(
             h.Content, h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset), WriterRefPayload.VersionOf(h.Ref), WriterRefPayload.From(h.Ref), h.Message))],
         n.SeedContent, ChangesetPayload.From(n.Changeset), WriterRefPayload.VersionOf(n.Ref), WriterRefPayload.From(n.Ref), n.Restored ? true : null, n.Message,
-        n.CreatedAt, n.CreatedAtLeast ? true : null, AuthorshipPayload.From(n.Authorship));
+        n.CreatedAt, n.CreatedAtLeast ? true : null, AuthorshipPayload.From(n.Authorship), n.Copied ? true : null);
 
     public static VaultPath Path(string value) =>
         VaultPath.TryParse(value, out var path) ? path : throw new InvalidDataException($"Invalid path in a sealed document: {value}");

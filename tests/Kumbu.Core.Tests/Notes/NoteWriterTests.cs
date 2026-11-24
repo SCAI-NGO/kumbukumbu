@@ -524,6 +524,26 @@ public class NoteWriterTests
     }
 
     [Fact]
+    public async Task A_copied_state_is_kept_by_the_next_write_of_its_changeset()
+    {
+        // As a publication marks the note it copied: the next write leaves the copied state in the history.
+        var created = (await Write("/Work/copy.md", "first\n", null)).Version!.Token;
+        var second = (await Write("/Work/copy.md", "second\n", created)).Version!.Token;
+        var copied = await Get("/Work/copy.md");
+        Assert.True(await _store.TryReplaceAsync(copied, copied with { Revision = copied.Revision + 1, Copied = true }, Ct));
+
+        var third = (await Write("/Work/copy.md", "third\n", second)).Version!.Token;
+        var note = await Get("/Work/copy.md");
+        Assert.Equal(["second\n", "first\n"], note.History.Select(h => h.Content));
+        Assert.Equal(copied.Changeset, note.History[0].Changeset);
+        Assert.False(note.Copied);
+
+        // Only once: the write after that coalesces again.
+        await Write("/Work/copy.md", "fourth\n", third);
+        Assert.Equal(["second\n", "first\n"], (await Get("/Work/copy.md")).History.Select(h => h.Content));
+    }
+
+    [Fact]
     public async Task AMoveFollowedByAnEditCoalescesAsBefore()
     {
         var created = (await Write("/Work/a.md", "first\n", null)).Version!.Token;
