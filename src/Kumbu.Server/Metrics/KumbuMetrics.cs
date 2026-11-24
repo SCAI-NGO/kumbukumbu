@@ -531,7 +531,7 @@ public static class KumbuMetrics
     /// <summary>The shell's command names; the only values the command label can take besides "other". A test compares it with the shell.</summary>
     public static readonly IReadOnlyList<string> KnownCommands =
     [
-        "ls", "cat", "outline", "rg", "links", "backlinks", "graph", "tags", "board", "calendar", "head", "tail", "wc", "sort",
+        "ls", "cat", "outline", "rg", "links", "backlinks", "graph", "tags", "board", "calendar", "query", "head", "tail", "wc", "sort",
         "csv", "html", "xml", "semsearch", "similar", "img", "pdf", "pdfimages", "history", "blame", "diff", "restore", "mv", "archive", "mkdir", "rm", "trash", "df", "du", "mkcp", "lscp", "rmcp", "publish", "skills", "uname", "help",
     ];
 
