@@ -40,13 +40,11 @@ async function bundled<T>(request: Promise<Answer<T>>): Promise<T> {
 }
 
 /**
- * What publishing the note `depth` links deep, without the notes `without`, would take. Asked only while `enabled`;
- * depth 0 needs no list (the note alone, as before Publish 2.0).
+ * What publishing the note `depth` links deep, without the notes `without`, would take; at depth 0 the note alone.
  */
-export const usePublicationPreview = (path: string, depth: number, without: readonly string[], enabled: boolean) =>
+export const usePublicationPreview = (path: string, depth: number, without: readonly string[]) =>
   useQuery({
     queryKey: ["publication-preview", path, depth, [...without].sort()],
-    enabled,
     queryFn: () =>
       call(
         api.GET("/api/publication-previews/{vault}/{path}", {

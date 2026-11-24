@@ -17,6 +17,9 @@ const NOTE = "/Work/Questions.md";
 const link = "https://kumbu.example.org/s#ABCDEFGHJKMNPQRSTVWXYZ0123456789";
 const published = { link, snapshotAt: "2026-11-05T14:32:00Z", plain: [] as string[] };
 
+// The list at depth 0: the note alone.
+const alone = () => json(200, { notes: [{ path: NOTE, title: "Questions", depth: 0 }], leftOut: [], plain: [], bytes: 0, tooMany: false, tooLarge: false });
+
 const session = (passwordWindowOpen: boolean) => () => json(200, { user, previousSignInAt: null, passwordWindowOpen, publishEnabled: true });
 
 function renderDialog(onClose = vi.fn()) {
@@ -41,6 +44,7 @@ describe("PublishDialog", () => {
       "GET /api/publications/Work/Questions.md": () => json(200, { path: NOTE, snapshotAt: published.snapshotAt, older: false, changedAt: null, publishedBy: "you", link }),
       "GET /api/publications": () => json(200, []),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+      "GET /api/publication-previews/Work/Questions.md": alone,
     });
     renderDialog();
     expect(screen.getByRole("heading", { name: "Publish this note" })).toBeInTheDocument();
@@ -61,6 +65,7 @@ describe("PublishDialog", () => {
       },
       "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+      "GET /api/publication-previews/Work/Questions.md": alone,
     });
     renderDialog();
     const publish = await screen.findByRole("button", { name: "Publish" });
@@ -80,6 +85,7 @@ describe("PublishDialog", () => {
       "POST /api/publications/Work/Questions.md": () => json(201, published),
       "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+      "GET /api/publication-previews/Work/Questions.md": alone,
     });
     const onClose = renderDialog();
     const publish = await screen.findByRole("button", { name: "Publish" });
@@ -101,6 +107,7 @@ describe("PublishDialog", () => {
       "POST /api/publications/Work/Questions.md": () => json(201, { ...published, plain: ["report.pdf", "Private.png", "PDFs are not published yet"] }),
       "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+      "GET /api/publication-previews/Work/Questions.md": alone,
     });
     renderDialog();
     const publish = await screen.findByRole("button", { name: "Publish" });
@@ -116,6 +123,7 @@ describe("PublishDialog", () => {
       "POST /api/publications/Work/Questions.md": () => json(403, { error: "Work/Questions.md is unpublishable.", code: "unpublishable" }),
       "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+      "GET /api/publication-previews/Work/Questions.md": alone,
     });
     renderDialog();
     const publish = await screen.findByRole("button", { name: "Publish" });
@@ -132,6 +140,7 @@ describe("PublishDialog", () => {
       "POST /api/publications/Work/Questions.md": () => (refuse ? json(403, { error: "The password is wrong." }) : json(201, published)),
       "GET /api/publications/*": () => json(404, { error: "Work/Questions.md is not published." }),
       "GET /api/vaults/Work/tree": () => json(200, { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+      "GET /api/publication-previews/Work/Questions.md": alone,
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -181,6 +190,33 @@ describe("PublishDialog", () => {
         ...handlers,
       });
 
+    it("opens with the depth selected, so that a digit replaces it", async () => {
+      base({ "GET /api/publication-previews/Work/Questions.md": () => json(200, preview([NOTE, "/Work/Plan.md"])) });
+      renderDialog();
+      const depth = await screen.findByLabelText<HTMLInputElement>("How many links deep");
+      await vi.waitFor(() => expect(document.activeElement).toBe(depth));
+      // A number field keeps no selection range in the DOM: typing proves the value was selected.
+      await userEvent.keyboard("1");
+      expect(depth).toHaveValue(1);
+      expect(await screen.findByText("+1 note")).toBeInTheDocument();
+    });
+
+    it("lists the note itself at depth 0 too", async () => {
+      const asked: string[] = [];
+      base({
+        "GET /api/publication-previews/Work/Questions.md": (r) => {
+          asked.push(new URL(r.url).search);
+          return json(200, preview([NOTE], { leftOut: [] }));
+        },
+      });
+      renderDialog();
+      const box = await within(await screen.findByRole("group", { name: "What goes out" })).findByRole("checkbox", { name: /Questions/ });
+      expect(box).toBeChecked();
+      expect(box).toBeDisabled();
+      expect(screen.getByText("This note only")).toBeInTheDocument();
+      expect(asked).toEqual(["?depth=0"]);
+    });
+
     it("shows the list, what stays behind and sends what it showed", async () => {
       let body: unknown;
       const asked: string[] = [];
@@ -201,7 +237,7 @@ describe("PublishDialog", () => {
       await userEvent.type(depth, "1");
       expect(await screen.findByText("+2 notes")).toBeInTheDocument();
       expect(screen.getByText(/only reached through|marked unpublishable/)).toBeInTheDocument();
-      expect(asked).toEqual(["?depth=1"]);
+      expect(asked).toEqual(["?depth=0", "?depth=1"]);
       const publish = screen.getByRole("button", { name: "Publish 3 notes" });
       await vi.waitFor(() => expect(publish).toBeEnabled());
       await userEvent.click(publish);
