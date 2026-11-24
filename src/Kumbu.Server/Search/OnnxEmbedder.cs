@@ -42,7 +42,7 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
         _model = ModelFiles.Get(o.Model);
         if (!o.Enabled)
         {
-            (State, Reason) = (SemanticState.Off, "search by meaning is switched off on this server (Kumbu:Search:Enabled)");
+            (State, Reason) = (SemanticState.Off, "search by meaning is off on this server (Kumbu:Search:Enabled)");
             return;
         }
 

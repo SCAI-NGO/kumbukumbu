@@ -354,7 +354,6 @@ test("similar #9: with search by meaning off, the section says so @similar", asy
     description:
       "F-09: with search by meaning off on the server, Similar notes doesn't say \"Similar notes need search by meaning, which is off for this vault.\" (§3.7): the server answers unindexed (M-07)",
   });
-  test.fail();
   const path = `/Work/${folder}/Decompression.md`;
   await aliceApi.putNote(path, "# Decompression stops\n\nThe diver ascends slowly.\n");
   try {
