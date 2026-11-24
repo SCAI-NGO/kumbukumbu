@@ -21,7 +21,7 @@
 //   words (link prediction §2, §3.7, as Chris decided on 2026-11-24: one way for everything that needs a connection); menus (history, blame, move, rename,
 //   duplicate) → gaps #2; search by meaning, console, calendar, board, settings pages → left out (not among Task 7's
 //   gaps; the pane's sentence is the graph's, asserted in gaps #6); sharing, publishing, keys, admin → left out: the
-//   same dimming as gaps #2, which finds that nothing in the web app dims for the mode (F-05), so each would repeat it.
+//   same rule as gaps #2 (F-05: an item that needs a connection declares it, the menu dims it), so each would repeat it.
 // §3a Turning it on
 // - Off by default, invited once (Keep me signed in or installed) → Vitest OfflineInvite.test.tsx (both tests); the
 //   suite answers the invitation "Not now" (its own devices turn it on through Settings).
@@ -371,11 +371,6 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
 });
 
 test("gaps #2: offline, what needs a connection stays in its menu, dimmed, with \"Needs a connection\" @offline", async ({ page, aliceApi, folder }) => {
-  test.info().annotations.push({
-    type: "finding",
-    description: "F-05: offline, History, Who wrote what, Duplicate and Rename or move stay enabled, without \"Needs a connection\" (§3a); nothing in the web app dims for the mode",
-  });
-  test.fail();
   const plan = `/Work/${folder}/Plan.md`;
   await aliceApi.putNote(plan, "# Plan\n\nRead offline.\n");
   await turnOn(page);
@@ -518,11 +513,6 @@ test("gaps #5: a read-only member's copy (Bob in Work) queues no write: no Write
 
 test("gaps #6: offline the graph and Similar notes say they need a connection @offline", async ({ page, aliceApi, folder }, testInfo) => {
   test.setTimeout(180_000);
-  test.info().annotations.push({
-    type: "finding",
-    description: "F-07: offline, the graph's dialog says \"Couldn't draw the graph.\" with Try again, not \"The graph needs a connection. It's back when you are.\" (graph out of preview §3)",
-  });
-  test.fail();
   const plan = `/Work/${folder}/Plan.md`;
   await aliceApi.putNote(plan, "# Plan\n\nThe lighthouse keeper's log.\n");
   await turnOn(page);

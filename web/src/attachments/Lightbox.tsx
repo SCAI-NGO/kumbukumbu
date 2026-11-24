@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ChevronLeft, ChevronRight, Download, Ellipsis, File as FileIcon, FolderInput, History, Info, Link2, Trash2, X, type LucideIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Ellipsis, File as FileIcon, FolderInput, History, Info, Link2, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCheckpointTree } from "../api/history";
 import { fileKindOfEntry, findFolder, useAttachmentUrl, useFileInfo, useHistory, useMayChange, useTree, type TreeFolder } from "../api/notes";
 import { checkpointUrl, fileAtUrl, fileKindOf, folderOf, inVault, titleOf, viewUrl, type FileAt, type LightboxState } from "../api/paths";
 import { noPreviewText } from "../components/fileKindIcon";
-import { Menu } from "../components/Menu";
+import { Menu, type MenuItem } from "../components/Menu";
 import { download } from "../data/exportUrl";
 import { sizeText, timeText } from "../components/Sheet";
 import { topDialog } from "../hooks/useDialog";
@@ -160,15 +160,16 @@ export default function Lightbox() {
   // what is shown.
   const live = readOnly ? undefined : info.data;
   const current = live?.version;
-  const actions: { label: string; icon: LucideIcon; onSelect(): void; disabled?: boolean }[] = [
-    { label: "Download", icon: Download, onSelect: () => download(downloadUrl) },
+  // Offline, the copy shows the file; anything else asks the server (offline mode design §3).
+  const actions: MenuItem[] = [
+    { label: "Download", icon: Download, onSelect: () => download(downloadUrl), needsConnection: true },
     ...(readOnly
       ? []
       : [
-          ...(writes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => setDialog("move") }] : []),
+          ...(writes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => setDialog("move"), needsConnection: true }] : []),
           ...(kind === "text" ? [] : [{ label: "Copy link", icon: Link2, onSelect: () => void copyLink() }]),
-          { label: "History", icon: History, onSelect: () => setDialog("history") },
-          ...(writes ? [{ label: "Delete", icon: Trash2, onSelect: () => setDialog("delete"), disabled: !current }] : []),
+          { label: "History", icon: History, onSelect: () => setDialog("history"), needsConnection: true },
+          ...(writes ? [{ label: "Delete", icon: Trash2, onSelect: () => setDialog("delete"), disabled: !current, needsConnection: true }] : []),
         ]),
   ];
 

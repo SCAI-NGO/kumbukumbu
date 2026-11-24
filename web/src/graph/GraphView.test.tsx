@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
+import { useOfflineMode } from "../offline/mode";
 import { useEditor } from "../state/editor";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json } from "../test/app";
@@ -96,6 +97,27 @@ function show() {
   const view = render(ui());
   return { view, ui, onOpened };
 }
+
+describe("GraphView offline", () => {
+  it("says it needs a connection, and asks nothing", async () => {
+    useOfflineMode.setState({ offline: true });
+    show();
+    expect(screen.getByText("The graph needs a connection. It's back when you are.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    const fetch = globalThis.fetch as unknown as { mock: { calls: [Request][] } };
+    expect(fetch.mock.calls.map(([r]) => new URL(r.url).pathname).filter((p) => p.startsWith("/api/graph"))).toEqual([]);
+  });
+
+  it("left open, the drawing gives way to the sentence when the connection goes", async () => {
+    show();
+    await screen.findByRole("button", { name: "node Plan" });
+    act(() => useOfflineMode.setState({ offline: true }));
+    expect(screen.getByText("The graph needs a connection. It's back when you are.")).toBeInTheDocument();
+    expect(screen.queryByTestId("canvas")).toBeNull();
+    act(() => useOfflineMode.setState({ offline: false }));
+    expect(await screen.findByRole("button", { name: "node Plan" })).toBeInTheDocument();
+  });
+});
 
 describe("GraphView in the dialog", () => {
   it("in the dialog a tap selects and shows the card, Open opens and reports", async () => {

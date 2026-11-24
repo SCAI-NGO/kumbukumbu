@@ -6,6 +6,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { NO_SUCH_NOTE } from "../discreet/errorText";
 import { useEditor } from "../state/editor";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useOfflineMode } from "../offline/mode";
 import { fakeApi, json } from "../test/app";
 import type { GraphSimilarityView, LocalGraphView } from "./api";
 import type { GNode } from "./model";
@@ -134,6 +135,8 @@ describe("GraphColumn", () => {
   });
 
   it("says what went wrong, and asks again on Try again", async () => {
+    // Kumbu² answers, its socket up: a 503 without one would be the gateway's, and the app offline.
+    useOfflineMode.getState().socket(true);
     const { fetch } = show({ local: () => json(503, { error: "This vault is being re-encrypted. Try again in a moment." }) });
     expect(await screen.findByText("This vault is being re-encrypted. Try again in a moment.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));

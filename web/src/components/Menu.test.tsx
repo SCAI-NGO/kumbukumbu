@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { act, render, screen, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Pencil } from "lucide-react";
 import { Menu } from "./Menu";
 import { useDialog } from "../hooks/useDialog";
+import { useOfflineMode } from "../offline/mode";
 
 const rect = (r: Partial<DOMRect>) => ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON() {}, ...r }) as DOMRect;
 
@@ -324,5 +325,29 @@ describe("Menu", () => {
       await userEvent.tab({ shift: true });
       expect(button).toHaveFocus();
     });
+  });
+
+  it("offline, an item that needs a connection stays, dimmed, with the reason as its second line", async () => {
+    layout({ top: 100, bottom: 130, left: 900, right: 940 });
+    const items = [
+      { label: "History", icon: Pencil, onSelect, needsConnection: true },
+      { label: "Find in note", icon: Pencil, onSelect },
+    ];
+    render(
+      <Menu label="Actions" placement="below" className="b" items={items}>
+        ⋯
+      </Menu>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+    const history = screen.getByRole("menuitem", { name: /^History/ });
+    expect(history).toBeEnabled();
+    expect(history).not.toHaveTextContent("Needs a connection");
+
+    act(() => useOfflineMode.setState({ offline: true }));
+    expect(history).toBeDisabled();
+    expect(history).toHaveTextContent("Needs a connection");
+    expect(screen.getByRole("menuitem", { name: "Find in note" })).toBeEnabled();
+    fireEvent.click(history);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
