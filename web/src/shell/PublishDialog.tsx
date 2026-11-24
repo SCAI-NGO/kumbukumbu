@@ -156,7 +156,8 @@ export default function PublishDialog({ path, onClose, update }: { path: string;
   const publish = usePublish(path);
   const updating = useUpdatePublication(path);
   const bundle = depth > 0;
-  const asked = usePublicationPreview(path, depth, without, bundle);
+  // At depth 0 too: the list shows the note itself, as it does at any depth.
+  const asked = usePublicationPreview(path, depth, without);
   const preview = changed ?? asked.data;
   const asks = !update && passwordWindow.known && !passwordWindow.open;
   const pending = publish.isPending || updating.isPending;
@@ -265,6 +266,9 @@ export default function PublishDialog({ path, onClose, update }: { path: string;
                   min={0}
                   max={maxDepth}
                   value={depth}
+                  // Selected as the dialog opens, and whenever the field is entered: a digit replaces the depth.
+                  data-autofocus
+                  onFocus={(e) => e.target.select()}
                   onChange={(e) => {
                     setChanged(null);
                     // The person is in this field now: a list after a toggle that never came takes no focus later.
@@ -279,7 +283,7 @@ export default function PublishDialog({ path, onClose, update }: { path: string;
                 </span>
               </div>
             </div>
-            {bundle && preview && <BundleList preview={preview} start={path} without={without} focus={focus} onToggle={toggle} onFocused={() => setFocus(null)} />}
+            {preview && <BundleList preview={preview} start={path} without={without} focus={focus} onToggle={toggle} onFocused={() => setFocus(null)} />}
             {asks && <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />}
             {refusal && <FormError>{refusal instanceof BundleChangedError ? refusal.message : errorText(refusal)}</FormError>}
             {asked.error && <FormError>{errorText(asked.error)}</FormError>}
