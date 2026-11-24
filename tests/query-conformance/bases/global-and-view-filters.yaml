@@ -1,0 +1,25 @@
+description: The base's filters and a view's filters both hold.
+source: spec
+notes:
+  Tasks/A.md: |
+    ---
+    status: open
+    ---
+  Tasks/B.md: |
+    ---
+    status: done
+    ---
+  Other/C.md: |
+    ---
+    status: open
+    ---
+base: |
+  filters: file.inFolder("Tasks")
+  views:
+    - type: table
+      name: Open tasks
+      filters: status == "open"
+      order: [file.path]
+runs:
+  - columns: [file.path]
+    rows: [[text Tasks/A.md]]

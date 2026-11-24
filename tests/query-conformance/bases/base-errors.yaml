@@ -1,0 +1,28 @@
+description: A base that can't run says why before any row; an unknown view, an unknown filter group, and the expressions' own errors.
+source: spec
+notes:
+  a.md: ""
+base: |
+  formulas:
+    broken: nothing(1)
+  views:
+    - type: table
+      name: Fine
+      order: [file.name]
+    - type: table
+      name: Uses broken
+      order: [formula.broken]
+    - type: table
+      name: Bad group
+      filters:
+        xor: [true]
+runs:
+  - view: Fine
+    columns: [file.name]
+    rows: [[text a.md]]
+  - view: Missing
+    error: unknown-view
+  - view: Uses broken
+    error: unknown-function
+  - view: Bad group
+    error: base

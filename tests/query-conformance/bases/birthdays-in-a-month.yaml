@@ -1,0 +1,43 @@
+description: The birthdays of a month, sorted by day through a formula; this.month is the call's argument.
+source: spec
+types:
+  birthday: date
+this: Birthdays.md
+notes:
+  Birthdays.md: |
+    ---
+    month: 11
+    ---
+  People/Ann.md: |
+    ---
+    birthday: 1980-11-23
+    ---
+  People/Brita.md: |
+    ---
+    birthday: 1975-04-12
+    ---
+  People/Cleo.md: |
+    ---
+    birthday: 1990-11-03
+    ---
+  People/Dana.md: |
+    # No birthday
+base: |
+  filters:
+    and:
+      - file.inFolder("People")
+      - birthday.month == this.month
+  formulas:
+    day: birthday.day
+  views:
+    - type: table
+      name: By day
+      order: [file.basename, birthday, formula.day]
+      sort:
+        - property: formula.day
+          direction: ASC
+runs:
+  - columns: [file.basename, birthday, formula.day]
+    rows:
+      - [text Cleo, date 1990-11-03, number 3]
+      - [text Ann, date 1980-11-23, number 23]

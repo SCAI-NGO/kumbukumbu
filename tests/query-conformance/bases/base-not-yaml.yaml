@@ -1,0 +1,8 @@
+description: A base whose YAML doesn't parse, or isn't a map, is an error of the base.
+source: spec
+notes:
+  a.md: ""
+base: |
+  filters: [unclosed
+runs:
+  - error: base

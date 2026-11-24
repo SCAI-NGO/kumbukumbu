@@ -1,0 +1,11 @@
+description: A base without views shows a table of file.name over the notes its filters keep.
+source: spec
+notes:
+  a.md: |
+    #keep
+  b.md: ""
+base: |
+  filters: file.hasTag("keep")
+runs:
+  - columns: [file.name]
+    rows: [[text a.md]]
