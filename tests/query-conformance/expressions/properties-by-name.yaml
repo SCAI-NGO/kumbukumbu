@@ -1,0 +1,17 @@
+description: A bare name, note.name and note["name"] are the note's property; a property the note lacks is null.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    status: done
+    my prop: 5
+    ---
+  Brita.md: |
+    # No frontmatter
+cases:
+  - expression: status
+    values: { Ann.md: text done, Brita.md: null }
+  - expression: note.status
+    values: { Ann.md: text done, Brita.md: null }
+  - expression: note["my prop"]
+    values: { Ann.md: number 5, Brita.md: null }

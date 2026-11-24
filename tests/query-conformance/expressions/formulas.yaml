@@ -1,0 +1,13 @@
+description: formula.name is a formula's value for the note; formulas may use one another.
+source: spec
+formulas:
+  double: n * 2
+  quadruple: formula.double * 2
+notes:
+  Ann.md: |
+    ---
+    n: 3
+    ---
+cases:
+  - { expression: formula.quadruple, values: { Ann.md: number 12 } }
+  - { expression: formula.double + 1, values: { Ann.md: number 7 } }

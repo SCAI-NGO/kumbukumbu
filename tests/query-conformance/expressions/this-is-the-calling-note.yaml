@@ -1,0 +1,25 @@
+description: this is the note the query is shown in; this.file is that note's file, this.name its property.
+source: spec
+this: Projects/Kumbu.md
+notes:
+  Projects/Kumbu.md: |
+    ---
+    project: Kumbu
+    ---
+  Tasks/A.md: |
+    ---
+    project: Kumbu
+    ---
+  Tasks/B.md: |
+    ---
+    project: Other
+    ---
+cases:
+  - expression: project == this.project
+    values: { Projects/Kumbu.md: boolean true, Tasks/A.md: boolean true, Tasks/B.md: boolean false }
+  - expression: file == this.file
+    values: { Projects/Kumbu.md: boolean true, Tasks/A.md: boolean false, Tasks/B.md: boolean false }
+  - expression: this.file.basename
+    values: { Projects/Kumbu.md: text Kumbu, Tasks/A.md: text Kumbu, Tasks/B.md: text Kumbu }
+  - expression: this.note.project
+    values: { Projects/Kumbu.md: text Kumbu, Tasks/A.md: text Kumbu, Tasks/B.md: text Kumbu }

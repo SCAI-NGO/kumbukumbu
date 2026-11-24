@@ -36,6 +36,12 @@ public class ConformanceTests
 
         var types = PropertyTypes.Read(TypesJson(root));
         var notes = ((YamlMappingNode)root["notes"]).Children.ToDictionary(n => Text(n.Key), n => Properties.Read(Text(n.Value), types));
+        if (root.Children.TryGetValue("cases", out var cases))
+        {
+            Expressions(root, types, (YamlSequenceNode)cases);
+            return;
+        }
+
         var expect = (YamlMappingNode)root["expect"];
 
         if (expect.Children.TryGetValue("properties", out var properties))
@@ -50,6 +56,48 @@ public class ConformanceTests
         var problems = expect.Children.TryGetValue("problems", out var listed) ? ((YamlSequenceNode)listed).Children.Select(Text).ToHashSet() : [];
         foreach (var (path, read) in notes)
             Assert.True(problems.Contains(path) == (read.Problem is not null), $"{path}: problem '{read.Problem}'.");
+    }
+
+    // Default clock of a case without "now": any fixed moment, so no case depends on the day it runs.
+    private static readonly DateTime DefaultNow = new(2026, 1, 1, 12, 0, 0);
+
+    private static void Expressions(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types, YamlSequenceNode cases)
+    {
+        var notes = ((YamlMappingNode)root["notes"]).Children
+            .ToDictionary(n => Text(n.Key), n => new QueryNote(Text(n.Key), Text(n.Value), Properties.Read(Text(n.Value), types)));
+        var formulas = root.Children.TryGetValue("formulas", out var f)
+            ? ((YamlMappingNode)f).Children.ToDictionary(e => Text(e.Key), e => Text(e.Value))
+            : [];
+        var self = root.Children.TryGetValue("this", out var t) ? notes[Text(t)] : null;
+        var now = root.Children.TryGetValue("now", out var n)
+            ? DateTime.ParseExact(Text(n), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
+            : DefaultNow;
+
+        foreach (var c in cases.Children.Cast<YamlMappingNode>())
+        {
+            var text = Text(c["expression"]);
+            var evaluator = new Evaluator(formulas);
+            if (c.Children.TryGetValue("error", out var error))
+            {
+                var code = Assert.ThrowsAny<Exception>(() => evaluator.Compile(text)) switch
+                {
+                    QuerySyntaxError => "syntax",
+                    QueryError e => e.Code,
+                    var e => e.GetType().Name,
+                };
+                Assert.True(Text(error) == code, $"{text}: expected the error {Text(error)}, got {code}.");
+                continue;
+            }
+
+            var expr = evaluator.Compile(text);
+            var expected = (YamlMappingNode)c["values"];
+            Assert.True(expected.Children.Count == notes.Count, $"{text}: a value for every note.");
+            foreach (var (path, value) in expected.Children)
+            {
+                var actual = Describe(evaluator.Evaluate(expr, new Scope(notes[Text(path)], self, now)));
+                Assert.True(Describe(value) == actual, $"{text} on {Text(path)}: expected {Describe(value)}, got {actual}.");
+            }
+        }
     }
 
     private static YamlMappingNode Load(string file)
@@ -94,6 +142,7 @@ public class ConformanceTests
         DateTimeValue d => $"datetime {d.DateTime:yyyy-MM-ddTHH:mm:ss}",
         ListValue l => "[" + string.Join(", ", l.Items.Select(Describe)) + "]",
         ObjectValue o => "{" + string.Join(", ", o.Values.Select(v => $"{v.Key}: {Describe(v.Value)}").Order(StringComparer.Ordinal)) + "}",
+        FileValue f => $"file {f.Note.Path}",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, null),
     };
 }
