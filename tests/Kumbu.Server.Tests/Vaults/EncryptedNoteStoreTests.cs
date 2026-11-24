@@ -419,6 +419,18 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public void The_copied_mark_is_sealed_only_when_set()
+    {
+        var json = """{"Path":"/Work/a.md","Content":"a","LastWriter":"dev","LastWriteAt":"2026-10-23T12:00:00Z","History":[],"SeedContent":null}""";
+        Assert.False(JsonSerializer.Deserialize<NotePayload>(json)!.ToNote(1).Copied);
+
+        Assert.DoesNotContain("copied", Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a")))), StringComparison.Ordinal);
+        var marked = JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a") with { Copied = true }));
+        Assert.Contains("\"copied\":true", Encoding.UTF8.GetString(marked), StringComparison.Ordinal);
+        Assert.True(JsonSerializer.Deserialize<NotePayload>(marked)!.ToNote(1).Copied);
+    }
+
+    [Fact]
     public async Task A_message_survives_sealing_on_the_note_and_its_history()
     {
         var (world, _, store) = await WorldAsync();

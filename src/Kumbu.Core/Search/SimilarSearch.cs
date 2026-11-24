@@ -108,16 +108,20 @@ public static class SimilarSearch
     {
         var path = source.Path;
         if (!path.IsNote || await notes.ReadAsync(path, ct) is not { } content) return (null, $"{path.Value}: not a note");
-        var (first, end) = (0, int.MaxValue);
+        List<Chunk>? overlapping = null;
         if (source.Section is { } section)
         {
             if (!SectionLookup.TryFind(path, content, section, out var match, out var sectionError)) return (null, sectionError);
-            (first, end) = (match.Heading.Line, match.Heading.ContentEnd);
+            var (first, end) = (match.Heading.Line, match.Heading.ContentEnd);
+            // A short section shares the chunk of the heading it merged under, which starts above its own heading.
+            overlapping = [.. Chunker.Split(new Note(path, content), index.Bound).Where(c => c.StartLine < end && c.EndLine > first)];
         }
 
         var stored = await index.VectorsAsync(path, ct);
         if (stored.State != SemanticState.Ready) return (null, stored.Reason ?? "search by meaning isn't available");
-        var own = stored.Chunks.Where(c => c.Path == path && c.StartLine >= first && c.StartLine < end).ToList();
+        var own = stored.Chunks
+            .Where(v => v.Path == path && (overlapping is null || overlapping.Any(c => c.StartLine <= v.StartLine && v.StartLine < c.EndLine)))
+            .ToList();
         if (own.Count == 0)
         {
             var what = source.Section is null ? "isn't indexed yet" : "has no indexed text yet";

@@ -122,6 +122,21 @@ public sealed class BundleTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Every_note_a_bundle_copied_keeps_its_version_at_the_next_write()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]]"), ("B.md", "b"));
+        await EditAsync(alice, "A.md", "[[B]] two");
+        await EditAsync(alice, "B.md", "b two");
+        await PublishAsync(alice, "/Work/A.md", 1);
+        await EditAsync(alice, "A.md", "[[B]] three");
+        await EditAsync(alice, "B.md", "b three");
+
+        var (notes, _) = await AliceAsync(alice);
+        Assert.Equal("[[B]] two", await notes.ReadVersionAsync(P("/Work/A.md"), VersionToken.Of("[[B]] two"), Ct));
+        Assert.Equal("b two", await notes.ReadVersionAsync(P("/Work/B.md"), VersionToken.Of("b two"), Ct));
+    }
+
+    [Fact]
     public async Task Depth_2_takes_links_of_links_in_walk_order()
     {
         var alice = await WorkAsync(("A.md", "[[B]] and [[E]]"), ("B.md", "[[C]]"), ("C.md", "[[D]]"), ("D.md", "d"), ("E.md", "e"));

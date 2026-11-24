@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TreeFolder } from "../api/notes";
+import { useOfflineMode } from "../offline/mode";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -694,5 +695,40 @@ describe("leaving the vault from its menu", () => {
     api();
     await openDrawer();
     expect(await menuOf("Work")).not.toContain("Leave this vault…");
+  });
+
+  it("offline, the folder's and the vault's menus dim what needs a connection and keep the rest", async () => {
+    api();
+    await openDrawer();
+    act(() => useOfflineMode.setState({ offline: true }));
+    const item = (name: string) => screen.getByRole("menuitem", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) });
+    await menuOf("Drafts");
+    for (const name of ["New folder…", "Upload here", "Rename or move"]) {
+      expect(item(name)).toBeDisabled();
+      expect(item(name)).toHaveTextContent("Needs a connection");
+    }
+    expect(item("New note here")).toBeEnabled();
+    await userEvent.keyboard("{Escape}");
+
+    await menuOf("Work");
+    for (const name of ["Trash", "Activity", "Checkpoints", "Calendar", "Recent changes", "Share…", "Rename vault…", "Connect Obsidian…", "Export as ZIP…", "Delete vault…"])
+      expect(item(name)).toBeDisabled();
+    // The gallery shows what the copy holds.
+    expect(item("Gallery")).toBeEnabled();
+  });
+
+  it("offline, the account's links that need a connection stay, dimmed, with the reason as their title", async () => {
+    api({ "GET /api/session": () => json(200, { user: { ...user, role: "admin" }, previousSignInAt: null, publishEnabled: true }) });
+    await openDrawer();
+    const account = within(drawer()).getByRole("navigation", { name: "Account" });
+    await within(account).findByRole("link", { name: "Admin" });
+    act(() => useOfflineMode.setState({ offline: true }));
+    for (const name of ["What's on", "Skills", "Access", "Published", "Console", "Admin"]) {
+      const link = within(account).getByRole("link", { name: new RegExp(`^${name}`) });
+      expect(link).toHaveAttribute("aria-disabled", "true");
+      expect(link).toHaveAttribute("title", "Needs a connection");
+    }
+    // Settings opens on its Offline page, which works offline.
+    expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings/offline");
   });
 });

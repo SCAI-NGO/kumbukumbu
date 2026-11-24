@@ -58,8 +58,9 @@ public static class SimilarApi
         // A vault whose provider isn't configured any more is left out with a reason: by meaning, it is off.
         if (own.Chunks.Count == 0) return TypedResults.Ok(Empty(own.Reason is null ? "unindexed" : "off", 0));
 
+        // Not the archive, unless the note is in it (spec §3.5).
         var query = new SimilarQuery([new SimilarSource(notePath)], VaultPath.Root.Child(notePath.Vault!), Max, Unlinked: true,
-            LeftOut: NotRelated.LeftOutFor(new Note(notePath, content)));
+            Archive: ArchiveFolder.Contains(notePath), LeftOut: NotRelated.LeftOutFor(new Note(notePath, content)));
         var result = await SimilarSearch.RunAsync(store, index, query, ct);
         if (result.Error is not null) return TypedResults.Ok(Empty("unindexed", result.Pending));
 

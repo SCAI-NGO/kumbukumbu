@@ -38,7 +38,7 @@ Anti-goals:
 
 1. **One new command, `similar`, rather than a mode of `semsearch`.** *Because* its input is a place (a note or section), not words, and its output carries what `semsearch` doesn't have: link distances. Its options mirror `semsearch` where they mean the same (`-n`, `--archive`, `--outside`, `--without-tag`).
 2. **One hit per note, its best section.** *Because* link distance belongs to a note, and a long note would otherwise fill the list with its sections; `cat "path#Section"` reads the one shown, `outline` the rest.
-3. **Similarity of two notes is the best pair of their chunks** (the highest cosine of any chunk of the source with any chunk of the candidate), not a mean vector. *Because* a note about five things has a mean vector about none of them; Swanson's bridges are single mechanisms, which live in single sections. A source section (`note.md#Heading`) uses only that section's chunks.
+3. **Similarity of two notes is the best pair of their chunks** (the highest cosine of any chunk of the source with any chunk of the candidate), not a mean vector. *Because* a note about five things has a mean vector about none of them; Swanson's bridges are single mechanisms, which live in single sections. A source section (`note.md#Heading`) uses only the chunks that hold its text: a short section merged into the chunk of the heading above it uses that chunk, which starts before its own heading.
 4. **`--between a c` scores a section by the lower of its two similarities** (to `a` and to `c`). *Because* a bridge must be close to both; the minimum is the usual ABC score (the weakest link) and needs no tuning. Both distances are shown.
 5. **Link distance** is the shortest path through notes in either direction, as `graph --path` walks (attachments and links to nothing are never passed through), printed as `1 step`, `N steps`, `not connected` or `other vault` (links never cross vaults). `--without-tag` and the archive rule apply to the walk too. *Because* a hypothesis note links A and C; walked through, it would make every finding look known.
 6. **`--unlinked` leaves out distance 1 only.** *Because* distance 2 (a common neighbour) is exactly where many good bridges sit; the agent sees the distance and judges.
@@ -87,6 +87,7 @@ With `--between`: `score 0.71 (0.74 to A, 0.71 to C)  2 steps from A, not connec
 - `semsearch --outside P` drops the notes at or below P before ranking, and the PDF pages there from the hits.
 - `semsearch --without-tag T` drops the notes carrying T before ranking; PDF pages stay (they carry no tags), unlike `--tag`, which leaves them out.
 - `graph --without-tag T` (every mode): `GraphFilter.WithoutTags`, a note carrying any of them isn't kept, as `--tag` keeps only those that carry all. The two ends of `graph --path` stay, as with `--tag`.
+- `graph --hubs --without-tag T` counts only the links whose other end is kept by `--without-tag`, as `--unresolved` counts the links of kept notes only. Decided by Chris on 2026-11-24 ([ADR 0028](../../adr/0028-hubs-without-tag-count-only-kept-links.md)), *because* otherwise the hypothesis notes the filter leaves out still raise a note's degree, which is what the filter is meant to prevent.
 
 ## 7. The skill
 

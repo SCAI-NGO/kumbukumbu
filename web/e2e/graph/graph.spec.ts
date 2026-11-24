@@ -199,7 +199,6 @@ test("graph #5: with search by meaning off, the foot says so and the edges are d
     description:
       "F-08: with search by meaning off on the server, the graph's foot says \"Similarity measured for 0 of N links\", not \"Similarity not measured: search by meaning is off\" (spec §1): the server answers ready with null scores (M-06)",
   });
-  test.fail();
   const n = await graphIn(aliceApi, folder);
   await openNote(page, n.tables);
   const dialog = await openDialog(page, "Dive tables");

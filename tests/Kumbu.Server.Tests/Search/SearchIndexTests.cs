@@ -82,6 +82,21 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Stored_vectors_are_off_while_the_vaults_model_is_off()
+    {
+        // Search by meaning switched off on the server: the vectors stored earlier stay unused, as for a search.
+        var s = await StartAsync(embedder: new FakeEmbedder(SemanticState.Off));
+        await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats, dogs, hens and ducks.\n"), Ct);
+
+        var vault = await s.Store.VectorsAsync(P("/Work"), Ct);
+        var note = await s.Store.VectorsAsync(P("/Work/farm.md"), Ct);
+        var everyVault = await s.Store.VectorsAsync(Kumbu.Core.Paths.VaultPath.Root, Ct);
+
+        Assert.All([vault, note, everyVault], v => Assert.Equal((SemanticState.Off, 0, 0), (v.State, v.Chunks.Count, v.Pending)));
+        Assert.All([vault, note, everyVault], v => Assert.NotNull(v.Reason));
+    }
+
+    [Fact]
     public async Task The_notes_of_an_unlocked_vault_are_split_ahead_of_the_first_search()
     {
         var s = await StartAsync();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, CalendarClock, CalendarDays, Camera, ChevronRight, Columns2, Download, Ellipsis, Eye, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Share2, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users, Waypoints } from "lucide-react";
-import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useBoardAction } from "../api/board";
@@ -17,7 +17,7 @@ import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
 import { LeaveDialog } from "../components/shownOnce";
 import { useOfflineCopy } from "../offline/copy";
-import { lockEverywhere, uploaded, useOfflineMode } from "../offline/mode";
+import { lockEverywhere, NEEDS_CONNECTION, uploaded, useOffline, useOfflineMode } from "../offline/mode";
 import SignOutDialog from "../offline/SignOutDialog";
 import { PENDING_NOTICE, signOutOffline } from "../offline/unlock";
 import { topDialog, useDialog } from "../hooks/useDialog";
@@ -144,18 +144,21 @@ function folderItems(folder: TreeFolder, { onNewNote, onNewFolder, onMove, onRem
   const inner = folder.path.split("/").length > 2;
   const writes = atLeast(level, "write");
   const moves = inner && mayChange(level, folder.path);
+  // Offline, the copy makes notes only (offline mode design §3): folders, files and moves need a connection.
   return [
     ...(writes
       ? [
           { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
-          { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
-          { id: "upload", label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
+          { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path), needsConnection: true },
+          { id: "upload", label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path), needsConnection: true },
           // Only where the browser opens a camera: on a desktop it would open the file chooser, as Upload here does.
-          ...(isPhone() ? [{ label: "Take photo", icon: Camera, onSelect: () => onPhoto(folder.path) }] : []),
+          ...(isPhone() ? [{ label: "Take photo", icon: Camera, onSelect: () => onPhoto(folder.path), needsConnection: true }] : []),
         ]
       : []),
-    ...(moves ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
-    ...(moves && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
+    ...(moves ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }), needsConnection: true }] : []),
+    ...(moves && folder.folders.length === 0 && folder.notes.length === 0
+      ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing, needsConnection: true }]
+      : []),
     // The vault itself is no folder to mark.
     ...(inner ? entriesOf(publishing, folder.path, false) : []),
     ...keepOffline(inVault(folder.path)),
@@ -328,15 +331,15 @@ function FileMenu({
     ...(note && onOpenBeside ? [{ label: "Open beside", icon: Columns2, onSelect: () => onOpenBeside(path) }] : []),
     ...(note && onGraph ? [{ label: "Open graph…", icon: Waypoints, onSelect: () => onGraph(path) }] : []),
     ...copyItems(path, names, note, copy),
-    ...(changes && !renaming ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
+    ...(changes && !renaming ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }), needsConnection: true }] : []),
     // An attachment can be marked too: a copy that holds it is then withdrawn (publish spec §3.6).
     ...entriesOf(publishing, path, note),
     ...(!changes
       ? []
       : note
         ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
-        : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
-    ...(changes && note && onFlag && flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => onFlag(path) }] : []),
+        : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version, needsConnection: true }]),
+    ...(changes && note && onFlag && flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => onFlag(path), needsConnection: true }] : []),
     ...(changes && note && onDate ? calendarItems(path, dated, onDate, onRemoveDate, onTask) : []),
   ];
   return (
@@ -447,6 +450,7 @@ function AccountRow() {
   const [asking, setAsking] = useState(false);
   const [failed, setFailed] = useState(false);
   const badge = useBadge();
+  const offline = useOffline();
 
   const [waitingAsk, setWaitingAsk] = useState<number | null>(null);
 
@@ -489,38 +493,41 @@ function AccountRow() {
     navigate("/signin", { replace: true });
   };
 
-  const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent";
+  const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent aria-disabled:opacity-40";
+  // Offline, the pages that need a connection keep their place, dimmed, with the reason (offline mode design §3a); a
+  // link can't be disabled, so it goes nowhere then. Settings stays, opening on its Offline page, which works offline.
+  const reach = offline ? { "aria-disabled": true, title: NEEDS_CONNECTION, onClick: (e: MouseEvent) => e.preventDefault() } : { onClick: close };
   return (
     <nav aria-label="Account" className="flex flex-wrap items-center gap-x-1">
-      <Link to="/whats-on" onClick={close} className={link}>
+      <Link to="/whats-on" {...reach} className={link}>
         <CalendarClock size={16} aria-hidden className="text-muted" />
         What's on
         <Badge count={badge.count} overdue={badge.overdue} />
       </Link>
-      <Link to="/settings/skills/installed" onClick={close} className={link}>
+      <Link to="/settings/skills/installed" {...reach} className={link}>
         <Sparkles size={16} aria-hidden className="text-muted" />
         Skills
       </Link>
-      <Link to="/settings/access/keys" onClick={close} className={link}>
+      <Link to="/settings/access/keys" {...reach} className={link}>
         <KeyRound size={16} aria-hidden className="text-muted" />
         Access
       </Link>
       {publishEnabled && (
-        <Link to="/published" onClick={close} className={link}>
+        <Link to="/published" {...reach} className={link}>
           <Share2 size={16} aria-hidden className="text-muted" />
           Published
         </Link>
       )}
-      <Link to="/settings/appearance" onClick={close} className={link}>
+      <Link to={offline ? "/settings/offline" : "/settings/appearance"} onClick={close} className={link}>
         <Settings size={16} aria-hidden className="text-muted" />
         Settings
       </Link>
-      <Link to="/console" onClick={close} className={link}>
+      <Link to="/console" {...reach} className={link}>
         <SquareTerminal size={16} aria-hidden className="text-muted" />
         Console
       </Link>
       {(role === "admin" || role === "primary_admin") && (
-        <Link to="/admin/users" onClick={close} className={link}>
+        <Link to="/admin/users" {...reach} className={link}>
           <Shield size={16} aria-hidden className="text-muted" />
           Admin
         </Link>
@@ -761,36 +768,37 @@ export default function TreeDrawer(props: {
   const markDiscreet = useMarkDiscreet();
   // The active vault's share of What's on, on its Calendar.
   const share = useBadge().vaults.get(activeVault ?? "");
+  // Offline, all of the vault's own entries but the gallery need a connection (offline mode design §3).
   const vaultItems: MenuItem[] = [
     ...(activeVault
       ? [
-          { label: "Trash", icon: Trash2, onSelect: () => onVaultSheet({ kind: "trash", vault: activeVault }) },
-          { label: "Activity", icon: History, onSelect: () => onVaultSheet({ kind: "activity", vault: activeVault }) },
-          { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
+          { label: "Trash", icon: Trash2, onSelect: () => onVaultSheet({ kind: "trash", vault: activeVault }), needsConnection: true },
+          { label: "Activity", icon: History, onSelect: () => onVaultSheet({ kind: "activity", vault: activeVault }), needsConnection: true },
+          { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }), needsConnection: true },
           // Every vault has a calendar, a view of its notes with a time: nothing to make first, nothing to look for.
-          { label: "Calendar", icon: CalendarDays, onSelect: () => openCalendar(activeVault), after: share && <Badge count={share.count} overdue={share.overdue} /> },
+          { label: "Calendar", icon: CalendarDays, onSelect: () => openCalendar(activeVault), after: share && <Badge count={share.count} overdue={share.overdue} />, needsConnection: true },
           // Made from the template at once, so no ellipsis: that would promise a dialog.
           ...(hasBoard
-            ? [{ label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }]
+            ? [{ label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault), needsConnection: true }]
             : atLeast(level, "maintain")
-              ? [{ label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) }]
+              ? [{ label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }), needsConnection: true }]
               : []),
           { label: "Gallery", icon: Images, onSelect: () => openGallery(activeVault) },
-          { id: "recent", label: "Recent changes", icon: History, onSelect: openRecent },
+          { id: "recent", label: "Recent changes", icon: History, onSelect: openRecent, needsConnection: true },
           ...(owner
             ? [
-                { label: "Share…", icon: Users, onSelect: () => setSharing(true) },
+                { label: "Share…", icon: Users, onSelect: () => setSharing(true), needsConnection: true },
                 // Held as chosen: the rename changes the active vault before the dialog closes.
-                { label: "Rename vault…", icon: Pencil, onSelect: () => setRenamingVault(activeVault) },
+                { label: "Rename vault…", icon: Pencil, onSelect: () => setRenamingVault(activeVault), needsConnection: true },
               ]
             : []),
-          { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
+          { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true), needsConnection: true },
           // Her side of a vault shared with her: owner, role, provider, her name for it, and leaving.
-          ...(active?.membership ? [{ label: "Shared with you…", icon: Users, onSelect: () => setMember(true) }] : []),
-          { label: "Export as ZIP…", icon: Download, onSelect: () => setExporting(true) },
+          ...(active?.membership ? [{ label: "Shared with you…", icon: Users, onSelect: () => setMember(true), needsConnection: true }] : []),
+          { label: "Export as ZIP…", icon: Download, onSelect: () => setExporting(true), needsConnection: true },
         ]
       : []),
-    ...(owner && embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
+    ...(owner && embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true), needsConnection: true }] : []),
     // Only in the mode, as the switch in Settings: outside it the menu tells nothing. The icon says what selecting does.
     ...(revealed && active && active.kind !== "skills"
       ? [
@@ -798,6 +806,7 @@ export default function TreeDrawer(props: {
             label: active.discreet ? "Not discreet" : "Discreet",
             icon: active.discreet ? Eye : EyeOff,
             disabled: markDiscreet.isPending,
+            needsConnection: true,
             onSelect: () => {
               const next = !active.discreet;
               markDiscreet.mutate({ vault: active.name, discreet: next }, { onSuccess: () => copied.say(next ? "Marked as discreet" : "No longer discreet") });
@@ -806,9 +815,9 @@ export default function TreeDrawer(props: {
         ]
       : []),
     // Last, away from the everyday entries; the dialog Settings has, with the name typed and the password.
-    ...(owner && activeVault ? [{ label: "Delete vault…", icon: Trash2, onSelect: () => setDeletingVault(activeVault) }] : []),
+    ...(owner && activeVault ? [{ label: "Delete vault…", icon: Trash2, onSelect: () => setDeletingVault(activeVault), needsConnection: true }] : []),
     // A member's way out, last for the same reason. Held as chosen: leaving forgets the active vault before the dialog closes.
-    ...(membership && activeVault ? [{ label: "Leave this vault…", icon: LogOut, onSelect: () => setLeaving({ vault: activeVault, membership }) }] : []),
+    ...(membership && activeVault ? [{ label: "Leave this vault…", icon: LogOut, onSelect: () => setLeaving({ vault: activeVault, membership }), needsConnection: true }] : []),
   ];
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;

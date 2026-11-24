@@ -135,7 +135,7 @@ public sealed class Similar(INoteReader notes, ISearchIndex index) : ICommand
 
     private static string Heading(IReadOnlyList<SimilarSource> sources, VaultPath scope, int count)
     {
-        var where = scope.IsRoot ? "in every vault" : $"below {scope.Value}";
+        var where = scope.IsRoot ? "below every vault" : $"below {scope.Value}";
         var what = sources.Count == 1 ? $"similar to {sources[0].Shown}" : $"between A = {sources[0].Shown} and C = {sources[1].Shown}";
         return $"{what}, {where}: {count} {(count == 1 ? "note" : "notes")}";
     }

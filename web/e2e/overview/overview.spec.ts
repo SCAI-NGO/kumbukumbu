@@ -330,8 +330,6 @@ test("overview #7: Compare says so when the history no longer keeps the copy's v
 });
 
 test("overview #8: Compare shows the copy's version after a note was edited, published and edited again in one session @overview", async ({ page, aliceApi, folder }) => {
-  test.info().annotations.push({ type: "finding", description: "F-04: a copy made within a changeset loses its version at the next write of it, so Compare says it is no longer kept; a fix likely makes publishing a checkpoint of the note (an ADR)" });
-  test.fail();
   const n = named(folder);
   const path = n.path("Shore");
   cleanUp(aliceApi, [path], [path]);

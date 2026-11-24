@@ -28,7 +28,7 @@ async function setup(listedByContact = [work, team]) {
     remote: (name) => servers.get(name)!,
     adopted: (v) => { adopted.push(v.name); return Promise.resolve(); },
   });
-  return { browser, copies, mirror, servers, engines, adopted };
+  return { browser, copies, mirror, servers, engines, adopted, vaults };
 }
 
 const held = (mirror: SealedMirror, id: string) => mirror.vault(id)?.list().filter((e) => e.local).map((e) => e.path).sort() ?? null;
@@ -148,6 +148,66 @@ describe("a vault leaving the copy while its engine runs", () => {
     await expect(files.read("n1.md")).rejects.toThrow();
     await expect(vault.stateStore().load()).rejects.toThrow();
     expect(server.count("remove")).toBe(0);
+    await engines.stop();
+  });
+});
+
+describe("a vault's mirror removed for the server's reasons is told, whichever path removed it", () => {
+  async function running() {
+    const s = await setup();
+    await s.engines.start();
+    await vi.waitFor(() => expect(s.mirror.held().map((v) => v.id).sort()).toEqual([work.id, team.id].sort()));
+    const told = vi.fn();
+    s.mirror.listenRemoved(told);
+    return { ...s, told };
+  }
+
+  test("the vault list leaves it out before a contact does: told once, though the contact finds nothing to purge", async () => {
+    const { browser, mirror, engines, vaults, told } = await running();
+    vaults.splice(vaults.findIndex((v) => v.id === team.id), 1);
+    browser.slots.vaults = [work];
+    await engines.refresh();
+    expect(await mirror.contact()).toEqual({ vaults: 0, lost: 0 });
+    expect(mirror.vault(team.id)).toBeUndefined();
+    expect(told.mock.calls).toEqual([[{ vaults: 1, lost: 0 }]]);
+    await engines.stop();
+  });
+
+  test("a contact leaves it out: told once", async () => {
+    const { browser, mirror, engines, told } = await running();
+    browser.slots.vaults = [work];
+    await mirror.contact();
+    expect(told.mock.calls).toEqual([[{ vaults: 1, lost: 0 }]]);
+    await engines.stop();
+  });
+
+  test("left out when the copy is unlocked: told once the host listens", async () => {
+    const { browser, copies, mirror, engines } = await running();
+    await engines.stop();
+    mirror.lock();
+    browser.slots.vaults = [work];
+    const opened = (await copies.unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    const told = vi.fn();
+    opened.listenRemoved(told);
+    expect(told.mock.calls).toEqual([[{ vaults: 1, lost: 0 }]]);
+  });
+
+  test("removed in another tab: told in this one too", async () => {
+    const { browser, copies, engines, told } = await running();
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    browser.slots.vaults = [work];
+    await other.contact();
+    await delivered();
+    expect(told.mock.calls).toEqual([[{ vaults: 1, lost: 0 }]]);
+    await engines.stop();
+  });
+
+  test("no longer chosen on this device: not told, the device's own choice", async () => {
+    const { mirror, engines, told } = await running();
+    await mirror.choose((c) => ({ ...c, all: false, vaults: [work.id] }));
+    await engines.refresh(true);
+    expect(mirror.vault(team.id)).toBeUndefined();
+    expect(told).not.toHaveBeenCalled();
     await engines.stop();
   });
 });

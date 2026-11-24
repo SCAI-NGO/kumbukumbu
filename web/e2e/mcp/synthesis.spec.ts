@@ -228,12 +228,6 @@ test("similar: a #section as the source uses only that section @synthesis @searc
 });
 
 test("similar: the first section of a note as the source is ranked by its text @synthesis @search", async ({ mcp, folder, aliceApi }) => {
-  test.fail();
-  test.info().annotations.push({
-    type: "finding",
-    description:
-      "M-01 (Medium): a section merged into its parent's chunk can't be the source of similar, the first section below a note's title among them: the chunk holding its text starts above its heading, and SimilarSearch.cs:115,120 take only the chunks that start inside the section, so similar answers \"has no indexed text yet; try again in a while\", which never helps",
-  });
   const n = names(folder);
   const [source, table, cakeNote] = [n.path("Source"), n.path("Tables"), n.path("Cake")];
   await write(mcp, source, twoSections(`Source ${n.id}`));
@@ -428,8 +422,6 @@ test("similar: the default scope is every vault, and the source may lie outside 
 });
 
 test("similar: the heading of the default scope says 'below every vault' @synthesis @search", async ({ mcp, folder, aliceApi }) => {
-  test.fail();
-  test.info().annotations.push({ type: "finding", description: "M-02 (Low, wording): similar's heading for the default scope says \"in every vault\", the spec's §5 \"below every vault\"" });
   const glass = names(folder).path("Glass");
   await write(mcp, glass, "# Glass\n\nThe glassblower gathers molten glass on the end of a blowpipe and blows a bubble into it.\n");
   await waitIndexed(aliceApi, [glass]);
@@ -511,12 +503,12 @@ test("graph --without-tag: a tagged note leaves the local graph, the paths and t
     text: [`3  ${p("H")}  (1 in, 2 out)`, `2  ${p("S")}  (0 in, 2 out)`, `1  ${p("B")}  (1 in, 0 out)`, `1  ${p("T")}  (1 in, 0 out)`, `0  ${p("Lone")}  (0 in, 0 out)`].join("\n"),
     isError: false,
   });
-  // The tagged notes leave the list. Its counts are left out: they stay those of the whole graph, links of the notes
-  // left out included (GraphQueries.cs:87-95), while --unresolved counts kept notes only; the spec doesn't say which
-  // (M-05, unclear, in the report).
-  const hubs = await mcp.sh(`graph --hubs /Work/${folder} --without-tag synthesis`);
-  expect(hubs.isError).toBe(false);
-  expect(hubs.text.split("\n").map((l) => l.replace(/^\d+ {2}(.+?) {2}\(\d+ in, \d+ out\)$/, "$1")).sort()).toEqual([p("B"), p("S"), p("T")].sort());
+  // The tagged notes leave the list, and their links leave the counts, as --unresolved counts kept notes only (M-05,
+  // decided: the knowledge-synthesis spec §6, ADR 0028).
+  expect(await mcp.sh(`graph --hubs /Work/${folder} --without-tag synthesis`)).toEqual({
+    text: [`1  ${p("B")}  (1 in, 0 out)`, `1  ${p("S")}  (0 in, 1 out)`, `0  ${p("T")}  (0 in, 0 out)`].join("\n"),
+    isError: false,
+  });
   expect(await mcp.sh(`graph --unresolved /Work/${folder}`)).toEqual({ text: `Gone ${n.id}, linked from 1 note:\n  ${p("H")}:6`, isError: false });
   expect(await mcp.sh(`graph --unresolved /Work/${folder} --without-tag synthesis`)).toEqual({ text: "(no unresolved links)", isError: false });
 });

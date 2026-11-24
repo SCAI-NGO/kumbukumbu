@@ -39,6 +39,7 @@ Each comes with its reason. "Chris" marks his decisions of 2026-11-18; "my call"
 1. **The publisher sets the depth.** A link and a note embed (`![[Note]]`) both count as an edge, as in the graph backend. Chris: people should choose for themselves. The field runs from 0 (this note only, the default and today's behaviour) to 5. Beside the field is the live count, e.g. "+31 notes". From 50 notes on, the count and a line under it take the warning colour: "That's a lot of notes. Check the list before you publish."
    - The line is a warning, not a block. Chris wanted the warning; a block would get in the way of people who mean it.
    - Agents use `--depth 0..5`.
+   - 2026-11-25: the dialog lists what goes out at depth 0 too, the note alone, so that 0 and 1 differ only in what they list; the field opens with its value selected ([ADR 0030](../../adr/0030-depth-0-shows-its-list-too.md)).
    - My call: the cap of 5. Further than that is in practice the whole vault, and the 500-note hard limit (decision 9) holds anyway.
 2. **See before it goes out.** The dialog lists the notes the link will carry: title, path, the count and the total size. It lists separately what stays behind, with the reason:
    - "marked unpublishable";

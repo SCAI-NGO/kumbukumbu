@@ -17,7 +17,7 @@
 //     the rest without a page: similar-api #1–#5
 //  4. Add link: two 44 px buttons labelled for screen readers; `- [[Other]]` in `## Related` at the end, read back; the
 //     row leaves the list (§3.3, §3.4) → "similar #2"; the Related section's cases: similar-api #6–#8
-//  5. Not related: `not-related:` written, the row "Hidden · Undo" in place, Undo takes the entry out, hidden on the
+//  5. Not related: `not-related:` written, the row "Hidden · <title>" with Undo in place, Undo takes the entry out, hidden on the
 //     other note too (§3.6) → "similar #3"; the words → "similar #4"; in place → "similar #11"; for agents: similar-api #9
 //  6. Only where the caller may change the note: a read member sees the rows without the answers (§3.3)
 //     → "similar #5"; the API's refusal: similar-api #10
@@ -196,10 +196,8 @@ test("similar #3: Not related hides the row with Undo and keeps the path in not-
   await expect(row(other.rows, "Dive computer")).toHaveCount(1);
 });
 
-test("similar #4: a row answered Not related reads Hidden · Undo @similar @search", async ({ page, aliceApi, vault }) => {
+test("similar #4: a row answered Not related reads Hidden · its title, with Undo @similar @search", async ({ page, aliceApi, vault }) => {
   test.setTimeout(300_000);
-  test.info().annotations.push({ type: "finding", description: "F-01: the hidden row reads \"Hidden · Dive tables\" and Undo, not the spec's \"Hidden · Undo\"" });
-  test.fail();
   const n = at(vault);
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
   await openNote(page, n.decompression);
@@ -207,7 +205,8 @@ test("similar #4: a row answered Not related reads Hidden · Undo @similar @sear
   await page.getByRole("button", { name: "Not related: Dive tables", exact: true }).click();
   const hidden = rows.filter({ hasText: /^Hidden/ });
   await expect(hidden.getByRole("button", { name: "Undo" })).toBeVisible();
-  await expect(hidden, "F-01: the row reads Hidden · Undo (§3.6)").toHaveText("Hidden · Undo");
+  // The row says what was hidden (Chris, 2026-11-24; §3.6).
+  await expect(hidden, "F-01: the row reads Hidden · Dive tables, then Undo (§3.6)").toHaveText("Hidden · Dive tablesUndo");
 });
 
 test("similar #5: a read member sees the suggestions without Add link and Not related @similar @search", async ({ page, bobPage, aliceApi, seedAs }) => {
@@ -318,8 +317,6 @@ test("similar #8: the graph's suggested links, their card's Add link, and Not re
 
 test("similar #10: in the side panel a row shows a short title in full @similar @search", async ({ page, aliceApi, vault }) => {
   test.setTimeout(300_000);
-  test.info().annotations.push({ type: "finding", description: "F-02: in the 300 px side panel a row cuts even a short title (\"Dive tab…\") and its line, the folder taking up to 30 %" });
-  test.fail();
   const n = at(vault);
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
   await openNote(page, n.decompression);
@@ -332,8 +329,6 @@ test("similar #10: in the side panel a row shows a short title in full @similar 
 
 test("similar #11: a row answered Not related stays where it stood @similar @search", async ({ page, aliceApi, vault }) => {
   test.setTimeout(300_000);
-  test.info().annotations.push({ type: "finding", description: "F-03: the hidden row moves to the bottom of the list instead of staying in place (SimilarNotes.tsx:39)" });
-  test.fail();
   const n = at(vault);
   await waitSimilarReady(aliceApi, n.decompression, firstIndex);
   const [best] = (await similarNotes(aliceApi, n.decompression)).notes;
@@ -354,7 +349,6 @@ test("similar #9: with search by meaning off, the section says so @similar", asy
     description:
       "F-09: with search by meaning off on the server, Similar notes doesn't say \"Similar notes need search by meaning, which is off for this vault.\" (§3.7): the server answers unindexed (M-07)",
   });
-  test.fail();
   const path = `/Work/${folder}/Decompression.md`;
   await aliceApi.putNote(path, "# Decompression stops\n\nThe diver ascends slowly.\n");
   try {

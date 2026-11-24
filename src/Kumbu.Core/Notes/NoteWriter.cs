@@ -35,11 +35,13 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// The state a note was created with is the exception, a version of its own even within the changeset (a
     /// conflict copy's first state is the evidence of the conflict).
     /// Without a changeset (a restore of a version or a checkpoint), the new state joins none, so it stays a version of its own.
+    /// A state a publication copied (<see cref="StoredNote.Copied"/>) is kept as <paramref name="keepCurrent"/> keeps it.
     /// </summary>
     public static StoredNote Next(
         StoredNote current, string content, string writer, WriterRef reference, DateTime now, Changeset? changeset = null, bool keepCurrent = false,
         string? message = null)
     {
+        keepCurrent |= current.Copied;
         var history = HistoryAfterWrite(
             current.History, new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset, current.Ref, current.Message),
             current.Changeset, changeset, keepCurrent, (a, b) => a.Content == b.Content);
@@ -56,6 +58,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             Changeset = changeset,
             Ref = reference,
             Restored = false,
+            Copied = false,
             // A write that joins the session of the one before keeps its message unless it brings its own.
             Message = Coalesces(current.History.Count, current.Changeset, changeset, keepCurrent) ? message ?? current.Message : message,
         };

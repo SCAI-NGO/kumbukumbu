@@ -28,10 +28,11 @@ export function publishingItems({
 }): MenuItem[] {
   const blocked = !!marks && covered(marks, path);
   const marked = !!marks?.includes(path);
+  // Publishing and its marks are the server's: each needs a connection.
   return [
     ...(note && mayPublish && marks
       ? [blocked ? { label: "Publish… (unpublishable)", icon: Share2, onSelect: () => {}, disabled: true } : { label: "Publish…", icon: Share2, onSelect: onPublish }]
       : []),
     ...(!marks ? [] : marked ? [{ label: "Allow publishing", icon: Eye, onSelect: () => onMark(false) }] : [{ label: "Mark unpublishable", icon: EyeOff, onSelect: () => onMark(true) }]),
-  ];
+  ].map((item) => ({ ...item, needsConnection: true }));
 }

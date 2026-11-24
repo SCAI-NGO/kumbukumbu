@@ -164,6 +164,9 @@ export class SealedMirror {
   onDrop: ((vault: string) => Promise<void>) | null = null;
   /** Another tab changed what this device keeps offline. */
   onChoice: (() => void) | null = null;
+  private removedListener: ((removed: Purged) => void) | null = null;
+  /** Removed before the host listened: at the unlocking's contacts. */
+  private untold: Purged = { vaults: 0, lost: 0 };
   /**
    * Another tab signed out: the host writes what its editors hold into the copy and locks. Without a host's answer
    * the copy locks at once.
@@ -256,8 +259,28 @@ export class SealedMirror {
     return this.align(answer.vaults);
   }
 
-  /** Drops one vault's mirror, its unsynced changes too. Returns how many changes went with it. */
-  async purge(id: string): Promise<number> {
+  /**
+   * Told of every vault's mirror that went because the server no longer gives it to this device (not listed by a
+   * contact or the vault list, re-keyed), in this tab or another, whichever path found it first: the host's notice
+   * follows the removal (§3a). Not of one the device no longer chooses to keep. Removals made before it listened, at
+   * the unlocking, are told at once.
+   */
+  listenRemoved(fn: (removed: Purged) => void): void {
+    this.removedListener = fn;
+    if (this.untold.vaults > 0) this.removed(this.untold);
+    this.untold = { vaults: 0, lost: 0 };
+  }
+
+  private removed(removed: Purged): void {
+    if (this.removedListener !== null) this.removedListener(removed);
+    else this.untold = { vaults: this.untold.vaults + removed.vaults, lost: this.untold.lost + removed.lost };
+  }
+
+  /**
+   * Drops one vault's mirror, its unsynced changes too. Returns how many changes went with it. `left`: for the
+   * server's reasons (told, listenRemoved); false for the device's own choice.
+   */
+  async purge(id: string, left = true): Promise<number> {
     this.assertOpen();
     const vault = this.vaults.get(id);
     if (vault === undefined) return 0;
@@ -266,7 +289,8 @@ export class SealedMirror {
     this.vaults.delete(id);
     await this.onDrop?.(id);
     await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ remove: [vault.metaKey], removePrefix: [vault.dataPrefix] }));
-    this.r.channel.post({ type: "purged", vault: id });
+    this.r.channel.post(left ? { type: "purged", vault: id, left: { lost } } : { type: "purged", vault: id });
+    if (left) this.removed({ vaults: 1, lost });
     return lost;
   }
 
@@ -342,9 +366,12 @@ export class SealedMirror {
     if (m.type === "purged") {
       if (m.vault === null) this.lock();
       else {
-        this.vaults.get(m.vault)?.drop();
+        const held = this.vaults.get(m.vault);
+        held?.drop();
         this.vaults.delete(m.vault);
         await this.onDrop?.(m.vault);
+        // Not again where this tab's own contact removed it first.
+        if (held !== undefined && m.left !== undefined) this.removed({ vaults: 1, lost: m.left.lost });
       }
       this.onPurged?.(m.vault);
       return;

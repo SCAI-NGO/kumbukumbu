@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Turning offline on and off on this device (design §3a, "Turning it on", "Settings, Offline").
+import { AuthError } from "eidolon-core/engine/ports";
 import { IDLE_MS, MirrorCopies, REMEMBERED_IDLE_MS, type CopyHeader } from "eidolon-core/store/mirror";
 import type { StorePorts } from "eidolon-core/store/ports";
 import { api, call } from "../api/client";
+import { useSession } from "../state/session";
 import { useOfflineCopy } from "./copy";
 import { deviceLabel } from "./deviceLabel";
 import { browserPorts, keepThroughCleanUps } from "./ports";
@@ -43,9 +45,16 @@ export function rememberSignIn(remember: boolean): void {
  */
 export async function turnOn(user: { id: string; username: string }, password: string): Promise<void> {
   await call(api.POST("/api/session/confirm", { body: { password } }));
-  const mirror = await new MirrorCopies(await storePorts()).create({
+  const ports = await storePorts();
+  const signedIn = () => useSession.getState().user?.id === user.id;
+  // The slot is made under the session that goes with the request: only while this user is the one signed in, looked
+  // at just before it (ADR 0029), so their copy never gets a slot of someone else's.
+  const slots = { ...ports.slots, create: (label: string) => (signedIn() ? ports.slots.create(label) : Promise.reject(new AuthError("Signed out."))) };
+  const mirror = await new MirrorCopies({ ...ports, slots }).create({
     userId: user.id, username: user.username, password, label: deviceLabel(), idleMs: remembered() ? REMEMBERED_IDLE_MS : IDLE_MS,
   });
+  // Someone else signed in while it was made: the copy stays, sealed, for its user.
+  if (!signedIn()) return mirror.lock();
   keep(mirror);
   await keepThroughCleanUps().catch(() => false);
 }

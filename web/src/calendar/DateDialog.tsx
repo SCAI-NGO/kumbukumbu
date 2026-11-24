@@ -104,6 +104,11 @@ export function calendarItems(
   onRemove: (path: string) => void,
   onTask?: (path: string, task: boolean) => void,
 ): MenuItem[] {
+  // The calendar is the server's: offline every entry is dimmed (offline mode design §3).
+  return entryItems(path, known, onDate, onRemove, onTask).map((item) => ({ ...item, needsConnection: true }));
+}
+
+function entryItems(...[path, known, onDate, onRemove, onTask]: Parameters<typeof calendarItems>): MenuItem[] {
   if (fileKindOf(path) !== "note" || !path.toLowerCase().endsWith(".md") || /^\/[^/]+\/Board\/Board\.md$/.test(path)) return [];
   const add: MenuItem = { label: "Add to calendar…", icon: CalendarPlus, onSelect: () => onDate(path) };
   const view = known.data;

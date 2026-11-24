@@ -482,6 +482,36 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_version_a_copy_took_stays_in_the_history_when_the_edit_goes_on()
+    {
+        // As the editor saves: two writes in one changeset, publish, a third write in the same changeset.
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Draft.md", "one");
+        await EditAsync(alice, "Draft.md", "two");
+        await PublishAsync(alice, "/Work/Draft.md");
+        var copied = VersionToken.Of("two");
+        await EditAsync(alice, "Draft.md", "three");
+
+        using (var read = await alice.GetAsync(alice.Url("Draft.md") + "?version=" + copied)) Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        Assert.Equal("two", await (await AliceAsync(alice)).Notes.ReadVersionAsync(P("/Work/Draft.md"), copied, Ct));
+
+        // Update copy keeps its version the same way; the next write coalesces as before.
+        await UpdateAsync(alice, "/Work/Draft.md");
+        await EditAsync(alice, "Draft.md", "four");
+        await EditAsync(alice, "Draft.md", "five");
+        var note = (await (await AliceAsync(alice)).Notes.GetAsync(P("/Work/Draft.md"), Ct))!;
+        Assert.Equal(["three", "two", "one"], note.History.Select(h => h.Content));
+        Assert.False(note.Copied);
+    }
+
+    private static async Task EditAsync(RestClient alice, string note, string content)
+    {
+        var version = (await alice.ReadAsync(note))["version"]!.GetValue<string>();
+        using var put = await alice.SendAsync(HttpMethod.Put, alice.Url(note), new { content, version });
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+    }
+
+    [Fact]
     public async Task Withdraw_kills_the_link()
     {
         var alice = await AliceWithQuestionsAsync();

@@ -194,6 +194,32 @@ public sealed class EncryptedNoteStore(
         }, ct, adding: Bytes(note.Content));
     }
 
+    /// <summary>
+    /// Marks the notes a publication copies at <paramref name="stored"/> (vault paths) as copied (<see cref="StoredNote.Copied"/>,
+    /// ADR 0025), in the publication's transaction under the vault's gate, which the caller holds and which checked their
+    /// versions in the working set. Returns what to change in the working set once the transaction committed, under the
+    /// same gate; a note changed in MongoDB meanwhile throws <see cref="Publishing.PublishingConflictException"/>, so the
+    /// publication is made again. Only the mark and the revision change: no content, so nothing is recorded or indexed.
+    /// </summary>
+    internal async Task<Action> MarkCopiedAsync(IClientSessionHandle session, UnlockedVault vault, IEnumerable<VaultPath> stored, CancellationToken ct)
+    {
+        var apply = new List<Action>();
+        foreach (var path in stored)
+        {
+            var (id, note) = vault.Notes[path];
+            if (note.Copied) continue;
+            var next = note with { Revision = note.Revision + 1, Copied = true };
+            if (!await ReplaceAtRevisionAsync(session, catalog.Notes, vault, id, path, note.Revision, next.Revision, vault.SealNote(id, next), ct))
+            {
+                throw new Publishing.PublishingConflictException();
+            }
+
+            apply.Add(() => vault.Notes = vault.Notes.SetItem(path, (id, next)));
+        }
+
+        return () => apply.ForEach(a => a());
+    }
+
     public async Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct) =>
         (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, next.LastWriter, next.Ref ?? WriterRef.Unknown, next.LastWriteAt, ct)).Count == 0;
 
@@ -1018,9 +1044,10 @@ public sealed class EncryptedNoteStore(
         if (index is null) return new(Kumbu.Core.Search.SemanticState.Off, [], 0, "search by meaning is off on this server");
         if (!index.TokenizerSettled) return new(Kumbu.Core.Search.SemanticState.Preparing, [], 0, "search by meaning is getting ready (the tokenizer is loading)");
 
-        IEnumerable<VaultAccess> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
+        IReadOnlyList<VaultAccess> vaults = scope.IsRoot ? [.. await AllVaultsAsync(ct)] : await VaultAsync(scope, ct) is { } v ? [v] : [];
         var chunks = new List<Kumbu.Core.Search.ChunkVector>();
         var unconfigured = new List<string>();
+        var off = new List<(string Vault, string Reason)>();
         var pending = 0;
         var scheme = index.Bound.Scheme;
         foreach (var access in vaults)
@@ -1029,6 +1056,14 @@ public sealed class EncryptedNoteStore(
             if (index.Providers.Resolve(vault) is not { } provider)
             {
                 unconfigured.Add(access.Name);
+                continue;
+            }
+
+            // A model that is off (search by meaning switched off, say) is off for comparing too, as for a search:
+            // the vectors it stored earlier aren't handed out. One that is still loading compares what it stored.
+            if (provider.Driver.State == Kumbu.Core.Search.SemanticState.Off)
+            {
+                off.Add((access.Name, provider.Driver.Reason ?? "search by meaning is off"));
                 continue;
             }
 
@@ -1044,9 +1079,14 @@ public sealed class EncryptedNoteStore(
             }
         }
 
-        var reason = unconfigured.Count == 0 ? null
-            : $"{string.Join(", ", unconfigured.Order(StringComparer.Ordinal))}: its embedding provider isn't configured on this server any more";
-        return new(Kumbu.Core.Search.SemanticState.Ready, chunks, pending, reason);
+        var reasons = new List<string>();
+        if (unconfigured.Count > 0)
+            reasons.Add($"{string.Join(", ", unconfigured.Order(StringComparer.Ordinal))}: its embedding provider isn't configured on this server any more");
+        // Every vault in scope off: by meaning, the whole scope is off, with the model's own reason.
+        if (off.Count > 0 && unconfigured.Count == 0 && off.Count == vaults.Count)
+            return new(Kumbu.Core.Search.SemanticState.Off, [], 0, off[0].Reason);
+        foreach (var (name, why) in off.OrderBy(o => o.Vault, StringComparer.Ordinal)) reasons.Add($"{name}: {why}");
+        return new(Kumbu.Core.Search.SemanticState.Ready, chunks, pending, reasons.Count == 0 ? null : string.Join("; ", reasons));
     }
 
     /// <summary>Whether the caller's searches may go to the provider of <paramref name="access"/>'s vault: her own vault's
