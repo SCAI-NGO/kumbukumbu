@@ -6,6 +6,7 @@ import Badge from "../calendar/Badge";
 import { Menu, type MenuItem } from "../components/Menu";
 import type { FlagName } from "../flags/api";
 import FlagChips from "../flags/FlagChips";
+import { NEEDS_CONNECTION, useOffline } from "../offline/mode";
 import { useEditor } from "../state/editor";
 import { cut, type Tool } from "./toolbarCut";
 import type { FlagFilter } from "./treeFilter";
@@ -20,7 +21,7 @@ export const sortLabel = (order: TreeOrder) => (order === "name" ? "Sorted by na
 const target = "flex min-h-12 items-center rounded-[8px] focus-visible:outline-2 focus-visible:outline-accent";
 /** The Sort button's icon, in the row and in ⋯ alike: the order shown. */
 const sortIcon = (order: TreeOrder) => (order === "name" ? ArrowDownAZ : ClockArrowDown);
-const iconTarget = `${target} relative size-12 flex-none justify-center text-muted`;
+const iconTarget = `${target} relative size-12 flex-none justify-center text-muted disabled:opacity-40 aria-disabled:opacity-40`;
 
 /**
  * The tree's toolbar, one row directly above the folders (UI round spec §2.1): + New note, then Upload, the vault's
@@ -72,6 +73,9 @@ export default function TreeTools({
   nothing: boolean;
 }) {
   const badge = useId();
+  // Offline, the tools that need a connection stay, dimmed, with the reason as their title (offline mode design §3a).
+  const offline = useOffline();
+  const reach = (title: string) => (offline ? { disabled: true, title: NEEDS_CONNECTION } : { title });
   const row = useRef<HTMLDivElement>(null);
   const newNote = useRef<HTMLButtonElement>(null);
   const [room, setRoom] = useState({ width: 0, newNote: 0 });
@@ -123,9 +127,9 @@ export default function TreeTools({
     const { shown, inMenu } = cut(room.width, tools, room.newNote);
     // The vault's menu has Calendar and Board already; Upload here and Recent changes give way to the moved ones.
     const moved: MenuItem[] = inMenu.flatMap((t): MenuItem[] => {
-      if (t === "upload") return [{ label: "Upload", icon: Upload, onSelect: onUpload }];
+      if (t === "upload") return [{ label: "Upload", icon: Upload, onSelect: onUpload, needsConnection: true }];
       if (t === "sort") return [{ label: sort, icon: SortIcon, onSelect: toggleOrder }];
-      if (t === "recent") return [{ label: "Recent changes", icon: History, onSelect: onRecent }];
+      if (t === "recent") return [{ label: "Recent changes", icon: History, onSelect: onRecent, needsConnection: true }];
       if (t === "find") return [{ label: "Find in this vault", icon: Search, onSelect: findOpen }];
       return [];
     });
@@ -140,18 +144,18 @@ export default function TreeTools({
         </button>
       ),
       upload: (
-        <button type="button" aria-label="Upload" title="Upload" onClick={onUpload} className={iconTarget}>
+        <button type="button" aria-label="Upload" {...reach("Upload")} onClick={onUpload} className={iconTarget}>
           <Upload size={20} aria-hidden />
         </button>
       ),
       calendar: (
-        <button type="button" aria-label="Calendar" title="Calendar" aria-describedby={share && badge} onClick={calendar.open} className={iconTarget}>
+        <button type="button" aria-label="Calendar" {...reach("Calendar")} aria-describedby={share && badge} onClick={calendar.open} className={iconTarget}>
           <CalendarDays size={20} aria-hidden />
           {share && <Badge id={badge} count={share.count} overdue={share.overdue} className="pointer-events-none absolute top-0.5 right-0" />}
         </button>
       ),
       board: (
-        <button type="button" aria-label="Board" title="Board" onClick={() => board?.()} className={iconTarget}>
+        <button type="button" aria-label="Board" {...reach("Board")} onClick={() => board?.()} className={iconTarget}>
           <SquareKanban size={20} aria-hidden />
         </button>
       ),
@@ -160,8 +164,11 @@ export default function TreeTools({
         <Link
           to="/recent"
           aria-label="Recent changes"
-          title="Recent changes"
+          title={offline ? NEEDS_CONNECTION : "Recent changes"}
+          aria-disabled={offline || undefined}
           onClick={(e) => {
+            // A link can't be disabled: offline it goes nowhere.
+            if (offline) return e.preventDefault();
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
             e.preventDefault();
             onRecent();

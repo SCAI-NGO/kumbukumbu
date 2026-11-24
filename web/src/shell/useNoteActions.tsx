@@ -129,9 +129,9 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
           ? [
               { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
               // Not in the preview: a version restored would go under the editor's text.
-              ...(preview ? [] : [{ label: "History", icon: History, onSelect: () => setHistory(path) }]),
+              ...(preview ? [] : [{ label: "History", icon: History, onSelect: () => setHistory(path), needsConnection: true }]),
               // Read mode only, as History: the window shows the server's state, which could lag behind the editor's.
-              { label: "Who wrote what", icon: Users, onSelect: () => navigate(blameUrl(path)) },
+              { label: "Who wrote what", icon: Users, onSelect: () => navigate(blameUrl(path)), needsConnection: true },
             ]
           : []),
         ...(shell.onGraph ? [{ label: "Open graph…", icon: Waypoints, onSelect: () => shell.onGraph!(path) }] : []),
@@ -144,6 +144,8 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
                 label: favourites.has(noteFavourite(path)) ? "Remove from favourites" : "Add to favourites",
                 icon: Star,
                 onSelect: () => favourites.toggle(noteFavourite(path), noteTree.isSuccess ? staleNotes(favourites.list, new Map([[vaultOf(path), { tree: noteTree.data, at: noteTree.dataUpdatedAt }]])) : []),
+                // The favourites are the account's, kept on the server.
+                needsConnection: true,
               },
             ]
           : []),
@@ -152,13 +154,14 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
           ? [
               // Not while it is being named from its heading: a name given by hand must not lose that race. No copy of
               // an archived note: it would be archived too.
-              ...(renaming || inVault(path).startsWith("_archive/") ? [] : [{ label: "Duplicate", icon: CopyPlus, onSelect: () => void duplicate(path) }]),
-              ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => shell.onMove({ kind: "note", path }) }]),
+              // Offline, the copy can make, change and trash notes, nothing else (offline mode design §3, §4.9).
+              ...(renaming || inVault(path).startsWith("_archive/") ? [] : [{ label: "Duplicate", icon: CopyPlus, onSelect: () => void duplicate(path), needsConnection: true }]),
+              ...(renaming ? [] : [{ label: "Rename or move", icon: FolderInput, onSelect: () => shell.onMove({ kind: "note", path }), needsConnection: true }]),
               { label: "Delete note", icon: Trash2, onSelect: () => shell.onDelete({ kind: "note", path }) },
               ...(preview
                 ? []
                 : [
-                    ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => shell.onFlag(path) }] : []),
+                    ...(flaggable(path) ? [{ label: "Flag", icon: Flag, onSelect: () => shell.onFlag(path), needsConnection: true }] : []),
                     ...calendarItems(path, dated, shell.onDate, removeDate, switchTask),
                   ]),
               ...(boxless && mode === "read" && !preview ? [{ label: "Add property…", icon: ListPlus, onSelect: () => useEditor.getState().setNoteTool("addProperty") }] : []),

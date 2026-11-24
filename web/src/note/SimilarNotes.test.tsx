@@ -4,11 +4,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useOfflineMode } from "../offline/mode";
 import { fakeApi, json } from "../test/app";
 import SimilarNotes from "./SimilarNotes";
 
 afterEach(() => {
   cleanup();
+  useOfflineMode.setState({ offline: false });
   vi.unstubAllGlobals();
 });
 
@@ -99,6 +101,34 @@ describe("similar notes", () => {
       { path: PUMP, other: pipes.path, undo: false },
       { path: PUMP, other: pipes.path, undo: true },
     ]);
+  });
+
+  it("keeps a row answered Not related where it stood", async () => {
+    const tank = { path: "/Work/Water/tank.md", line: 1, text: "The tank holds the water", score: 0.7 };
+    let rejected = false;
+    fakeApi({
+      [similarUrl]: () => ready(rejected ? [tank] : [pipes, tank]),
+      "GET /api/vaults": vaults(),
+      "POST /api/vaults/Work/similar/not-related": () => {
+        rejected = true;
+        return written();
+      },
+    });
+    show();
+    await openSection();
+    await userEvent.click(await screen.findByRole("button", { name: "Not related: pipes" }));
+    expect(await screen.findByText("Hidden · pipes")).toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Hidden · pipesUndo", expect.stringMatching(/^tank/)]));
+  });
+
+  it("offline, says it needs a connection and asks nothing", async () => {
+    useOfflineMode.setState({ offline: true });
+    const fetch = fakeApi({ [similarUrl]: () => ready(), "GET /api/vaults": vaults() });
+    show();
+    await openSection();
+    expect(await screen.findByText("Similar notes need a connection. They're back when you are.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(fetch.mock.calls.some(([r]) => new URL((r as Request).url).pathname.startsWith("/api/similar"))).toBe(false);
   });
 
   it("offers no answers to a reader who can't change the note", async () => {

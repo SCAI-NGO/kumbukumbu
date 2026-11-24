@@ -2,6 +2,7 @@
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal, flushSync } from "react-dom";
 import type { LucideIcon } from "lucide-react";
+import { NEEDS_CONNECTION, useOffline } from "../offline/mode";
 
 /** The least a list is given where the screen has less room on its side: three items. */
 export const MIN_HEIGHT = 152;
@@ -14,6 +15,8 @@ export interface MenuItem {
   icon: LucideIcon;
   onSelect(): void;
   disabled?: boolean;
+  /** Doesn't work offline: then the item stays, dimmed, with "Needs a connection" below its label (offline design §3a). */
+  needsConnection?: boolean;
   /** Shown after the label, at the item's end: a count, say. */
   after?: ReactNode;
 }
@@ -199,6 +202,7 @@ export function MenuList(props: {
   onDismiss(): void;
 }) {
   const id = useId();
+  const offline = useOffline();
   const onItemKey = (e: React.KeyboardEvent) => {
     const isTab = e.key === "Tab";
     if (!isTab && e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -214,18 +218,26 @@ export function MenuList(props: {
   };
 
   const renderItem = (item: MenuItem, key: string) => {
-    const { label, icon: Icon, disabled, after } = item;
+    const { label, icon: Icon, after } = item;
+    const unreachable = offline && item.needsConnection === true;
     return (
       <button
         key={key}
         type="button"
         role="menuitem"
-        disabled={disabled}
+        disabled={item.disabled || unreachable}
         onClick={() => props.onChoose(item)}
         className="flex min-h-12 w-full items-center gap-2.5 rounded-[8px] px-3 text-left text-[15px] text-text hover:bg-surface disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent"
       >
         <Icon size={18} strokeWidth={1.8} aria-hidden className="text-muted" />
-        {label}
+        {unreachable ? (
+          <span className="flex flex-col py-1">
+            {label}
+            <span className="text-[13px] text-muted">{NEEDS_CONNECTION}</span>
+          </span>
+        ) : (
+          label
+        )}
         {after && <span className="ml-auto flex">{after}</span>}
       </button>
     );

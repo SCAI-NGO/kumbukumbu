@@ -57,6 +57,19 @@ public sealed class SimilarApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_archive_is_suggested_only_for_a_note_in_it()
+    {
+        var user = await NewAsync(Api, "Farm");
+        await user.CreateAsync("pump.md", Pump);
+        await user.CreateAsync("_archive/old pump.md", "# Old pump\n\nThe old pump moved water through the pipes of the farm.\n");
+        await user.CreateAsync("_archive/old pipes.md", "# Old pipes\n\nWater moved through the old pipes of the farm, the old pump pushed it.\n");
+        await IndexedAsync();
+
+        Assert.DoesNotContain(Paths(await SimilarAsync(user, "pump.md")), p => p.StartsWith("/Farm/_archive/", StringComparison.Ordinal));
+        Assert.Contains("/Farm/_archive/old pipes.md", Paths(await SimilarAsync(user, "_archive/old pump.md")));
+    }
+
+    [Fact]
     public async Task Add_link_writes_the_related_section_and_the_suggestion_goes()
     {
         var user = await NewAsync(Api, "Farm");

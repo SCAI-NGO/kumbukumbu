@@ -83,13 +83,16 @@ public static partial class GraphQueries
             .Where(i => kept[i] && g.Nodes[i].Kind is NodeKind.Note or NodeKind.Day && g.InEdges(i).Count == 0 && g.OutEdges(i).Count == 0)];
     }
 
-    /// <summary>The <paramref name="top"/> kept notes by links in plus links out, then by path.</summary>
+    /// <summary>The <paramref name="top"/> kept notes by links in plus links out, then by path. A link to or from a note
+    /// <see cref="GraphFilter.WithoutTags"/> leaves out doesn't count (ADR 0028): an earlier hypothesis mustn't raise a note's degree.</summary>
     public static IReadOnlyList<(int Node, int In, int Out)> Hubs(LinkGraph g, GraphFilter f, int top)
     {
         var kept = Kept(g, f);
+        var without = Normalised(f.WithoutTags);
+        bool Counts(int other) => !Carries(g.Nodes[other], without);
         return [.. Enumerable.Range(0, g.Nodes.Count)
             .Where(i => kept[i] && g.Nodes[i].Kind is NodeKind.Note or NodeKind.Day)
-            .Select(i => (Node: i, In: g.InEdges(i).Count, Out: g.OutEdges(i).Count))
+            .Select(i => (Node: i, In: g.InEdges(i).Count(e => Counts(g.Edges[e].From)), Out: g.OutEdges(i).Count(e => Counts(g.Edges[e].To))))
             .OrderByDescending(h => h.In + h.Out)
             .ThenBy(h => g.Nodes[h.Node].Key, TextOrder.Default)
             .Take(top)];
@@ -175,8 +178,8 @@ public static partial class GraphQueries
 
     private static bool[] Kept(LinkGraph g, GraphFilter f)
     {
-        var asked = f.Tags.Select(t => TagMatch.Normalise(t) ?? t).ToList();
-        var without = f.WithoutTags.Select(t => TagMatch.Normalise(t) ?? t).ToList();
+        var asked = Normalised(f.Tags);
+        var without = Normalised(f.WithoutTags);
         var kept = new bool[g.Nodes.Count];
         for (var i = 0; i < kept.Length; i++)
         {
@@ -188,7 +191,7 @@ public static partial class GraphQueries
                     && (f.Archive || !node.Archived)
                     && (f.Paths.Count == 0 || f.Paths.Any(p => Below(node.Path!, p)))
                     && asked.All(a => node.Tags.Any(t => TagMatch.Covers(a, t)))
-                    && !without.Any(a => node.Tags.Any(t => TagMatch.Covers(a, t))),
+                    && !Carries(node, without),
                 _ => false,
             };
         }
@@ -205,6 +208,12 @@ public static partial class GraphQueries
 
         return kept;
     }
+
+    private static List<string> Normalised(IReadOnlyList<string> tags) => [.. tags.Select(t => TagMatch.Normalise(t) ?? t)];
+
+    /// <summary>A note or day note carrying any of <paramref name="tags"/>, nested ones included.</summary>
+    private static bool Carries(GraphNode node, IReadOnlyList<string> tags) =>
+        node.Kind is NodeKind.Note or NodeKind.Day && tags.Any(a => node.Tags.Any(t => TagMatch.Covers(a, t)));
 
     private static bool Below(VaultPath path, VaultPath folder) =>
         folder.Segments.Count <= path.Segments.Count

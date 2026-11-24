@@ -17,12 +17,11 @@
 // - Works offline: tree, reading, wiki links, embeds → offline.spec #1; words search across mirrored vaults → left
 //   out (not in Task 7's gaps; MiniSearch over the copy is core's, no browser step of its own); backlinks and tags →
 //   core links tests; editing, new notes, trashing → offline.spec #2; images and PDFs in the mirror → offline.spec #7.
-// - Needs a connection (shown, not silently failing): the graph → gaps #6; Similar notes → gaps #6, by link
-//   prediction §3.7's "the query fails as any other and says so" (its §2 says "the section says it needs a
-//   connection"; §3.7 is the state the section has, so that line is asserted); menus (history, blame, move, rename,
+// - Needs a connection (shown, not silently failing): the graph → gaps #6; Similar notes → gaps #6, in the graph's
+//   words (link prediction §2, §3.7, as Chris decided on 2026-11-24: one way for everything that needs a connection); menus (history, blame, move, rename,
 //   duplicate) → gaps #2; search by meaning, console, calendar, board, settings pages → left out (not among Task 7's
 //   gaps; the pane's sentence is the graph's, asserted in gaps #6); sharing, publishing, keys, admin → left out: the
-//   same dimming as gaps #2, which finds that nothing in the web app dims for the mode (F-05), so each would repeat it.
+//   same rule as gaps #2 (F-05: an item that needs a connection declares it, the menu dims it), so each would repeat it.
 // §3a Turning it on
 // - Off by default, invited once (Keep me signed in or installed) → Vitest OfflineInvite.test.tsx (both tests); the
 //   suite answers the invitation "Not now" (its own devices turn it on through Settings).
@@ -372,11 +371,6 @@ test("gaps #1c: a folder kept offline keeps its large attachment; one in another
 });
 
 test("gaps #2: offline, what needs a connection stays in its menu, dimmed, with \"Needs a connection\" @offline", async ({ page, aliceApi, folder }) => {
-  test.info().annotations.push({
-    type: "finding",
-    description: "F-05: offline, History, Who wrote what, Duplicate and Rename or move stay enabled, without \"Needs a connection\" (§3a); nothing in the web app dims for the mode",
-  });
-  test.fail();
   const plan = `/Work/${folder}/Plan.md`;
   await aliceApi.putNote(plan, "# Plan\n\nRead offline.\n");
   await turnOn(page);
@@ -514,13 +508,8 @@ test("gaps #5: a read-only member's copy (Bob in Work) queues no write: no Write
   expect((await aliceApi.getNote(plan)).content).toBe("# Plan\n\nAlice's, read by Bob.\n");
 });
 
-test("gaps #6: offline the graph says it needs a connection, and Similar notes says it couldn't look @offline", async ({ page, aliceApi, folder }, testInfo) => {
+test("gaps #6: offline the graph and Similar notes say they need a connection @offline", async ({ page, aliceApi, folder }, testInfo) => {
   test.setTimeout(180_000);
-  test.info().annotations.push({
-    type: "finding",
-    description: "F-07: offline, the graph's dialog says \"Couldn't draw the graph.\" with Try again, not \"The graph needs a connection. It's back when you are.\" (graph out of preview §3)",
-  });
-  test.fail();
   const plan = `/Work/${folder}/Plan.md`;
   await aliceApi.putNote(plan, "# Plan\n\nThe lighthouse keeper's log.\n");
   await turnOn(page);
@@ -528,12 +517,12 @@ test("gaps #6: offline the graph says it needs a connection, and Similar notes s
   await expect(article(page)).toContainText("The lighthouse keeper's log.");
   await goOffline(page);
 
-  // Similar notes, opened only offline (online, with search off, it would show its "off" state): the query fails as
-  // any other and says so (link prediction §3.7).
+  // Similar notes, opened only offline (online, with search off, it would show its "off" state): it says it needs a
+  // connection, as the graph does, and offers nothing to try again (link prediction §3.7).
   const similar = page.getByRole("region", { name: "Similar notes" });
   await similar.getByRole("button", { name: "Similar notes" }).click();
-  await expect(similar.getByText("Couldn't look for similar notes.")).toBeVisible({ timeout: 30_000 });
-  await expect(similar.getByRole("button", { name: "Try again" })).toBeVisible();
+  await expect(similar.getByText("Similar notes need a connection. They're back when you are.", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(similar.getByRole("button", { name: "Try again" })).toHaveCount(0);
   if (testInfo.project.name === "desktop") await shot(page, testInfo, "offline-gaps");
 
   // The graph: its button stays (dimmed, not hidden), and its dialog says it needs a connection (graph design §3).

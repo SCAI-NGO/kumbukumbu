@@ -157,8 +157,6 @@ test("similar-api #2: up to five suggestions, one per note @similar @search", as
 
 test("similar-api #3: a note in the archive gets the archive's notes too @similar @search", async ({ aliceApi, vault }) => {
   test.setTimeout(300_000);
-  test.info().annotations.push({ type: "finding", description: "M-03: a note in the archive gets no suggestions from the archive (SimilarApi scopes to the vault's root without Archive)" });
-  test.fail();
   const n = at(vault);
   await seedMeaning(aliceApi, vault);
   const tables = (await aliceApi.getNote(n.tables)).content;
@@ -261,11 +259,6 @@ test("similar-api #7: an existing related section, any case, takes the item at i
 
 test("similar-api #8: Add link writes the path when another note of the vault has the title @similar @search", async ({ aliceApi, vault }) => {
   test.setTimeout(300_000);
-  test.info().annotations.push({
-    type: "finding",
-    description: "M-04: with a second note named Dive tables in the vault, Add link from the same folder writes [[Dive tables]], not the path (the resolver's same-folder preference)",
-  });
-  test.fail();
   const n = at(vault);
   await seedMeaning(aliceApi, vault);
   // Another note of the name, far in meaning.
@@ -372,7 +365,6 @@ test("similar-api #12: with search by meaning off, the answer is off @similar", 
     description:
       "M-07: with search by meaning off on the server, GET /api/similar answers state unindexed, not off (§3.7, §4): the index is always there (Program.cs:107), so SimilarApi's off branch isn't reached; the same cause as M-06",
   });
-  test.fail();
   const path = `/Work/${folder}/Decompression.md`;
   await aliceApi.putNote(path, "# Decompression stops\n\nThe diver ascends slowly.\n");
   try {

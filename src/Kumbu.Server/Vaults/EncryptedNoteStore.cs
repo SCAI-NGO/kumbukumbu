@@ -1018,9 +1018,10 @@ public sealed class EncryptedNoteStore(
         if (index is null) return new(Kumbu.Core.Search.SemanticState.Off, [], 0, "search by meaning is off on this server");
         if (!index.TokenizerSettled) return new(Kumbu.Core.Search.SemanticState.Preparing, [], 0, "search by meaning is getting ready (the tokenizer is loading)");
 
-        IEnumerable<VaultAccess> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
+        IReadOnlyList<VaultAccess> vaults = scope.IsRoot ? [.. await AllVaultsAsync(ct)] : await VaultAsync(scope, ct) is { } v ? [v] : [];
         var chunks = new List<Kumbu.Core.Search.ChunkVector>();
         var unconfigured = new List<string>();
+        var off = new List<(string Vault, string Reason)>();
         var pending = 0;
         var scheme = index.Bound.Scheme;
         foreach (var access in vaults)
@@ -1029,6 +1030,14 @@ public sealed class EncryptedNoteStore(
             if (index.Providers.Resolve(vault) is not { } provider)
             {
                 unconfigured.Add(access.Name);
+                continue;
+            }
+
+            // A model that is off (search by meaning switched off, say) is off for comparing too, as for a search:
+            // the vectors it stored earlier aren't handed out. One that is still loading compares what it stored.
+            if (provider.Driver.State == Kumbu.Core.Search.SemanticState.Off)
+            {
+                off.Add((access.Name, provider.Driver.Reason ?? "search by meaning is off"));
                 continue;
             }
 
@@ -1044,9 +1053,14 @@ public sealed class EncryptedNoteStore(
             }
         }
 
-        var reason = unconfigured.Count == 0 ? null
-            : $"{string.Join(", ", unconfigured.Order(StringComparer.Ordinal))}: its embedding provider isn't configured on this server any more";
-        return new(Kumbu.Core.Search.SemanticState.Ready, chunks, pending, reason);
+        var reasons = new List<string>();
+        if (unconfigured.Count > 0)
+            reasons.Add($"{string.Join(", ", unconfigured.Order(StringComparer.Ordinal))}: its embedding provider isn't configured on this server any more");
+        // Every vault in scope off: by meaning, the whole scope is off, with the model's own reason.
+        if (off.Count > 0 && unconfigured.Count == 0 && off.Count == vaults.Count)
+            return new(Kumbu.Core.Search.SemanticState.Off, [], 0, off[0].Reason);
+        foreach (var (name, why) in off.OrderBy(o => o.Vault, StringComparer.Ordinal)) reasons.Add($"{name}: {why}");
+        return new(Kumbu.Core.Search.SemanticState.Ready, chunks, pending, reasons.Count == 0 ? null : string.Join("; ", reasons));
     }
 
     /// <summary>Whether the caller's searches may go to the provider of <paramref name="access"/>'s vault: her own vault's
