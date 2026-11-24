@@ -343,7 +343,7 @@ type Fixtures = { freshSession: (user: User) => Promise<{ page: Page }>; aliceAp
 
 /**
  * Alice's copy in a browser where Bob signs in. `tokenCheck`: assert that no contact of Bob's session hands in her
- * token (F-10, intermittent, so in a fixme test of its own); otherwise only record whether one did.
+ * token (F-10, in a test of its own); otherwise only record whether one did.
  */
 async function anotherUsersCopy({ freshSession, aliceApi, folder }: Fixtures, tokenCheck: boolean) {
   const { page } = await freshSession("alice");
