@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# With compose.search.yaml behind an HTTPS proxy on the host's loopback (HTTPS_PROXY=http://127.0.0.1:<port>, as in
+# the cloud VM; see up.sh): the server reaches huggingface.co and api.tensorx.ai through that proxy and trusts its CA.
+# A bridge-networked container can't reach the host's loopback, so a relay on the host's network passes the bytes
+# from the Docker bridge's gateway address to the proxy (proxy-relay.mjs). The final stage (aspnet) carries no copy
+# of the CA (compose.proxy-ca.yaml), so the bundle is mounted and SSL_CERT_FILE points at it: it replaces the system
+# store, so it must be a full bundle.
+services:
+  proxy-relay:
+    image: node:26-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
+    network_mode: host
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      LISTEN_HOST: ${E2E_RELAY_HOST}
+      LISTEN_PORT: ${E2E_RELAY_PORT}
+      TARGET_HOST: 127.0.0.1
+      TARGET_PORT: ${E2E_UPSTREAM_PROXY_PORT}
+    volumes:
+      - ${E2E_STACK_DIR}/proxy-relay.mjs:/relay/proxy-relay.mjs:ro
+    command: ["node", "/relay/proxy-relay.mjs"]
+
+  kumbu:
+    depends_on:
+      proxy-relay:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HTTPS_PROXY: http://host.docker.internal:${E2E_RELAY_PORT}
+      NO_PROXY: mongo,pdf,localhost,127.0.0.1
+      SSL_CERT_FILE: /run/kumbu-e2e/ca-bundle.crt
+    volumes:
+      - ${E2E_PROXY_CA}:/run/kumbu-e2e/ca-bundle.crt:ro
