@@ -45,4 +45,19 @@ public class PropertiesTests
         Assert.NotNull(read.Problem);
         Assert.Empty(read.Values);
     }
+
+    // A query reads every note's frontmatter; parsed once per content, a vault of thousands runs in milliseconds (ADR 0027).
+    [Fact]
+    public void A_note_s_properties_are_parsed_once_for_its_content_and_its_vault_s_types()
+    {
+        var content = string.Concat("---\nbirthday: 1980-11-23\n---\n", "# Ann");
+        var types = PropertyTypes.Read("{\"types\": {\"birthday\": \"date\"}}");
+
+        var first = Properties.Read(content, types);
+
+        Assert.Same(first, Properties.Read(content, types));
+        Assert.Same(first, Properties.Read(content, PropertyTypes.Read("{\"types\": {\"birthday\": \"date\"}}")));
+        Assert.IsType<TextValue>(Properties.Read(content, PropertyTypes.Read("{\"types\": {\"birthday\": \"text\"}}")).Values["birthday"]);
+        Assert.IsType<DateValue>(Properties.Read(content, types).Values["birthday"]);
+    }
 }
