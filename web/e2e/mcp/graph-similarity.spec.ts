@@ -196,7 +196,6 @@ test("graph-similarity #5: with search by meaning off, state off with the reason
     description:
       "M-06: with search by meaning off on the server, /api/graph/similarity answers state ready with every pair null, not off with a reason (spec §1): SearchIndex is always registered (Program.cs:107), so EncryptedNoteStore's off branch (around :1018) is never reached and VectorsAsync answers Ready without chunks",
   });
-  test.fail();
   const n = await graphIn(aliceApi, folder);
   const answer = await similarityOf(aliceApi, { path: n.tables });
   expect(answer.state, "M-06: state off with search by meaning off").toBe("off");
