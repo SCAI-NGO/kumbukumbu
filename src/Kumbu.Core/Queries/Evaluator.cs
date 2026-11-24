@@ -115,9 +115,9 @@ public sealed class Evaluator
         if (chain.Count >= ExpressionParser.MaxDepth)
             throw new QueryError("too-deep", $"The formulas use each other more than {ExpressionParser.MaxDepth} levels deep.", reference.Position);
 
-        if (!formulas.TryGetValue(name, out var expr)) formulas[name] = expr = ExpressionParser.Parse(text);
+        if (!formulas.TryGetValue(name, out var expr)) formulas[name] = expr = QueryError.In(text, () => ExpressionParser.Parse(text));
         chain.Add(name);
-        Check(expr, chain);
+        QueryError.In(text, () => { Check(expr, chain); return true; });
         chain.RemoveAt(chain.Count - 1);
     }
 

@@ -67,10 +67,11 @@ public sealed class Base
     /// <summary>Runs a view (by name; the first when null) over the notes.</summary>
     public QueryResult Run(string? viewName, IEnumerable<QueryNote> notes, QueryNote? self, DateTime now)
     {
-        var view = viewName is null
-            ? views.FirstOrDefault()
-            : views.FirstOrDefault(v => Scalar(v, "name") == viewName) ?? throw new QueryError("unknown-view", $"The base has no view '{viewName}'.", 0);
-        var name = view is null ? "Table" : Scalar(view, "name") ?? "View 1";
+        // A view without a name is called by the name ViewNames gives it.
+        var index = viewName is null ? 0 : ViewNames.ToList().IndexOf(viewName);
+        if (index < 0) throw new QueryError("unknown-view", $"The base has no view '{viewName}'.", 0);
+        var view = views.Count > 0 ? views[index] : null;
+        var name = view is null ? "Table" : ViewNames[index];
 
         var evaluator = new Evaluator(formulas);
         var filter = new List<Func<Scope, bool>>();
@@ -109,7 +110,8 @@ public sealed class Base
         if (depth > ExpressionParser.MaxDepth) throw Invalid("The filters are nested too deeply.");
         if (node is YamlScalarNode scalar)
         {
-            var expr = evaluator.Compile(scalar.Value ?? "");
+            var text = scalar.Value ?? "";
+            var expr = QueryError.In(text, () => evaluator.Compile(text));
             return scope => Evaluator.Truthy(evaluator.Evaluate(expr, scope));
         }
 
@@ -130,7 +132,7 @@ public sealed class Base
     // file.x and formula.x are expressions; note.x and any other name are a property, so a name with spaces needs no quotes.
     private static Expr Column(string id, Evaluator evaluator) =>
         id.StartsWith("file.", StringComparison.Ordinal) || id.StartsWith("formula.", StringComparison.Ordinal)
-            ? evaluator.Compile(id)
+            ? QueryError.In(id, () => evaluator.Compile(id))
             : new IndexExpr(new NameExpr("note", 0), new LiteralExpr(new TextValue(id.StartsWith("note.", StringComparison.Ordinal) ? id[5..] : id), 0), 0);
 
     /// <summary>Orders rows by their sort keys: within a type as <see cref="Evaluator.Compare"/> does, empty values last

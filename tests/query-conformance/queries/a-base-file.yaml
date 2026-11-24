@@ -1,0 +1,19 @@
+description: A .base file runs as a query without parameters; this is the base file.
+source: spec
+query: Lists/Notes.base
+notes:
+  Lists/Notes.base: |
+    filters: file.ext == "md"
+    views:
+      - type: table
+        name: All
+        order: [file.name]
+  Ann.md: |
+    # Ann
+views: [All]
+runs:
+  - columns: [file.name]
+    rows:
+      - [text Ann.md]
+  - args: { month: "11" }
+    error: unknown-param

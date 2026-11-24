@@ -66,6 +66,22 @@ runs:
     error: unknown-view        # or base, and the expressions' codes
 ```
 
+A case about query notes (in `queries/`) names the query, optionally its parameters and views as read, and `runs` with the call's `args` (a list gives a multitext parameter one value per item); a run may name a `query` of its own:
+
+```yaml
+query: Queries/Birthdays.md
+params:              # optional: each parameter as read
+  month: { type: number, required: "true", description: "The month, 1 to 12." }
+views: [By day]      # optional: the views, in order
+runs:
+  - args: { month: "11" }
+    columns: [file.basename, birthday]
+    rows:
+      - [text Ann, date 1980-11-23]
+  - args: {}
+    error: missing-param   # or no-base, params, unknown-param, param-value, and the bases' codes
+```
+
 `source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian.
 
 ## Values

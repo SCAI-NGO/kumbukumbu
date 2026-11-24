@@ -1,0 +1,47 @@
+description: A parameter left out takes its default; this is the query note itself, its own properties under the arguments.
+source: spec
+query: Queries/Open tasks.md
+notes:
+  Queries/Open tasks.md: |
+    ---
+    type: query
+    owner: ada
+    params:
+      status:
+        type: text
+        default: open
+    ---
+    ```base
+    filters: status == this.status && owner == this.owner
+    views:
+      - type: table
+        order: [file.basename, status]
+    ```
+  Tasks/Paint.md: |
+    ---
+    status: open
+    owner: ada
+    ---
+  Tasks/Pump.md: |
+    ---
+    status: done
+    owner: ada
+    ---
+  Tasks/Roof.md: |
+    ---
+    status: open
+    owner: liz
+    ---
+params:
+  status: { type: text, required: "false", default: text open }
+runs:
+  - args: {}
+    columns: [file.basename, status]
+    rows:
+      - [text Paint, text open]
+  - args: { status: done }
+    columns: [file.basename, status]
+    rows:
+      - [text Pump, text done]
+  - args: { owner: liz }
+    error: unknown-param

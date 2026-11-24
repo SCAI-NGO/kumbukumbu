@@ -1,0 +1,44 @@
+description: The views of a query note are those of its base blocks in order; the first runs unless one is named.
+source: spec
+query: Queries/People.md
+notes:
+  Queries/People.md: |
+    ---
+    type: query
+    ---
+    # People
+
+    ```base
+    filters: file.inFolder("People")
+    views:
+      - type: table
+        name: Names
+        order: [file.basename]
+    ```
+
+    And by city:
+
+    ```base
+    filters: city != null
+    views:
+      - type: table
+        name: Cities
+        order: [file.basename, city]
+    ```
+  People/Ann.md: |
+    ---
+    city: Wien
+    ---
+  Places/Wien.md: |
+    # Wien
+views: [Names, Cities]
+runs:
+  - columns: [file.basename]
+    rows:
+      - [text Ann]
+  - view: Cities
+    columns: [file.basename, city]
+    rows:
+      - [text Ann, text Wien]
+  - view: Map
+    error: unknown-view

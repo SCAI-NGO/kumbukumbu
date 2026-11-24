@@ -1,0 +1,78 @@
+description: A parameter can be held to options, take a list (given once per value) or a date; a value that doesn't fit is refused.
+source: spec
+types:
+  due: date
+query: Queries/Due.md
+notes:
+  Queries/Due.md: |
+    ---
+    type: query
+    params:
+      kind:
+        type: text
+        options: [task, event]
+        default: task
+      tags:
+        type: multitext
+        default: [home]
+      before:
+        type: date
+        default: 2026-12-31
+    ---
+    ```base
+    filters:
+      and:
+        - kind == this.kind
+        - due < this.before
+        - this.tags.contains(place)
+    views:
+      - type: table
+        order: [file.basename, due]
+        sort:
+          - property: due
+    ```
+  Paint.md: |
+    ---
+    kind: task
+    place: home
+    due: 2026-12-01
+    ---
+  Pump.md: |
+    ---
+    kind: task
+    place: farm
+    due: 2026-11-20
+    ---
+  Party.md: |
+    ---
+    kind: event
+    place: home
+    due: 2026-12-24
+    ---
+params:
+  kind: { type: text, required: "false", default: text task, options: [task, event] }
+  tags: { type: multitext, required: "false", default: [text home] }
+  before: { type: date, required: "false", default: date 2026-12-31 }
+runs:
+  - args: {}
+    columns: [file.basename, due]
+    rows:
+      - [text Paint, date 2026-12-01]
+  - args: { tags: [home, farm] }
+    columns: [file.basename, due]
+    rows:
+      - [text Pump, date 2026-11-20]
+      - [text Paint, date 2026-12-01]
+  - args: { kind: event }
+    columns: [file.basename, due]
+    rows:
+      - [text Party, date 2026-12-24]
+  - args: { tags: [home], before: 2026-11-30 }
+    columns: [file.basename, due]
+    rows: []
+  - args: { kind: meeting }
+    error: param-value
+  - args: { before: next week }
+    error: param-value
+  - args: { kind: [task, event] }
+    error: param-value

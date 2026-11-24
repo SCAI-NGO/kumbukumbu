@@ -116,6 +116,14 @@ public static partial class Properties
         };
     }
 
+    /// <summary>A text as a value of <paramref name="type"/>, as a declared property reads it; null when it doesn't fit.</summary>
+    internal static Value? Typed(string raw, PropertyType type) =>
+        Scalar(raw, plain: false, type) switch
+        {
+            TextValue when type is not PropertyType.Text => null,
+            var value => value,
+        };
+
     /// <summary>What a plain scalar looks like: a checkbox, a number, a date, a datetime, or else text.</summary>
     internal static Value Inferred(string raw) => Boolean(raw) ?? Number(raw) ?? Date(raw) ?? DateTime(raw) ?? new TextValue(raw);
 
