@@ -194,6 +194,32 @@ public sealed class EncryptedNoteStore(
         }, ct, adding: Bytes(note.Content));
     }
 
+    /// <summary>
+    /// Marks the notes a publication copies at <paramref name="stored"/> (vault paths) as copied (<see cref="StoredNote.Copied"/>,
+    /// ADR 0025), in the publication's transaction under the vault's gate, which the caller holds and which checked their
+    /// versions in the working set. Returns what to change in the working set once the transaction committed, under the
+    /// same gate; a note changed in MongoDB meanwhile throws <see cref="Publishing.PublishingConflictException"/>, so the
+    /// publication is made again. Only the mark and the revision change: no content, so nothing is recorded or indexed.
+    /// </summary>
+    internal async Task<Action> MarkCopiedAsync(IClientSessionHandle session, UnlockedVault vault, IEnumerable<VaultPath> stored, CancellationToken ct)
+    {
+        var apply = new List<Action>();
+        foreach (var path in stored)
+        {
+            var (id, note) = vault.Notes[path];
+            if (note.Copied) continue;
+            var next = note with { Revision = note.Revision + 1, Copied = true };
+            if (!await ReplaceAtRevisionAsync(session, catalog.Notes, vault, id, path, note.Revision, next.Revision, vault.SealNote(id, next), ct))
+            {
+                throw new Publishing.PublishingConflictException();
+            }
+
+            apply.Add(() => vault.Notes = vault.Notes.SetItem(path, (id, next)));
+        }
+
+        return () => apply.ForEach(a => a());
+    }
+
     public async Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct) =>
         (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, next.LastWriter, next.Ref ?? WriterRef.Unknown, next.LastWriteAt, ct)).Count == 0;
 

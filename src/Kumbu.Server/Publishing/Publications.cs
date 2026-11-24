@@ -139,6 +139,7 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
                 await store.InsertCopyAsync(session, access.Id, code, key, ownerId, made.Copy(at), made.Made.Bytes, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
+                return await notes.MarkCopiedAsync(session, access.Vault, Copied(stored, made), ct);
             }, ct);
             if (written) return new PublishedNote(ShareCode.Link(baseUrl, code), at, made.Made.Plain, walk.Notes, walk.LeftOut, [], []);
         }
@@ -190,6 +191,7 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
                 await store.ReplaceCopyAsync(session, entry.Code, entry.Key, made.Copy(at), made.Made.Bytes, ct);
                 await EventAsync(session, access, next.Log[^1], ct);
                 await store.WriteAsync(session, access.Vault, doc, next, ct);
+                return await notes.MarkCopiedAsync(session, access.Vault, Copied(stored, made), ct);
             }, ct);
             if (written) return new PublishedNote(ShareCode.Link(baseUrl, entry.Code), at, made.Made.Plain, walk.Notes, walk.LeftOut, added, removed);
         }
@@ -964,11 +966,24 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
         if (made.Made.Files.Any(f => (vault.Attachments.TryGetValue(Parse(f.Path), out var a) ? a.Attachment.Version : null) != f.Version)) throw new PublishingConflictException();
     }
 
+    /// <summary>The notes a copy took, as vault paths: the note and a bundle's members. Each keeps the version copied
+    /// (ADR 0025): the copy points at it, so Compare must find it in the note's history.</summary>
+    private static IEnumerable<VaultPath> Copied(VaultPath start, MadeAny made) => [start, .. (made.Members ?? []).Select(m => Parse(m.Note))];
+
     /// <summary>
     /// Runs <paramref name="work"/> in one transaction under the vault's gate, as every write of the vault does. False
     /// when the record changed meanwhile, so the caller reads it again; on the last attempt that is a Conflict.
     /// </summary>
-    private async Task<bool> WriteAsync(VaultAccess access, int attempt, Func<IClientSessionHandle, Task> work, CancellationToken ct)
+    private Task<bool> WriteAsync(VaultAccess access, int attempt, Func<IClientSessionHandle, Task> work, CancellationToken ct) =>
+        WriteAsync(access, attempt, async session =>
+        {
+            await work(session);
+            return null;
+        }, ct);
+
+    /// <summary><see cref="WriteAsync(VaultAccess, int, Func{IClientSessionHandle, Task}, CancellationToken)"/> whose work
+    /// returns what to change in the working set once the transaction committed, still under the gate.</summary>
+    private async Task<bool> WriteAsync(VaultAccess access, int attempt, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct)
     {
         var vault = access.Vault;
         catalog.CheckWritable(vault, access);
@@ -978,9 +993,10 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
             catalog.CheckWritable(vault, access);
             using var session = await catalog.StartSessionAsync(ct);
             session.StartTransaction();
+            Action? committed;
             try
             {
-                await work(session);
+                committed = await work(session);
             }
             catch (Exception e) when (e is PublishingConflictException || (e is MongoException m && m.HasErrorLabel("TransientTransactionError")))
             {
@@ -995,6 +1011,7 @@ internal sealed partial class Publications(VaultCatalog catalog, PublicationStor
             }
 
             await session.CommitTransactionAsync(CancellationToken.None);
+            committed?.Invoke();
             return true;
         }
         finally

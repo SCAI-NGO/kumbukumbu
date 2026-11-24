@@ -39,6 +39,7 @@ Records are public. A security decision says what we do and why, never which con
 | [0022](0022-one-module-wires-the-offline-mode.md) | One module wires the offline mode together | Proposed |
 | [0023](0023-queries-run-whatever-the-browser-says.md) | Queries and mutations run whatever the browser says about the network | Proposed |
 | [0024](0024-the-browsers-offline-closes-the-socket.md) | The browser's "offline" closes the sync socket | Proposed |
+| [0025](0025-publishing-keeps-the-copied-version.md) | Publishing a note keeps the version it copied | Accepted |
 | [0028](0028-hubs-without-tag-count-only-kept-links.md) | `graph --hubs --without-tag` counts only the links of the notes kept | Accepted |
 
 0002 to 0016 were recorded after the fact, on 2026-11-23, from the decisions of the 0.7.0 weekend; their dates are the days they were taken.

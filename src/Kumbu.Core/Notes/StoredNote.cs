@@ -93,6 +93,9 @@ public sealed record HistoryEntry(
 /// <param name="CreatedAt">When the note came into being, once a write has recorded it; read it through <see cref="NoteCreation.Of"/>,
 /// which also covers a note that never did.</param>
 /// <param name="CreatedAtLeast"><paramref name="CreatedAt"/> is only the oldest time known, the note being older than its history.</param>
+/// <param name="Copied">A publication copied the current state (publish or update copy): the next write of content keeps it
+/// in the history even within its changeset, so the copy's version can still be read; that write clears it, a move keeps it
+/// (ADR 0025). A note stored before the mark existed reads as not copied.</param>
 public sealed record StoredNote(
     VaultPath Path,
     string Content,
@@ -107,7 +110,8 @@ public sealed record StoredNote(
     string? Message = null,
     DateTime? CreatedAt = null,
     bool CreatedAtLeast = false,
-    Authorship? Authorship = null)
+    Authorship? Authorship = null,
+    bool Copied = false)
 {
     public string Version => VersionToken.Of(Content);
 }
