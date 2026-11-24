@@ -315,7 +315,7 @@ views:
 
 - **Typed as Obsidian types.** A property's type comes from the vault's `.obsidian/types.json` where it declares one, else from how it is written (`11` a number, `"11"` text); `tags` and `aliases` are lists.
 - **Parameters through `this`.** A call's arguments are bound into `this`, over the query note's own properties, as Obsidian gives a base the note it is shown in. An argument is always a value, never an expression.
-- **In memory, over the unlocked vault.** Nothing about properties is stored in the clear: a query reads the notes as the shell does, scoped to what the caller may read, archived notes left out (ADR 0025).
+- **In memory, over the unlocked vault.** Nothing about properties is stored in the clear: a query reads the notes as the shell does, scoped to what the caller may read, archived notes left out; each note's properties are parsed once while it stays unchanged, so a query over 5,000 notes takes milliseconds (ADR 0027).
 - **One rule for failures.** A function that doesn't exist, a broken formula or a missing argument is an error with a code before any note is read; a value of the wrong type in a note gives null.
 
 **For agents:** `sh query ls [path]` lists the queries with their parameters, `query inspect <query>` shows a query's prose, parameters and views, `query execute <query> [--view V] [--param name=value]...` runs it (a table led by each note's path), `query check <query>` compiles every view and names each error with its expression and position, `query properties [path]` lists the properties with their types and how many notes have them, and `help query` the language. A query is named by its path or its file name. The system skill `create-query` walks an agent through writing one.

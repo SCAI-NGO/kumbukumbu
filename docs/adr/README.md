@@ -39,7 +39,8 @@ Records are public. A security decision says what we do and why, never which con
 | [0022](0022-one-module-wires-the-offline-mode.md) | One module wires the offline mode together | Proposed |
 | [0023](0023-queries-run-whatever-the-browser-says.md) | Queries and mutations run whatever the browser says about the network | Proposed |
 | [0024](0024-the-browsers-offline-closes-the-socket.md) | The browser's "offline" closes the sync socket | Proposed |
-| [0025](0025-queries-run-in-memory-over-the-unlocked-vault.md) | Queries run in memory over the unlocked vault, never over a database index | Accepted |
+| [0025](0025-queries-run-in-memory-over-the-unlocked-vault.md) | Queries run in memory over the unlocked vault, never over a database index | Superseded by [0027](0027-query-properties-are-parsed-once-per-content.md) |
 | [0026](0026-a-query-is-a-note-its-arguments-bound-into-this.md) | A query is a note, its arguments bound into `this` | Accepted |
+| [0027](0027-query-properties-are-parsed-once-per-content.md) | Queries run in memory over the unlocked vault, each note's properties parsed once per content | Accepted |
 
 0002 to 0016 were recorded after the fact, on 2026-11-23, from the decisions of the 0.7.0 weekend; their dates are the days they were taken.

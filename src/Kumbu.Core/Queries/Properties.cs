@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Board;
 using Kumbu.Core.Sections;
@@ -27,7 +28,25 @@ public static partial class Properties
         ["cssclasses"] = PropertyType.Multitext,
     };
 
+    // Parsed properties by the content they were parsed from (ADR 0027): a note's content is the same string for as long
+    // as the working set holds it unchanged, so each is parsed once, not once per query; the entry goes with the string.
+    private static readonly ConditionalWeakTable<string, Parsed> ByContent = [];
+
+    private sealed record Parsed(IReadOnlyDictionary<string, PropertyType> Types, NoteProperties Properties);
+
     public static NoteProperties Read(string content, IReadOnlyDictionary<string, PropertyType> types)
+    {
+        if (ByContent.TryGetValue(content, out var known) && SameTypes(known.Types, types)) return known.Properties;
+        var properties = Parse(content, types);
+        ByContent.AddOrUpdate(content, new Parsed(types, properties));
+        return properties;
+    }
+
+    // The vault's types.json is read for each query, so the same declarations come as another dictionary.
+    private static bool SameTypes(IReadOnlyDictionary<string, PropertyType> a, IReadOnlyDictionary<string, PropertyType> b) =>
+        ReferenceEquals(a, b) || (a.Count == b.Count && a.All(t => b.TryGetValue(t.Key, out var other) && other == t.Value));
+
+    private static NoteProperties Parse(string content, IReadOnlyDictionary<string, PropertyType> types)
     {
         var lines = Lines.Split(content);
         var end = Outline.FrontmatterEnd(lines);

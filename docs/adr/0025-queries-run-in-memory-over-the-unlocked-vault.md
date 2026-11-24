@@ -1,7 +1,7 @@
 # 0025. Queries run in memory over the unlocked vault, never over a database index
 
 - **Date:** 2026-11-23
-- **Status:** Accepted
+- **Status:** Superseded by [0027](0027-query-properties-are-parsed-once-per-content.md)
 - **Decided by:** Chris (in memory, no index, 2026-11-23); Claude (the extract once measured, 2026-11-24, under his go-ahead for the section)
 - **Spec:** [Queries: the data side](../superpowers/specs/2026-11-24-queries-data-side-design.md)
 
