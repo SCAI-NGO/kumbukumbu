@@ -44,7 +44,8 @@ export interface TabLocks {
 /** What a tab tells the copy's other unlocked tabs. Only unlocked tabs listen. */
 export type TabMessage =
   | { type: "changed"; vault: string; paths: string[] }
-  | { type: "purged"; vault: string | null }
+  /** `left`: the vault went for the server's reasons, not the device's choice, with this many changes. */
+  | { type: "purged"; vault: string | null; left?: { lost: number } }
   | { type: "choice" }
   /** Signed out: every tab of the copy locks. */
   | { type: "locked" };

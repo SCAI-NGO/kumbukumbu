@@ -4,12 +4,12 @@
 // of removed copies.
 import "fake-indexeddb/auto";
 import { MirrorCopies } from "eidolon-core/store/mirror";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "../api/client";
 import { useSession } from "../state/session";
 import { json, noContent, user } from "../test/app";
 import { useOfflineCopy } from "./copy";
-import { contact, lockCopy, onBeforeLock, openCopy } from "./mode";
+import { contact, lockCopy, onBeforeLock, openCopy, useOfflineMode } from "./mode";
 import { browserPorts } from "./ports";
 import { signOutPending, sweepRemovedCopies } from "./unlock";
 
@@ -56,6 +56,7 @@ async function openedOnline(idleMs = 60_000) {
 afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  useOfflineMode.getState().dismissPurged();
   await lockCopy();
   useOfflineCopy.getState().clear();
   useSession.getState().reset();
@@ -82,6 +83,30 @@ describe("a copy opened with the slot's key", () => {
   });
 });
 
+describe("a vault's copy removed", () => {
+  // The copy's writes take a Web Lock, which jsdom hasn't: one tab, so each runs at once.
+  beforeEach(() => vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } })));
+
+  test("by the engines' vault list before a contact: the notice shows all the same", async () => {
+    await openedOnline();
+    const mirror = useOfflineCopy.getState().mirror!;
+    await mirror.adopt("v1");
+    // As the engines do for a vault the vault list no longer has (store/engines.ts); the contact then finds none.
+    await mirror.purge("v1");
+    server({ "POST /api/account/mirror-slots/contact": () => json(200, { id: "s1", key, vaults: [] }) });
+    await contact();
+    expect(useOfflineMode.getState().purged).toEqual({ lost: 0 });
+  });
+
+  test("not by the device's own choice: no notice", async () => {
+    await openedOnline();
+    const mirror = useOfflineCopy.getState().mirror!;
+    await mirror.adopt("v1");
+    await mirror.purge("v1", false);
+    expect(useOfflineMode.getState().purged).toBeNull();
+  });
+});
+
 describe("a session's end", () => {
   test("a 401 locks the copy before the app goes to sign-in", async () => {
     await openedOnline();
@@ -101,6 +126,47 @@ describe("a session's end", () => {
     expect(calls.filter((c) => c.body?.includes("tok-ada"))).toEqual([]);
     // Ada's copy is still on the device, sealed.
     expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).not.toBeNull();
+  });
+
+  test("a contact begun under Ada's session doesn't go out once Bob is the one signed in", async () => {
+    await openedOnline();
+    const calls = server({ "POST /api/account/mirror-slots/contact": slot });
+    const contacting = contact();
+    useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+    await contacting;
+    expect(calls.filter((c) => c.body?.includes("tok-ada"))).toEqual([]);
+  });
+
+  test("Ada's copy, still opening when Bob signs in, is never kept for him, and her token goes out no more", async () => {
+    await adasCopy();
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    const calls = server({ "POST /api/account/mirror-slots/contact": async () => (await answered, slot()) });
+    const adas = openCopy(user.id);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+    const bobs = openCopy(bob.id);
+    answer();
+    await Promise.all([adas, bobs]);
+    expect(useOfflineCopy.getState().mirror).toBeNull();
+    // The one contact made while she was signed in, none after.
+    expect(calls.filter((c) => c.body?.includes("tok-ada"))).toHaveLength(1);
+  });
+
+  test("Ada's copy, found gone while Bob signed in, goes from the device but leaves his session alone", async () => {
+    await adasCopy();
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    const calls = server({ "POST /api/account/mirror-slots/contact": async () => (await answered, json(404, { error: "Gone.", code: "mirror-wipe" })) });
+    const adas = openCopy(user.id);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+    answer();
+    await adas;
+    expect(useSession.getState()).toMatchObject({ user: bob, ended: false, notice: null });
+    expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).toBeNull();
   });
 
   test("a sign-in in a tab that holds the copy wraps it again under the password", async () => {
