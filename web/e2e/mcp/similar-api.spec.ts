@@ -372,7 +372,6 @@ test("similar-api #12: with search by meaning off, the answer is off @similar", 
     description:
       "M-07: with search by meaning off on the server, GET /api/similar answers state unindexed, not off (§3.7, §4): the index is always there (Program.cs:107), so SimilarApi's off branch isn't reached; the same cause as M-06",
   });
-  test.fail();
   const path = `/Work/${folder}/Decompression.md`;
   await aliceApi.putNote(path, "# Decompression stops\n\nThe diver ascends slowly.\n");
   try {
