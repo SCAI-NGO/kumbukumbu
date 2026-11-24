@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import Badge from "../calendar/Badge";
 import { useBadge } from "../calendar/useBadge";
 import { Menu, type MenuItem } from "../components/Menu";
+import { NEEDS_CONNECTION, useOffline } from "../offline/mode";
 import { useEditor } from "../state/editor";
 
 const badgeId = "dock-calendar-badge";
@@ -20,11 +21,13 @@ export default function Dock(props: { phone: boolean; newNote: (() => void) | nu
   const badge = useBadge();
   const searchMode = useEditor((s) => s.searchMode);
   const setOverlay = useEditor((s) => s.setOverlay);
+  const offline = useOffline();
   const standIn = useRef<HTMLInputElement>(null);
   const items: MenuItem[] = [
     { label: "New note", icon: FilePlus, onSelect: () => newNote?.(), disabled: !newNote },
-    { label: "New folder…", icon: FolderPlus, onSelect: () => newFolder?.(), disabled: !newFolder },
-    { label: "Upload", icon: Upload, onSelect: () => upload?.(), disabled: !upload },
+    // Offline, the copy makes notes only (offline mode design §3).
+    { label: "New folder…", icon: FolderPlus, onSelect: () => newFolder?.(), disabled: !newFolder, needsConnection: true },
+    { label: "Upload", icon: Upload, onSelect: () => upload?.(), disabled: !upload, needsConnection: true },
   ];
 
   return (
@@ -43,13 +46,15 @@ export default function Dock(props: { phone: boolean; newNote: (() => void) | nu
         <button
           type="button"
           aria-label="Calendar"
-          title="What's on"
+          // Offline it stays, dimmed, with the reason (offline mode design §3a).
+          title={offline ? NEEDS_CONNECTION : "What's on"}
+          disabled={offline}
           aria-describedby={badge.count > 0 ? badgeId : undefined}
           onClick={() => {
             setOverlay("none");
             navigate("/whats-on");
           }}
-          className="relative flex size-12 flex-none items-center justify-center rounded-[14px] border border-line bg-surface text-text-body focus-visible:outline-2 focus-visible:outline-accent"
+          className="relative flex size-12 flex-none items-center justify-center rounded-[14px] border border-line bg-surface text-text-body focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
         >
           <CalendarClock size={22} strokeWidth={1.8} aria-hidden />
           <Badge id={badgeId} count={badge.count} overdue={badge.overdue} className="pointer-events-none absolute top-0 right-0 translate-x-1" />

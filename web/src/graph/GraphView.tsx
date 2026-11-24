@@ -6,6 +6,7 @@ import { HttpError } from "../api/client";
 import { useTree } from "../api/notes";
 import { vaultOf, viewUrl } from "../api/paths";
 import { useErrorTextFor } from "../discreet/errorText";
+import { useOffline } from "../offline/mode";
 import { mediaQueryHook } from "../hooks/mediaQuery";
 import { useWide } from "../hooks/useWide";
 import { useOpenNote } from "../shell/openInPane";
@@ -64,11 +65,14 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   // The filters alone, so the size or a layer switched never asks the server again.
   const { depth, days, attachments, ghosts } = prefs;
   const filters = useMemo<GraphFilters>(() => ({ depth, days, attachments, ghosts }), [depth, days, attachments, ghosts]);
-  const local = useLocalGraph(path, filters, running);
-  const similar = useGraphSimilarity(path, filters, running);
+  // The graph is the server's: offline it asks nothing and says so, also where it was drawn before (graph design §3).
+  const offline = useOffline();
+  const asking = running && !offline;
+  const local = useLocalGraph(path, filters, asking);
+  const similar = useGraphSimilarity(path, filters, asking);
   const tree = useTree(vaultOf(path));
   const errorFor = useErrorTextFor(path);
-  const other = useGraphPaths(path, otherPath, filters, running);
+  const other = useGraphPaths(path, otherPath, filters, asking);
   const [fitSignal, setFitSignal] = useState(0);
   const openNote = useOpenNote();
   const navigate = useNavigate();
@@ -82,7 +86,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   // The last graph stands in while the next is asked for only if the note is in it; else it would show another note's.
   const stale = local.isPlaceholderData && !local.data?.nodes.some((n) => n.path === path);
   // Memoised per answer, or the layout would warm again on every render.
-  const plain = useMemo(() => (local.data && !stale ? toModel(local.data, tree.data) : null), [local.data, stale, tree.data]);
+  const plain = useMemo(() => (local.data && !stale && !offline ? toModel(local.data, tree.data) : null), [local.data, stale, offline, tree.data]);
   // Each edge with its similarity, and the foot's line on it: how many distinct links between two notes are measured.
   const { model, similarityText } = useMemo(() => {
     if (!plain) return { model: null, similarityText: null };
@@ -116,7 +120,7 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
   };
   const clicked = (n: GNode) => (e: MouseEvent) => open(n, e.ctrlKey || e.metaKey);
 
-  const otherText = otherLine(other.data);
+  const otherText = offline ? null : otherLine(other.data);
 
   const inGraph = useMemo(() => new Set(model?.nodes.flatMap((n) => (n.path ? [n.path] : [])) ?? []), [model]);
   const suggestions = useSuggestedLinks(path, inGraph, prefs.suggestions && !!model);
@@ -219,7 +223,9 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
       )}
       {/* On the way down: a node keeps its press from the canvas's background, and would keep it from here too. */}
       <div ref={body} onPointerDownCapture={pointed} onPointerMove={pointed} onFocus={focused} className="relative flex min-h-0 flex-1 flex-col">
-        {local.isError && !model ? (
+        {offline ? (
+          <p className="m-auto px-6 text-center text-sm text-muted">The graph needs a connection. It's back when you are.</p>
+        ) : local.isError && !model ? (
           <div className="m-auto flex flex-col items-center gap-3 px-6 text-center text-sm text-muted">
             <p>{local.error instanceof HttpError && local.error.message ? errorFor(local.error) : "Couldn't draw the graph."}</p>
             <button

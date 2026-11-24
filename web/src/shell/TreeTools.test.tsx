@@ -3,6 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useOfflineMode } from "../offline/mode";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
@@ -493,5 +494,21 @@ describe("the toolbar on the desktop", () => {
     await userEvent.keyboard("{Escape}");
     expect(within(sidebar).getAllByRole("listitem")).toHaveLength(4);
     expect(screen.getByRole("complementary", { name: "File tree" })).toBeVisible();
+  });
+});
+
+describe("the toolbar offline", () => {
+  it("keeps what needs a connection in its place, dimmed, with the reason as its title", async () => {
+    await openDrawer({ root: withBoard });
+    act(() => useOfflineMode.setState({ offline: true }));
+    for (const name of ["Upload", "Calendar", "Board", "Recent changes"]) {
+      const link = name === "Recent changes";
+      const target = within(toolbar()).getByRole(link ? "link" : "button", { name });
+      if (link) expect(target).toHaveAttribute("aria-disabled", "true");
+      else expect(target).toBeDisabled();
+      expect(target).toHaveAttribute("title", "Needs a connection");
+    }
+    expect(within(toolbar()).getByRole("button", { name: "Find in this vault" })).toBeEnabled();
+    expect(within(toolbar()).getByRole("button", { name: "New note" })).toBeEnabled();
   });
 });

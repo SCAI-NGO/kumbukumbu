@@ -151,6 +151,29 @@ describe("the note's actions", () => {
     for (const label of ["Find in note", "History", "Who wrote what", "Publish…", "Add property…"]) expect(offered()).not.toContain(label);
   });
 
+  it("declares_what_needs_a_connection_for_the_menu_to_dim_offline", async () => {
+    server({ content: "# inbox\n\nText.", publish: true });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/notes/Work/inbox.md", queryClient);
+    await screen.findByRole("heading", { name: "inbox" });
+    const actions = actionsBeside(queryClient);
+    await waitFor(() => expect(actions.result.current.items.map((i) => i.label)).toEqual(expect.arrayContaining(["Publish…", "Add to favourites"])));
+    const needing = actions.result.current.items.filter((i) => i.needsConnection).map((i) => i.label);
+    // Offline design §3: history, blame, move and rename, publishing, the calendar; anything else the copy can't do
+    // (duplicating, §4.9; favourites and flags, which only the server writes).
+    expect(needing).toEqual([
+      "History",
+      "Who wrote what",
+      "Add to favourites",
+      "Publish…",
+      "Mark unpublishable",
+      "Duplicate",
+      "Rename or move",
+      "Flag",
+      "Add to calendar…",
+    ]);
+  });
+
   it("who_wrote_what_opens_its_window_over_the_note", async () => {
     server();
     const router = renderApp("/notes/Work/inbox.md");

@@ -89,6 +89,12 @@ export const useOfflineMode = create<OfflineModeState>()((set) => ({
   dismissPurged: () => set({ purged: null }),
 }));
 
+/** Whether the app is offline: what needs a connection is dimmed then, with `NEEDS_CONNECTION` as its reason (§3a). */
+export const useOffline = () => useOfflineMode((s) => s.offline);
+
+/** The reason beside what doesn't work offline: a control's title, a menu item's second line (§3a). */
+export const NEEDS_CONNECTION = "Needs a connection";
+
 if (typeof window !== "undefined") {
   // A hint only: the browser knows it has no network at all; it never says the server is reachable.
   window.addEventListener("offline", () => useOfflineMode.getState().failed());
