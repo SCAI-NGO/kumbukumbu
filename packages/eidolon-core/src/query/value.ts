@@ -22,7 +22,13 @@ export type Value =
   | { readonly kind: "file"; readonly note: QueryNote }
   /** A note as `this` gives it: `this.file`, `this.note`, and its properties by name. */
   | { readonly kind: "noteRef"; readonly note: QueryNote }
-  | { readonly kind: "regex"; readonly regex: RegexMatcher };
+  | { readonly kind: "regex"; readonly regex: RegexMatcher }
+  /**
+   * What an expression gives where it can't give a value for the note: an unknown function or method, a calculation
+   * between types that don't fit, and so on; a value in the cell, with Obsidian's message, never an error of the query
+   * (bases spec 2026-11-25 decision 9). It taints whatever uses it.
+   */
+  | { readonly kind: "error"; readonly message: string };
 
 export const NULL: Value = { kind: "null" };
 export const textValue = (text: string): Value => ({ kind: "text", text });
@@ -36,6 +42,7 @@ export const objectValue = (values: ReadonlyMap<string, Value>): Value => ({ kin
 export const fileValue = (note: QueryNote): Value => ({ kind: "file", note });
 export const noteRefValue = (note: QueryNote): Value => ({ kind: "noteRef", note });
 export const regexValue = (regex: RegexMatcher): Value => ({ kind: "regex", regex });
+export const errorValue = (message: string): Value => ({ kind: "error", message });
 
 /**
  * A number as .NET writes its round-trip form ("R"), which the cases and the server's output are in: the shortest

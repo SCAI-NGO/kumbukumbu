@@ -120,5 +120,16 @@ test("a formula beyond the depth limit is still too deep when its formulas were 
 test("a cycle is found when part of it was checked before", () => {
   const evaluator = new Evaluator(new Map([["a", "formula.b"], ["b", "formula.c"], ["c", "1"], ["d", "formula.b + formula.d"]]));
   evaluator.compile("formula.a");
-  expect(codeOf(() => evaluator.compile("formula.d"))).toBe("formula-cycle");
+  const d = evaluator.compile("formula.d");
+  expect(evaluator.warnings.map((w) => `${w.code} '${w.expression}' ${w.position}`)).toEqual(["formula-cycle 'formula.b + formula.d' 19"]);
+  expect(evaluator.evaluate(d, { note, this: null, now: NOW })).toEqual({ kind: "error", message: "Infinite loop detected in formula" });
+});
+
+// A cycle no longer fails the compile, so the evaluation must stop on it by itself, and once per row.
+test("a long cycle gives an error value at once", () => {
+  const n = ExpressionParser.MAX_DEPTH - 1;
+  const formulas = new Map(Array.from({ length: n }, (_, i) => [`f${i}`, `formula.f${(i + 1) % n} + formula.f${(i + 1) % n}`] as [string, string]));
+  const started = performance.now();
+  expect(run(formulas, "formula.f0")).toEqual({ kind: "error", message: "Infinite loop detected in formula" });
+  expect(performance.now() - started).toBeLessThan(1000);
 });

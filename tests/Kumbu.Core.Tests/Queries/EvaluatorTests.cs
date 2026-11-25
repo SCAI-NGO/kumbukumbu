@@ -63,7 +63,20 @@ public class EvaluatorTests
         var evaluator = new Evaluator(new Dictionary<string, string> { ["a"] = "formula.b", ["b"] = "formula.c", ["c"] = "1", ["d"] = "formula.b + formula.d" });
 
         evaluator.Compile("formula.a");
+        var d = evaluator.Compile("formula.d");
 
-        Assert.Equal("formula-cycle", Assert.Throws<QueryError>(() => evaluator.Compile("formula.d")).Code);
+        Assert.Equal(["formula-cycle 'formula.b + formula.d' 19"], evaluator.Warnings.Select(w => $"{w.Code} '{w.Expression}' {w.Position}"));
+        Assert.Equal(new ErrorValue("Infinite loop detected in formula"), evaluator.Evaluate(d, new Scope(Note, null, DateTime.UnixEpoch)));
+    }
+
+    // A cycle no longer fails the compile, so the evaluation must stop on it by itself, and once per row.
+    [Fact]
+    public void A_long_cycle_gives_an_error_value_at_once()
+    {
+        var formulas = Enumerable.Range(0, ExpressionParser.MaxDepth - 1).ToDictionary(i => $"f{i}", i => $"formula.f{(i + 1) % (ExpressionParser.MaxDepth - 1)} + formula.f{(i + 1) % (ExpressionParser.MaxDepth - 1)}");
+
+        var clock = Stopwatch.StartNew();
+        Assert.Equal(new ErrorValue("Infinite loop detected in formula"), Run(formulas, "formula.f0"));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"Took {clock.Elapsed}.");
     }
 }

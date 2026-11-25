@@ -69,21 +69,21 @@ public sealed partial class Query
         return base_.Run(name, notes, self, now);
     }
 
-    /// <summary>Compiles every view without running it (no note is read, no argument needed): the error of each view that
-    /// can't run, by view, in order; empty when all can.</summary>
-    public IReadOnlyList<(string? View, QueryError Error)> Check(DateTime now)
+    /// <summary>Compiles every view without running it (no note is read, no argument needed): by view, in order, the
+    /// error of each view that can't run, or the warnings of one that runs with them; empty when all run without.</summary>
+    public IReadOnlyList<(string? View, QueryError? Error, IReadOnlyList<QueryWarning> Warnings)> Check(DateTime now)
     {
         var self = Bind(new Dictionary<string, IReadOnlyList<string>>(), check: true);
-        var problems = new List<(string?, QueryError)>();
+        var problems = new List<(string?, QueryError?, IReadOnlyList<QueryWarning>)>();
         foreach (var (base_, view) in views)
         {
             try
             {
-                base_.Run(view, [], self, now);
+                if (base_.Run(view, [], self, now).Warnings is { Count: > 0 } warnings) problems.Add((view, null, warnings));
             }
             catch (QueryError e)
             {
-                problems.Add((view, e));
+                problems.Add((view, e, []));
             }
         }
 

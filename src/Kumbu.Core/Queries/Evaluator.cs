@@ -11,11 +11,13 @@ public sealed record Scope(QueryNote Note, QueryNote? This, DateTime Now);
 /// <summary>One function, method or field of the language: its name, how it is written, and what it gives.</summary>
 public sealed record LanguageEntry(string Name, string Written, string Gives);
 
-/// <summary>Evaluates expressions of the Bases language over a note. One rule decides what fails: what no note can
-/// make right (a function, method or formula that doesn't exist, formulas in a circle, a regular expression that
-/// doesn't compile) is a <see cref="QueryError"/> when the expression is compiled, before any note is read; a value
-/// of the wrong type, which messy notes always have, gives null. The cases are in <c>tests/query-conformance/expressions</c>.</summary>
-public sealed class Evaluator
+/// <summary>Evaluates expressions of the Bases language over a note. As in Obsidian, what an expression can't give for
+/// a note (a function, method or formula that doesn't exist, formulas in a circle, a calculation between types that
+/// don't fit) is an <see cref="ErrorValue"/> in its cell, and it taints whatever uses it (bases spec 2026-11-25
+/// decision 9); compiling names each unknown function, method and formula as a <see cref="QueryWarning"/>. Only what
+/// can't be read at all (syntax, a regular expression that doesn't compile, the limits) is a <see cref="QueryError"/>,
+/// before any note is read. The cases are in <c>tests/query-conformance/expressions</c>.</summary>
+public sealed partial class Evaluator
 {
     /// <summary>The functions, as <c>help query</c> shows them: the help and what compiles are one list, so they can't drift.</summary>
     public static readonly IReadOnlyList<LanguageEntry> FunctionReference =
@@ -24,7 +26,7 @@ public sealed class Evaluator
         new("now", "now()", "the date of the run with its time, in your time zone"),
         new("today", "today()", "the date of the run, without a time"),
         new("date", "date(text)", "the date a text writes, with its time if it has one (2026-11-23, 2026-11-23T14:00), else null"),
-        new("number", "number(value)", "a number from a number, a checkbox (1 or 0) or a text that writes one, else null"),
+        new("number", "number(value)", "a number from a number, a checkbox (1 or 0) or a text, read as JavaScript's Number() reads it (12, 1e3, 0x1F, Infinity; the empty text is 0), else an error"),
         new("list", "list(value)", "the value as a list: a list stays one, null is the empty list"),
     ];
 
@@ -78,8 +80,13 @@ public sealed class Evaluator
     private readonly Dictionary<RegexExpr, Regex> regexes = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, int> checkedLevels = new(StringComparer.Ordinal);
     private int deepest;
+    private readonly List<QueryWarning> warnings = [];
+    private string checking = "";
     private readonly Dictionary<string, Value> values = new(StringComparer.Ordinal);
+    private readonly HashSet<string> evaluating = new(StringComparer.Ordinal);
     private Scope? valuesFor;
+
+    private static readonly ErrorValue Cycle = new("Infinite loop detected in formula");
 
     public Evaluator(IReadOnlyDictionary<string, string>? formulas = null) =>
         formulaTexts = formulas ?? new Dictionary<string, string>();
@@ -88,9 +95,13 @@ public sealed class Evaluator
     public Expr Compile(string text)
     {
         var expr = ExpressionParser.Parse(text);
+        checking = text;
         Check(expr, []);
         return expr;
     }
+
+    /// <summary>What the expressions compiled so far name that doesn't exist, each once, in the order found.</summary>
+    public IReadOnlyList<QueryWarning> Warnings => warnings;
 
     public Value Evaluate(Expr expr, Scope scope) => expr switch
     {
@@ -101,25 +112,48 @@ public sealed class Evaluator
         IndexExpr i => Index(Evaluate(i.Target, scope), Evaluate(i.Index, scope)),
         CallExpr { Callee: NameExpr f } c => Function(f.Name, c.Arguments, scope),
         CallExpr { Callee: MemberExpr m } c => Method(Evaluate(m.Target, scope), m.Name, c.Arguments.Select(a => Evaluate(a, scope)).ToList()),
-        UnaryExpr { Operator: Operator.Not } u => new BooleanValue(!Truthy(Evaluate(u.Operand, scope))),
-        UnaryExpr u => Evaluate(u.Operand, scope) is NumberValue n ? new NumberValue(-n.Number) : NullValue.Instance,
+        CallExpr => new ErrorValue("Only a function or a method can be called"),
+        UnaryExpr u => Evaluate(u.Operand, scope) switch
+        {
+            ErrorValue e => e,
+            var v when u.Operator == Operator.Not => new BooleanValue(!Truthy(v)),
+            NumberValue n => new NumberValue(-n.Number),
+            _ => NullValue.Instance,
+        },
         BinaryExpr b => Binary(b, scope),
-        ListExpr l => new ListValue(l.Items.Select(i => Evaluate(i, scope)).ToList()),
-        ObjectExpr o => new ObjectValue(o.Entries.GroupBy(e => e.Key).ToDictionary(g => g.Key, g => Evaluate(g.Last().Value, scope))),
+        ListExpr l => ListOf(l, scope),
+        ObjectExpr o => ObjectOf(o, scope),
         RegexExpr r => new RegexValue(regexes[r]),
         _ => NullValue.Instance,
     };
 
-    // A formula's value for a row is worked out once, however often the row's expressions use it.
+    private Value ListOf(ListExpr l, Scope scope)
+    {
+        var items = l.Items.Select(i => Evaluate(i, scope)).ToList();
+        return items.OfType<ErrorValue>().FirstOrDefault() ?? (Value)new ListValue(items);
+    }
+
+    private Value ObjectOf(ObjectExpr o, Scope scope)
+    {
+        var entries = o.Entries.GroupBy(e => e.Key).ToDictionary(g => g.Key, g => Evaluate(g.Last().Value, scope));
+        return entries.Values.OfType<ErrorValue>().FirstOrDefault() ?? (Value)new ObjectValue(entries);
+    }
+
+    // A formula's value for a row is worked out once, however often the row's expressions use it; one that is asked for
+    // while it is being worked out uses itself, in a circle.
     private Value FormulaValue(string name, Scope scope)
     {
+        if (!formulas.TryGetValue(name, out var expr)) return new ErrorValue($"Cannot find \"{name}\" on type Formulas");
         if (!ReferenceEquals(scope, valuesFor))
         {
             values.Clear();
             valuesFor = scope;
         }
 
-        if (!values.TryGetValue(name, out var value)) values[name] = value = Evaluate(formulas[name], scope);
+        if (values.TryGetValue(name, out var value)) return value;
+        if (!evaluating.Add(name)) return Cycle;
+        values[name] = value = Evaluate(expr, scope);
+        evaluating.Remove(name);
         return value;
     }
 
@@ -130,6 +164,7 @@ public sealed class Evaluator
         var value = Evaluate(spine[^1].Left, scope);
         for (var i = spine.Count - 1; i >= 0; i--)
         {
+            if (value is ErrorValue) return value;
             var (op, right) = (spine[i].Operator, spine[i].Right);
             value = op switch
             {
@@ -156,16 +191,19 @@ public sealed class Evaluator
         switch (expr)
         {
             case CallExpr { Callee: NameExpr f } c:
-                if (!Functions.Contains(f.Name)) throw new QueryError("unknown-function", $"There is no function '{f.Name}'.", f.Position);
+                if (!Functions.Contains(f.Name)) Warn("unknown-function", $"There is no function '{f.Name}'.", f.Position);
                 c.Arguments.ToList().ForEach(a => Check(a, chain));
                 break;
             case CallExpr { Callee: MemberExpr m } c:
-                if (!Methods.Contains(m.Name)) throw new QueryError("unknown-method", $"There is no method '{m.Name}'.", m.Position);
+                if (!Methods.Contains(m.Name)) Warn("unknown-method", $"There is no method '{m.Name}'.", m.Position);
                 Check(m.Target, chain);
                 c.Arguments.ToList().ForEach(a => Check(a, chain));
                 break;
             case CallExpr c:
-                throw new QueryError("unknown-function", "Only a function or a method can be called.", c.Position);
+                Warn("unknown-function", "Only a function or a method can be called.", c.Position);
+                Check(c.Callee, chain);
+                c.Arguments.ToList().ForEach(a => Check(a, chain));
+                break;
             case MemberExpr { Target: NameExpr { Name: "formula" } } m:
                 Formula(m, chain);
                 break;
@@ -197,12 +235,29 @@ public sealed class Evaluator
         }
     }
 
+    private void Warn(string code, string message, int position)
+    {
+        var warning = new QueryWarning(code, message, checking, position);
+        if (!warnings.Contains(warning)) warnings.Add(warning);
+    }
+
+    // A formula that doesn't exist, or uses itself, is a warning here and an error value in the cells; the depth limit
+    // stays an error, since it bounds the work of every row.
     private void Formula(MemberExpr reference, List<string> chain)
     {
         var name = reference.Name;
-        if (!formulaTexts.TryGetValue(name, out var text)) throw new QueryError("unknown-formula", $"There is no formula '{name}'.", reference.Position);
+        if (!formulaTexts.TryGetValue(name, out var text))
+        {
+            Warn("unknown-formula", $"There is no formula '{name}'.", reference.Position);
+            return;
+        }
+
         if (chain.Contains(name))
-            throw new QueryError("formula-cycle", $"The formulas use each other in a circle: {string.Join(" → ", [.. chain, name])}.", reference.Position);
+        {
+            Warn("formula-cycle", $"The formulas use each other in a circle: {string.Join(" → ", [.. chain, name])}.", reference.Position);
+            return;
+        }
+
         if (chain.Count >= ExpressionParser.MaxDepth)
             throw new QueryError("too-deep", $"The formulas use each other more than {ExpressionParser.MaxDepth} levels deep.", reference.Position);
 
@@ -215,10 +270,12 @@ public sealed class Evaluator
         }
 
         if (!formulas.TryGetValue(name, out var expr)) formulas[name] = expr = QueryError.In(text, () => ExpressionParser.Parse(text));
-        var outer = deepest;
+        var (outer, outerText) = (deepest, checking);
         chain.Add(name);
         deepest = chain.Count;
+        checking = text;
         QueryError.In(text, () => { Check(expr, chain); return true; });
+        checking = outerText;
         chain.RemoveAt(chain.Count - 1);
         checkedLevels[name] = deepest - chain.Count;
         deepest = Math.Max(outer, deepest);
@@ -254,6 +311,7 @@ public sealed class Evaluator
 
     private static Value Field(Value value, string name) => (value, name) switch
     {
+        (ErrorValue or NullValue, _) => value,
         (FileValue f, "name") => new TextValue(f.Note.IsNote ? FileName(f.Note.Path)[..^".md".Length] : FileName(f.Note.Path)),
         (FileValue f, "basename") => new TextValue(Path.GetFileNameWithoutExtension(FileName(f.Note.Path))),
         (FileValue f, "path") => new TextValue(f.Note.Path),
@@ -264,6 +322,7 @@ public sealed class Evaluator
         (FileValue f, "mtime") => f.Note.Modified is { } modified ? new DateValue(modified, true) : NullValue.Instance,
         (FileValue f, "tags") => new ListValue(f.Note.Tags.Select(t => (Value)new TextValue(t)).ToList()),
         (FileValue f, "properties") => new ObjectValue(f.Note.Properties.Values),
+        (FileValue, _) => NoField(value, name),
         (NoteRefValue r, "file") => new FileValue(r.Note),
         (NoteRefValue r, "note") => new ObjectValue(r.Note.Properties.Values),
         (NoteRefValue r, _) => Property(r.Note, name),
@@ -276,7 +335,24 @@ public sealed class Evaluator
         (DateValue d, "hour") => new NumberValue(d.Moment.Hour),
         (DateValue d, "minute") => new NumberValue(d.Moment.Minute),
         (DateValue d, "second") => new NumberValue(d.Moment.Second),
-        _ => NullValue.Instance,
+        _ => NoField(value, name),
+    };
+
+    private static ErrorValue NoField(Value value, string name) => new($"Cannot find \"{name}\" on type {TypeName(value)}");
+
+    /// <summary>A value's type as Obsidian's messages name it.</summary>
+    public static string TypeName(Value value) => value switch
+    {
+        NullValue => "Null",
+        TextValue => "String",
+        NumberValue => "Number",
+        BooleanValue => "Boolean",
+        DateValue => "Date",
+        ListValue => "List",
+        ObjectValue => "Object",
+        FileValue or NoteRefValue => "File",
+        RegexValue => "RegExp",
+        _ => "Error",
     };
 
     private static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
@@ -285,6 +361,8 @@ public sealed class Evaluator
 
     private static Value Index(Value target, Value index) => (target, index) switch
     {
+        (ErrorValue, _) => target,
+        (_, ErrorValue) => index,
         (ListValue l, NumberValue n) when n.Number >= 0 && n.Number < l.Items.Count && n.Number == Math.Floor(n.Number) => l.Items[(int)n.Number],
         (ObjectValue o, TextValue t) => o.Values.GetValueOrDefault(t.Text) ?? NullValue.Instance,
         (NoteRefValue r, TextValue t) => Property(r.Note, t.Text),
@@ -295,29 +373,48 @@ public sealed class Evaluator
     {
         Value Argument(int i) => i < arguments.Count ? Evaluate(arguments[i], scope) : NullValue.Instance;
 
+        if (!Functions.Contains(name)) return new ErrorValue($"Cannot find function \"{name}\"");
+        if (name == "now") return new DateValue(scope.Now, true);
+        if (name == "today") return new DateValue(DateOnly.FromDateTime(scope.Now));
+        var first = Argument(0);
+        if (first is ErrorValue) return first;
+
         return name switch
         {
             // Only the branch taken is evaluated, as in JavaScript.
-            "if" => Truthy(Argument(0)) ? Argument(1) : Argument(2),
-            "now" => new DateValue(scope.Now, true),
-            "today" => new DateValue(DateOnly.FromDateTime(scope.Now)),
-            "date" => DateOf(Argument(0)),
-            "number" => Argument(0) switch
+            "if" => Truthy(first) ? Argument(1) : Argument(2),
+            "date" => DateOf(first),
+            "number" => first switch
             {
                 NumberValue n => n,
                 BooleanValue b => new NumberValue(b.Boolean ? 1 : 0),
-                TextValue t => Properties.Inferred(t.Text.Trim()) as NumberValue ?? (Value)NullValue.Instance,
+                TextValue t => NumberOf(t.Text),
                 _ => NullValue.Instance,
             },
-            "list" => Argument(0) switch
+            _ /* list */ => first switch
             {
                 ListValue l => l,
                 NullValue => new ListValue([]),
                 var v => new ListValue([v]),
             },
-            _ => NullValue.Instance,
         };
     }
+
+    // A text as JavaScript's Number() reads it: decimal with an exponent, Infinity, 0x, 0o and 0b; the empty text is 0.
+    private static Value NumberOf(string text)
+    {
+        var s = text.Trim();
+        if (s.Length == 0) return new NumberValue(0);
+        if (s is "Infinity" or "+Infinity" or "-Infinity") return new NumberValue(s[0] == '-' ? double.NegativeInfinity : double.PositiveInfinity);
+        if (JsDecimal().IsMatch(s)) return new NumberValue(double.Parse(s, NumberStyles.Float, CultureInfo.InvariantCulture));
+        var radix = s.Length > 2 && s[0] == '0' ? char.ToLowerInvariant(s[1]) switch { 'x' => 16, 'o' => 8, 'b' => 2, _ => 0 } : 0;
+        if (radix > 0 && s[2..].All(c => Uri.IsHexDigit(c) && Uri.FromHex(c) < radix))
+            return new NumberValue(s[2..].Aggregate(0.0, (n, c) => n * radix + Uri.FromHex(c)));
+        return new ErrorValue($"Unable to parse \"{text}\" as a number.");
+    }
+
+    [GeneratedRegex(@"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")]
+    private static partial Regex JsDecimal();
 
     private static Value DateOf(Value v) => v switch
     {
@@ -330,6 +427,8 @@ public sealed class Evaluator
     {
         Value Argument(int i) => i < arguments.Count ? arguments[i] : NullValue.Instance;
         string? TextArgument(int i) => (Argument(i) as TextValue)?.Text;
+        if (target is ErrorValue) return target;
+        if (arguments.OfType<ErrorValue>().FirstOrDefault() is { } error) return error;
 
         return (target, name) switch
         {
@@ -361,7 +460,7 @@ public sealed class Evaluator
             (FileValue f, "hasTag") => new BooleanValue(arguments.OfType<TextValue>().Any(a => HasTag(f.Note, a.Text))),
             (FileValue f, "inFolder") => TextArgument(0) is { } folder ? new BooleanValue(InFolder(f.Note.Path, folder)) : NullValue.Instance,
             (FileValue f, "hasProperty") => TextArgument(0) is { } p ? new BooleanValue(f.Note.Properties.Values.ContainsKey(p)) : NullValue.Instance,
-            _ => NullValue.Instance,
+            _ => new ErrorValue($"Cannot find function \"{name}\" on type {TypeName(target)}"),
         };
     }
 
@@ -381,6 +480,8 @@ public sealed class Evaluator
 
     private static Value Binary(Operator op, Value left, Value right) => op switch
     {
+        _ when left is ErrorValue => left,
+        _ when right is ErrorValue => right,
         Operator.Equal => new BooleanValue(Equal(left, right)),
         Operator.NotEqual => new BooleanValue(!Equal(left, right)),
         Operator.Less => new BooleanValue(Compare(left, right) < 0),
@@ -396,7 +497,8 @@ public sealed class Evaluator
             Operator.Divide => l.Number / r.Number,
             _ => l.Number % r.Number,
         }),
-        _ => NullValue.Instance,
+        _ when left is NullValue || right is NullValue => NullValue.Instance,
+        _ => new ErrorValue($"Invalid operator between {TypeName(left)} and {TypeName(right)}"),
     };
 
     /// <summary>Equal within a type; values of different types are never equal, and null equals only null.</summary>
@@ -425,10 +527,11 @@ public sealed class Evaluator
         _ => null,
     };
 
-    /// <summary>As JavaScript counts truth: null, false, 0 and "" are false, everything else is true.</summary>
+    /// <summary>As JavaScript counts truth: null, false, 0 and "" are false, everything else is true; an error, which
+    /// whatever uses it passes on before asking this, is false too.</summary>
     public static bool Truthy(Value v) => v switch
     {
-        NullValue => false,
+        NullValue or ErrorValue => false,
         BooleanValue b => b.Boolean,
         NumberValue n => n.Number != 0 && !double.IsNaN(n.Number),
         TextValue t => t.Text.Length > 0,
@@ -448,6 +551,7 @@ public sealed class Evaluator
         FileValue f => f.Note.Path,
         NoteRefValue r => r.Note.Path,
         RegexValue r => r.Regex.ToString(),
+        ErrorValue e => $"error: {e.Message}",
         _ => "",
     };
 }

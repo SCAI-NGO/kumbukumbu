@@ -29,3 +29,8 @@ public sealed record DateValue(DateTime Moment, bool HasTime) : Value
 public sealed record ListValue(IReadOnlyList<Value> Items) : Value;
 
 public sealed record ObjectValue(IReadOnlyDictionary<string, Value> Values) : Value;
+
+/// <summary>What an expression gives where it can't give a value for the note: an unknown function or method, a
+/// calculation between types that don't fit, and so on; a value in the cell, with Obsidian's message, never an error of
+/// the query (bases spec 2026-11-25 decision 9). It taints whatever uses it.</summary>
+public sealed record ErrorValue(string Message) : Value;

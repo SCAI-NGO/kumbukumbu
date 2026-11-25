@@ -1,6 +1,5 @@
 description: A date's field on a text is an error in the cell.
 source: obsidian 1.15.1
-pending: [cs, ts]
 notes:
   Ann.md: |
     ---

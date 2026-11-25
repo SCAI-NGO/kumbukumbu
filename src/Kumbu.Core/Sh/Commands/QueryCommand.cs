@@ -34,12 +34,15 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         query execute <query> [--view <view>] [--param <name>=<value>]...
           Runs the query's first view, or the one named, over every file of its vault, archived
           notes, attachments and .base files too (file.ext == "md" keeps the notes,
-          !file.inFolder("_archive") leaves out the archive): the view, how many rows, then a
-          table led by each file's path. Each --param gives a parameter; a list parameter takes
+          !file.inFolder("_archive") leaves out the archive): the view, how many rows, for each
+          column with errors in its cells how many and the first one's message, then a table led
+          by each file's path. Each --param gives a parameter; a list parameter takes
           one --param per item. A value is only ever a value, never an expression.
         query check <query>
           Compiles every view without running it and needing no arguments: ok, or each error with
-          its code, the expression it is in and the position there.
+          its code, the expression it is in and the position there. A function, method or formula
+          that doesn't exist, or formulas that use each other in a circle, are warnings: the query
+          runs, with an error value in the cells they touch.
         query properties [path]
           The properties of the notes below a path (default: every vault): each with the types of
           its values, as they are written, the type declared in the vault's {TypesFile} before them
@@ -79,8 +82,13 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         {Reference("Functions", Evaluator.FunctionReference)}
         {Reference("Methods", Evaluator.MethodReference)}
         {Reference("Fields", Evaluator.FieldReference)}
-          A value of the wrong type gives null, never an error; a function or method that doesn't
-          exist is an error before any note is read.
+          As in Obsidian, what an expression can't give for a note is an error value in its cell
+          (error: Invalid operator between String and Number): a function, method or field its value
+          hasn't, a formula that doesn't exist or uses itself, a calculation between types that don't
+          fit, number() of a text that isn't one. Whatever uses an error is that error; a filter that
+          gives one drops the row; a sort puts it after the empty values. null passes through most
+          of it: a method or field of null is null. Only what can't be read (syntax, a regular
+          expression that doesn't compile, the limits) is an error of the query.
 
           query ls
           query inspect Birthdays
@@ -185,7 +193,11 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
 
         var count = result.Rows.Count == 1 ? "1 row" : $"{result.Rows.Count:N0} rows";
         if (result.Rows.Count == 0) return ShellResult.Ok($"{result.View}: no rows");
-        var header = new[] { $"{result.View}: {count}", Row(["path", .. result.Columns]), Row([.. Enumerable.Repeat("---", result.Columns.Count + 1)]) };
+        // An error in a cell is a value, as in Obsidian; told before the table, so a reader can't overlook it in a long column.
+        var errors = result.Columns.Select((column, i) => (Column: column, Errors: result.Rows.Select(r => r.Cells[i]).OfType<ErrorValue>().ToList()))
+            .Where(c => c.Errors.Count > 0)
+            .Select(c => $"{(c.Errors.Count == 1 ? "1 error" : $"{c.Errors.Count:N0} errors")} in {c.Column}: {c.Errors[0].Message}");
+        string[] header = [$"{result.View}: {count}", .. errors, Row(["path", .. result.Columns]), Row([.. Enumerable.Repeat("---", result.Columns.Count + 1)])];
         var rows = result.Rows.Select(r => Row([vault[r.Note].Value, .. r.Cells.Select(Evaluator.Display)])).ToList();
         var listed = TextFiles.Listed(Name, rows, "\n", "rows", "a limit in the view, or a filter, narrows it", Lines.Join(header).Length + 1);
         return ShellResult.Ok(Lines.Join(header) + "\n" + listed.Output);
@@ -201,11 +213,16 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         {
             var query = Query.Read(note);
             var problems = query.Check(await LocalNowAsync(ct));
-            if (problems.Count > 0)
-                return ShellResult.Error(Lines.Join(problems.Select(p => $"query: {path.Value}: view {p.View ?? "(the table)"}: {Says(p.Error)}")));
+            var warnings = problems.SelectMany(p => p.Warnings.Select(w => $"view {p.View ?? "(the table)"}: {Says(w.Code, w.Message, w.Expression, w.Position)}")).ToList();
+            // Warnings leave a query that runs: each names what gives an error value in the cells it touches.
+            if (problems.Any(p => p.Error is not null))
+                return ShellResult.Error(Lines.Join(problems.Where(p => p.Error is not null).Select(p => $"query: {path.Value}: view {p.View ?? "(the table)"}: {Says(p.Error!)}")
+                    .Concat(warnings.Select(w => $"query: {path.Value}: warning: {w}"))));
             var views = query.ViewNames.Count == 1 ? "1 view" : $"{query.ViewNames.Count} views";
             var parameters = query.Params.Count == 1 ? "1 parameter" : $"{query.Params.Count} parameters";
-            return ShellResult.Ok($"{path.Value}: ok, {views}{(query.ViewNames.Count > 0 ? $" ({string.Join(", ", query.ViewNames)})" : "")}, {parameters}{(query.Params.Count > 0 ? $" ({string.Join(", ", query.Params.Select(p => p.Name))})" : "")}");
+            var warned = warnings.Count switch { 0 => "", 1 => "; 1 warning", var n => $"; {n} warnings" };
+            return ShellResult.Ok(Lines.Join([$"{path.Value}: ok, {views}{(query.ViewNames.Count > 0 ? $" ({string.Join(", ", query.ViewNames)})" : "")}, {parameters}{(query.Params.Count > 0 ? $" ({string.Join(", ", query.Params.Select(p => p.Name))})" : "")}{warned}",
+                .. warnings.Select(w => $"warning: {w}")]));
         }
         catch (QueryError e)
         {
@@ -394,8 +411,10 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
     private static string Long(QueryParam p) =>
         Short(p) + (p.Options.Count > 0 ? $", one of {string.Join(", ", p.Options)}" : "") + (p.Description is { } d ? $". {d}" : "");
 
-    private static string Says(QueryError e) =>
-        $"{e.Code}" + (e.Expression is { } x ? $" in '{x}' at {e.Position.ToString(CultureInfo.InvariantCulture)}" : "") + $": {e.Message}";
+    private static string Says(QueryError e) => Says(e.Code, e.Message, e.Expression, e.Position);
+
+    private static string Says(string code, string message, string? expression, int position) =>
+        code + (expression is { } x ? $" in '{x}' at {position.ToString(CultureInfo.InvariantCulture)}" : "") + $": {message}";
 
     private static ShellResult Failed(VaultPath path, QueryError e) => ShellResult.Error($"query: {path.Value}: {Says(e)}");
 

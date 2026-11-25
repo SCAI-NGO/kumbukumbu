@@ -1,0 +1,63 @@
+description: An error in a filter group drops the row whatever the group, and a sort puts the rows with an error after the empty ones, in either direction.
+source: spec
+notes:
+  a.md: |
+    ---
+    n: 2
+    ---
+  b.md: |
+    ---
+    n: x
+    ---
+  c.md: ""
+  d.md: |
+    ---
+    n: 1
+    ---
+base: |
+  formulas:
+    v: n * 1
+  views:
+    - type: table
+      name: Up
+      order: [file.name, formula.v]
+      sort:
+        - property: formula.v
+          direction: ASC
+    - type: table
+      name: Down
+      order: [file.name, formula.v]
+      sort:
+        - property: formula.v
+          direction: DESC
+    - type: table
+      name: None of
+      filters:
+        not: [formula.v == 1]
+      order: [file.name]
+    - type: table
+      name: One of
+      filters:
+        or: [formula.v == 1, true]
+      order: [file.name]
+runs:
+  - view: Up
+    columns: [file.name, formula.v]
+    rows:
+      - [text d, number 1]
+      - [text a, number 2]
+      - [text c, null]
+      - [text b, error Invalid operator between String and Number]
+  - view: Down
+    columns: [file.name, formula.v]
+    rows:
+      - [text a, number 2]
+      - [text d, number 1]
+      - [text c, null]
+      - [text b, error Invalid operator between String and Number]
+  - view: None of
+    columns: [file.name]
+    rows: [[text a], [text c]]
+  - view: One of
+    columns: [file.name]
+    rows: [[text a], [text c], [text d]]

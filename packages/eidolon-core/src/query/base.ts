@@ -3,7 +3,7 @@
 // columns, sort and limit (Kumbu.Core Queries/Base). A view is checked when it runs, so one broken view or formula doesn't
 // take the others down. The cases are in tests/query-conformance/bases.
 import { Evaluator, compare, truthy, type Scope } from "./evaluator";
-import { QueryError, inExpression } from "./errors";
+import { QueryError, inExpression, type QueryWarning } from "./errors";
 import type { Expr } from "./expr";
 import { ExpressionParser } from "./parser";
 import type { QueryNote } from "./note";
@@ -15,8 +15,13 @@ type YamlMap = Extract<YamlNode, { kind: "map" }>;
 /** One row of a result: the note and its cells, in the order of `QueryResult.columns`. */
 export type QueryRow = { readonly note: QueryNote; readonly cells: readonly Value[] };
 
-/** What a view of a base gives: its name, its columns as written in `order`, and its rows. */
-export type QueryResult = { readonly view: string; readonly columns: readonly string[]; readonly rows: readonly QueryRow[] };
+/** What a view of a base gives: its name, its columns as written in `order`, its rows, and what its expressions name that doesn't exist. */
+export type QueryResult = {
+  readonly view: string;
+  readonly columns: readonly string[];
+  readonly rows: readonly QueryRow[];
+  readonly warnings: readonly QueryWarning[];
+};
 
 const invalid = (message: string) => new QueryError("base", message, 0);
 
@@ -81,7 +86,7 @@ export class Base {
     const name = view === null ? "Table" : names[index]!;
 
     const evaluator = new Evaluator(this.formulas);
-    const filter: Array<(scope: Scope) => boolean> = [];
+    const filter: Array<(scope: Scope) => boolean | null> = [];
     if (this.filters !== undefined) filter.push(compileFilter(this.filters, evaluator, 0));
     const own = view === null ? undefined : child(view, "filters");
     if (own !== undefined) filter.push(compileFilter(own, evaluator, 0));
@@ -108,7 +113,7 @@ export class Base {
     const rows = [...notes]
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
       .map((note): Scope => ({ note, this: self, now }))
-      .filter((scope) => filter.every((f) => f(scope)))
+      .filter((scope) => filter.every((f) => f(scope) === true))
       .map((scope) => ({ scope, keys: sort.map((k) => evaluator.evaluate(k.expr, scope)) }));
     // A stable sort (as Array.prototype.sort is): ties keep the notes in path order.
     if (sort.length > 0) rows.sort((x, y) => keyOrder(x.keys, y.keys, sort.map((k) => k.descending)));
@@ -117,17 +122,22 @@ export class Base {
       view: name,
       columns,
       rows: rows.slice(0, limit).map((r) => ({ note: r.scope.note, cells: cells.map((c) => evaluator.evaluate(c, r.scope)) })),
+      warnings: evaluator.warnings,
     };
   }
 }
 
-// A filter is an expression, or a group: and (all), or (one), not (none of its items).
-function compileFilter(node: YamlNode, evaluator: Evaluator, depth: number): (scope: Scope) => boolean {
+// A filter is an expression, or a group: and (all), or (one), not (none of its items). Null is an error, which drops the
+// row whatever the group, as && and || pass an error on; the items are read in order, as they read theirs.
+function compileFilter(node: YamlNode, evaluator: Evaluator, depth: number): (scope: Scope) => boolean | null {
   if (depth > ExpressionParser.MAX_DEPTH) throw invalid("The filters are nested too deeply.");
   if (node.kind === "scalar") {
     const text = node.value;
     const expr = inExpression(text, () => evaluator.compile(text));
-    return (scope) => truthy(evaluator.evaluate(expr, scope));
+    return (scope) => {
+      const value = evaluator.evaluate(expr, scope);
+      return value.kind === "error" ? null : truthy(value);
+    };
   }
 
   const entry = node.kind === "map" && node.entries.length === 1 ? node.entries[0]! : null;
@@ -136,12 +146,18 @@ function compileFilter(node: YamlNode, evaluator: Evaluator, depth: number): (sc
 
   const kind = entry[0].value;
   const parts = entry[1].items.map((i) => compileFilter(i, evaluator, depth + 1));
-  switch (kind) {
-    case "and": return (scope) => parts.every((p) => p(scope));
-    case "or": return (scope) => parts.some((p) => p(scope));
-    case "not": return (scope) => !parts.some((p) => p(scope));
-    default: throw invalid(`'${kind}' is no filter group: use and, or or not.`);
-  }
+  if (kind !== "and" && kind !== "or" && kind !== "not") throw invalid(`'${kind}' is no filter group: use and, or or not.`);
+
+  // and is settled by the first item that fails, or and not by the first that holds.
+  const settles = kind !== "and";
+  return (scope) => {
+    for (const part of parts) {
+      const holds = part(scope);
+      if (holds === null) return null;
+      if (holds === settles) return kind === "or";
+    }
+    return kind !== "or";
+  };
 }
 
 // file.x and formula.x are expressions; note.x and any other name are a property, so a name with spaces needs no quotes.
@@ -156,14 +172,14 @@ function column(id: string, evaluator: Evaluator): Expr {
   };
 }
 
-// Orders rows by their sort keys: within a type as `compare` does, empty values last in either direction, values of
-// different types by type.
+// Orders rows by their sort keys: within a type as `compare` does, empty values and then errors last in either
+// direction, values of different types by type.
 function keyOrder(x: readonly Value[], y: readonly Value[], descending: readonly boolean[]): number {
   for (let i = 0; i < descending.length; i++) {
     const [a, b] = [x[i]!, y[i]!];
-    if (a.kind === "null" || b.kind === "null") {
-      if (a.kind === "null" && b.kind === "null") continue;
-      return a.kind === "null" ? 1 : -1;
+    if (last(a) + last(b) > 0) {
+      if (last(a) === last(b)) continue;
+      return last(a) - last(b);
     }
 
     const order = compare(a, b) ?? rank(a) - rank(b);
@@ -171,6 +187,9 @@ function keyOrder(x: readonly Value[], y: readonly Value[], descending: readonly
   }
   return 0;
 }
+
+// Empty values go after the others, and errors after them, whichever the direction.
+const last = (v: Value): number => (v.kind === "null" ? 1 : v.kind === "error" ? 2 : 0);
 
 function rank(v: Value): number {
   switch (v.kind) {

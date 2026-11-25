@@ -121,7 +121,7 @@ public class ConformanceTests
             Assert.True(expected.Children.Count == notes.Count, $"{text}: a value for every note.");
             foreach (var (path, value) in expected.Children)
             {
-                var actual = Describe(evaluator.Evaluate(expr, new Scope(notes[Text(path)], self, now)));
+                var actual = Shown(value, evaluator.Evaluate(expr, new Scope(notes[Text(path)], self, now)));
                 Assert.True(Describe(value) == actual, $"{text} on {Text(path)}: expected {Describe(value)}, got {actual}.");
             }
         }
@@ -154,9 +154,8 @@ public class ConformanceTests
 
             var result = Run();
             Assert.Equal(((YamlSequenceNode)run["columns"]).Children.Select(Text), result.Columns);
-            var expected = ((YamlSequenceNode)run["rows"]).Children.Select(r => string.Join(" | ", ((YamlSequenceNode)r).Children.Select(Describe)));
-            var actual = result.Rows.Select(r => string.Join(" | ", r.Cells.Select(Describe)));
-            Assert.Equal(string.Join("\n", expected), string.Join("\n", actual));
+            var (expected, actual) = Rows((YamlSequenceNode)run["rows"], result);
+            Assert.Equal(expected, actual);
         }
     }
 
@@ -201,11 +200,32 @@ public class ConformanceTests
 
             var result = Run();
             Assert.Equal(((YamlSequenceNode)run["columns"]).Children.Select(Text), result.Columns);
-            var expectedRows = ((YamlSequenceNode)run["rows"]).Children.Select(r => string.Join(" | ", ((YamlSequenceNode)r).Children.Select(Describe)));
-            var actualRows = result.Rows.Select(r => string.Join(" | ", r.Cells.Select(Describe)));
-            Assert.True(string.Join("\n", expectedRows) == string.Join("\n", actualRows), $"{label}: expected\n{string.Join("\n", expectedRows)}\ngot\n{string.Join("\n", actualRows)}");
+            var (expectedRows, actualRows) = Rows((YamlSequenceNode)run["rows"], result);
+            Assert.True(expectedRows == actualRows, $"{label}: expected\n{expectedRows}\ngot\n{actualRows}");
         }
     }
+
+    // The rows as the case writes them and as the result has them, one line each, a cell that matches told as the case tells it.
+    private static (string Expected, string Actual) Rows(YamlSequenceNode rows, QueryResult result)
+    {
+        var expected = rows.Children.Cast<YamlSequenceNode>().ToList();
+        var actual = result.Rows.Select((r, i) => string.Join(" | ", r.Cells.Select((c, j) =>
+            i < expected.Count && j < expected[i].Children.Count ? Shown(expected[i].Children[j], c) : Describe(c))));
+        return (string.Join("\n", expected.Select(r => string.Join(" | ", r.Children.Select(Describe)))), string.Join("\n", actual));
+    }
+
+    // A value as the case writes it when it matches, else as it is: "error" matches any error value, and "error <text>"
+    // one whose message starts with the text.
+    private static string Shown(YamlNode expected, Value actual) => Matches(expected, actual) ? Describe(expected) : Describe(actual);
+
+    private static bool Matches(YamlNode expected, Value actual) => (expected, actual) switch
+    {
+        (YamlScalarNode { Value: "error" }, ErrorValue) => true,
+        (YamlScalarNode s, ErrorValue e) => s.Value is { } text && text.StartsWith("error ", StringComparison.Ordinal) && e.Message.StartsWith(text["error ".Length..], StringComparison.Ordinal),
+        (YamlSequenceNode list, ListValue l) => list.Children.Count == l.Items.Count && list.Children.Zip(l.Items).All(p => Matches(p.First, p.Second)),
+        (YamlMappingNode map, ObjectValue o) => map.Children.Count == o.Values.Count && map.Children.All(c => o.Values.TryGetValue(Text(c.Key), out var v) && Matches(c.Value, v)),
+        _ => Describe(expected) == Describe(actual),
+    };
 
     // A parameter as a case writes it: a map of its type, required, and its default, options and description where it has them.
     private static string Describe(QueryParam p)
@@ -251,6 +271,7 @@ public class ConformanceTests
         ListValue l => "[" + string.Join(", ", l.Items.Select(Describe)) + "]",
         ObjectValue o => "{" + string.Join(", ", o.Values.Select(v => $"{v.Key}: {Describe(v.Value)}").Order(StringComparer.Ordinal)) + "}",
         FileValue f => $"file {f.Note.Path}",
+        ErrorValue e => $"error {e.Message}",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, null),
     };
 }

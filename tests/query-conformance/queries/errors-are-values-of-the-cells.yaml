@@ -1,0 +1,40 @@
+description: A query whose expressions give errors still runs; each error is a value in its cell, and a call that can't run stays an error of the call.
+source: spec
+query: Queries/Ages.md
+notes:
+  Queries/Ages.md: |
+    ---
+    type: query
+    params:
+      older:
+        type: number
+        default: 0
+    ---
+    ```base
+    filters:
+      and:
+        - file.inFolder("People")
+        - formula.double >= this.older
+    formulas:
+      double: age * 2
+      loud: name.shout()
+    views:
+      - type: table
+        name: Ages
+        order: [file.name, formula.double, formula.loud]
+    ```
+  People/Ann.md: |
+    ---
+    name: Ann
+    age: 46
+    ---
+  People/Cleo.md: |
+    ---
+    age: forty
+    ---
+runs:
+  - columns: [file.name, formula.double, formula.loud]
+    rows:
+      - [text Ann, number 92, error Cannot find function "shout" on type String]
+  - args: { older: soon }
+    error: param-value

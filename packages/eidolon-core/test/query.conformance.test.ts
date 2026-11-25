@@ -79,9 +79,27 @@ function describeValue(value: Value): string {
     case "list": return `[${value.items.map(describeValue).join(", ")}]`;
     case "object": return `{${describeMap([...value.values].map(([k, v]) => [k, describeValue(v)])).join(", ")}}`;
     case "file": return `file ${value.note.path}`;
+    case "error": return `error ${value.message}`;
     default: throw new Error(`Cannot describe a ${value.kind}.`);
   }
 }
+
+// A value as the case writes it when it matches, else as it is: "error" matches any error value, and "error <text>" one
+// whose message starts with the text.
+function matches(expected: Node, actual: Value): boolean {
+  if (typeof expected === "string" && actual.kind === "error")
+    return expected === "error" || (expected.startsWith("error ") && actual.message.startsWith(expected.slice("error ".length)));
+  if (Array.isArray(expected) && actual.kind === "list")
+    return expected.length === actual.items.length && expected.every((e, i) => matches(e, actual.items[i]!));
+  if (typeof expected === "object" && !Array.isArray(expected) && actual.kind === "object") {
+    const entries = Object.entries(expected);
+    return entries.length === actual.values.size && entries.every(([k, v]) => actual.values.has(k) && matches(v, actual.values.get(k)!));
+  }
+  return describeExpected(expected) === describeValue(actual);
+}
+
+const shown = (expected: Node | undefined, actual: Value): string =>
+  expected !== undefined && matches(expected, actual) ? describeExpected(expected) : describeValue(actual);
 
 for (const [file, root] of cases) {
   const pending = root.pending === undefined ? [] : list(root.pending).map(text);
@@ -166,11 +184,15 @@ function expressions(root: Case): void {
     const expected = map(c.values);
     expect(Object.keys(expected).length, `${source}: a value for every note.`).toBe(notes.size);
     for (const [path, value] of Object.entries(expected))
-      expect(describeValue(evaluator.evaluate(expr, { note: notes.get(path)!, this: self, now })), `${source} on ${path}`).toBe(describeExpected(value));
+      expect(shown(value, evaluator.evaluate(expr, { note: notes.get(path)!, this: self, now })), `${source} on ${path}`).toBe(describeExpected(value));
   }
 }
 
-const rowsOf = (result: QueryResult) => result.rows.map((r) => r.cells.map(describeValue).join(" | ")).join("\n");
+// The rows as the result has them, a cell that matches the case's told as the case tells it.
+const rowsOf = (result: QueryResult, run: Case) => {
+  const expected = list(run.rows).map(list);
+  return result.rows.map((r, i) => r.cells.map((c, j) => shown(expected[i]?.[j], c)).join(" | ")).join("\n");
+};
 const expectedRows = (run: Case) => list(run.rows).map((r) => list(r).map(describeExpected).join(" | ")).join("\n");
 
 function bases(root: Case): void {
@@ -195,7 +217,7 @@ function bases(root: Case): void {
 
     const result = go();
     expect(result.columns).toEqual(list(run.columns).map(text));
-    expect(rowsOf(result)).toBe(expectedRows(run));
+    expect(rowsOf(result, run)).toBe(expectedRows(run));
   }
 }
 
@@ -241,6 +263,6 @@ function queries(root: Case): void {
 
     const result = go();
     expect(result.columns).toEqual(list(run.columns).map(text));
-    expect(rowsOf(result), label).toBe(expectedRows(run));
+    expect(rowsOf(result, run), label).toBe(expectedRows(run));
   }
 }

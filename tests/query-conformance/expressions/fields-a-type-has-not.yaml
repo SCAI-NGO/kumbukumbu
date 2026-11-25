@@ -1,0 +1,18 @@
+description: A field that a value's type has not is an error in the cell; on null it is null, and an object without the key gives null.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    n: 7
+    done: true
+    items: [a]
+    address:
+      city: Bern
+    ---
+cases:
+  - { expression: n.month, values: { Ann.md: error Cannot find "month" on type Number } }
+  - { expression: done.length, values: { Ann.md: error Cannot find "length" on type Boolean } }
+  - { expression: items.first, values: { Ann.md: error Cannot find "first" on type List } }
+  - { expression: file.nothing, values: { Ann.md: error Cannot find "nothing" on type File } }
+  - { expression: address.zip, values: { Ann.md: null } }
+  - { expression: missing.month, values: { Ann.md: null } }

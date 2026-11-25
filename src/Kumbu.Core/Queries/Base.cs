@@ -7,8 +7,9 @@ namespace Kumbu.Core.Queries;
 /// <summary>One row of a result: the note and its cells, in the order of <see cref="QueryResult.Columns"/>.</summary>
 public sealed record QueryRow(QueryNote Note, IReadOnlyList<Value> Cells);
 
-/// <summary>What a view of a base gives: its name, its columns as written in <c>order</c>, and its rows.</summary>
-public sealed record QueryResult(string View, IReadOnlyList<string> Columns, IReadOnlyList<QueryRow> Rows);
+/// <summary>What a view of a base gives: its name, its columns as written in <c>order</c>, its rows, and what its
+/// expressions name that doesn't exist.</summary>
+public sealed record QueryResult(string View, IReadOnlyList<string> Columns, IReadOnlyList<QueryRow> Rows, IReadOnlyList<QueryWarning> Warnings);
 
 /// <summary>A base in Obsidian's format (a <c>.base</c> file, or a <c>```base</c> block of a query note): filters,
 /// formulas and views with their columns, sort and limit. A view is checked when it runs, so one broken view or formula
@@ -99,7 +100,7 @@ public sealed class Base
         var name = view is null ? "Table" : ViewNames[index];
 
         var evaluator = new Evaluator(formulas);
-        var filter = new List<Func<Scope, bool>>();
+        var filter = new List<Func<Scope, bool?>>();
         if (filters is not null) filter.Add(Filter(filters, evaluator, 0));
         if (view is not null && Child(view, "filters") is { } own) filter.Add(Filter(own, evaluator, 0));
 
@@ -117,7 +118,7 @@ public sealed class Base
         var rows = notes
             .OrderBy(note => note.Path, StringComparer.Ordinal)
             .Select(note => new Scope(note, self, now))
-            .Where(scope => filter.All(f => f(scope)))
+            .Where(scope => filter.All(f => f(scope) == true))
             .Select(scope => (Scope: scope, Keys: sort.Select(k => evaluator.Evaluate(k.Expr, scope)).ToList()))
             .ToList();
         // A stable sort: ties keep the notes in path order.
@@ -126,18 +127,19 @@ public sealed class Base
         return new QueryResult(name, columns, sorted
             .Take(limit)
             .Select(r => new QueryRow(r.Scope.Note, cells.Select(c => evaluator.Evaluate(c, r.Scope)).ToList()))
-            .ToList());
+            .ToList(), evaluator.Warnings);
     }
 
-    // A filter is an expression, or a group: and (all), or (one), not (none of its items).
-    private static Func<Scope, bool> Filter(YamlNode node, Evaluator evaluator, int depth)
+    // A filter is an expression, or a group: and (all), or (one), not (none of its items). Null is an error, which
+    // drops the row whatever the group, as && and || pass an error on; the items are read in order, as they read theirs.
+    private static Func<Scope, bool?> Filter(YamlNode node, Evaluator evaluator, int depth)
     {
         if (depth > ExpressionParser.MaxDepth) throw Invalid("The filters are nested too deeply.");
         if (node is YamlScalarNode scalar)
         {
             var text = scalar.Value ?? "";
             var expr = QueryError.In(text, () => evaluator.Compile(text));
-            return scope => Evaluator.Truthy(evaluator.Evaluate(expr, scope));
+            return scope => evaluator.Evaluate(expr, scope) is var value and not ErrorValue ? Evaluator.Truthy(value) : null;
         }
 
         if (node is not YamlMappingNode { Children.Count: 1 } group
@@ -145,12 +147,20 @@ public sealed class Base
             throw Invalid("A filter group is and, or or not, with a list of filters.");
 
         var parts = items.Children.Select(i => Filter(i, evaluator, depth + 1)).ToList();
-        return kind switch
+        if (kind is not ("and" or "or" or "not")) throw Invalid($"'{kind}' is no filter group: use and, or or not.");
+
+        // and is settled by the first item that fails, or and not by the first that holds.
+        var settles = kind != "and";
+        return scope =>
         {
-            "and" => scope => parts.All(p => p(scope)),
-            "or" => scope => parts.Any(p => p(scope)),
-            "not" => scope => !parts.Any(p => p(scope)),
-            _ => throw Invalid($"'{kind}' is no filter group: use and, or or not."),
+            foreach (var part in parts)
+            {
+                var holds = part(scope);
+                if (holds is null) return null;
+                if (holds == settles) return kind == "or";
+            }
+
+            return kind != "or";
         };
     }
 
@@ -160,8 +170,8 @@ public sealed class Base
             ? QueryError.In(id, () => evaluator.Compile(id))
             : new IndexExpr(new NameExpr("note", 0), new LiteralExpr(new TextValue(id.StartsWith("note.", StringComparison.Ordinal) ? id[5..] : id), 0), 0);
 
-    /// <summary>Orders rows by their sort keys: within a type as <see cref="Evaluator.Compare"/> does, empty values last
-    /// in either direction, values of different types by type.</summary>
+    /// <summary>Orders rows by their sort keys: within a type as <see cref="Evaluator.Compare"/> does, empty values and
+    /// then errors last in either direction, values of different types by type.</summary>
     private sealed class KeyOrder(IReadOnlyList<bool> descending) : IComparer<(Scope Scope, List<Value> Keys)>
     {
         public int Compare((Scope Scope, List<Value> Keys) x, (Scope Scope, List<Value> Keys) y)
@@ -169,10 +179,10 @@ public sealed class Base
             for (var i = 0; i < descending.Count; i++)
             {
                 var (a, b) = (x.Keys[i], y.Keys[i]);
-                if (a is NullValue || b is NullValue)
+                if (Last(a) + Last(b) > 0)
                 {
-                    if (a is NullValue && b is NullValue) continue;
-                    return a is NullValue ? 1 : -1;
+                    if (Last(a) == Last(b)) continue;
+                    return Last(a).CompareTo(Last(b));
                 }
 
                 var order = Evaluator.Compare(a, b) ?? Rank(a).CompareTo(Rank(b));
@@ -181,6 +191,14 @@ public sealed class Base
 
             return 0;
         }
+
+        // Empty values go after the others, and errors after them, whichever the direction.
+        private static int Last(Value v) => v switch
+        {
+            NullValue => 1,
+            ErrorValue => 2,
+            _ => 0,
+        };
 
         private static int Rank(Value v) => v switch
         {

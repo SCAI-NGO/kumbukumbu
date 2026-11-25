@@ -212,15 +212,93 @@ public class QueryCommandTests
     }
 
     [Fact]
+    public async Task Execute_tells_before_the_table_how_many_cells_of_each_column_hold_an_error()
+    {
+        _store.AddTextFile("/V/Ages.base", """
+            filters: file.inFolder("People")
+            formulas:
+              double: age * 2
+              loud: file.name.shout()
+            views:
+              - type: table
+                name: Ages
+                order: [file.name, formula.double, formula.loud]
+            """);
+
+        Assert.Equal(ShellResult.Ok("""
+            Ages: 3 rows
+            1 error in formula.double: Invalid operator between String and Number
+            3 errors in formula.loud: Cannot find function "shout" on type String
+            | path | file.name | formula.double | formula.loud |
+            | --- | --- | --- | --- |
+            | /V/People/Ann.md | Ann | 92 | error: Cannot find function "shout" on type String |
+            | /V/People/Cleo.md | Cleo | error: Invalid operator between String and Number | error: Cannot find function "shout" on type String |
+            | /V/People/Dora.md | Dora |  | error: Cannot find function "shout" on type String |
+            """), await Run("query execute /V/Ages.base"));
+    }
+
+    [Fact]
+    public async Task Execute_tells_no_errors_when_no_cell_holds_one()
+    {
+        var result = await Run("query execute /V/Queries/Birthdays.md --param month=11");
+
+        Assert.DoesNotContain("error", result.Output);
+    }
+
+    [Fact]
     public async Task Check_says_ok_or_each_error_with_its_expression_and_position()
     {
         Assert.Equal("/V/Queries/Birthdays.md: ok, 1 view (By day), 2 parameters (month, kind)", (await Run("query check /V/Queries/Birthdays.md")).Output);
 
-        var broken = await Run("query check /V/Queries/Loud.md");
+        _store.AddTextFile("/V/Broken.base", "views:\n  - type: table\n    name: Broken\n    filters: \"a &\"\n");
+        var broken = await Run("query check /V/Broken.base");
 
         Assert.True(broken.IsError);
-        Assert.Equal("query: /V/Queries/Loud.md: view Loud: unknown-method in 'name.shout()' at 4: There is no method 'shout'.", broken.Output);
+        Assert.Equal("query: /V/Broken.base: view Broken: syntax in 'a &' at 2: " + Message("a &"), broken.Output);
     }
+
+    [Fact]
+    public async Task Check_warns_of_each_unknown_function_method_and_formula_and_the_query_still_runs()
+    {
+        _store.AddTextFile("/V/Unknown.base", """
+            formulas:
+              a: formula.b
+              b: formula.a
+              loud: name.shout() + nothing(1)
+            views:
+              - type: table
+                name: Loud
+                order: [formula.loud, formula.missing]
+              - type: table
+                name: Circle
+                order: [formula.a]
+            """);
+
+        Assert.Equal(ShellResult.Ok("""
+            /V/Unknown.base: ok, 2 views (Loud, Circle), 0 parameters; 4 warnings
+            warning: view Loud: unknown-method in 'name.shout() + nothing(1)' at 4: There is no method 'shout'.
+            warning: view Loud: unknown-function in 'name.shout() + nothing(1)' at 15: There is no function 'nothing'.
+            warning: view Loud: unknown-formula in 'formula.missing' at 7: There is no formula 'missing'.
+            warning: view Circle: formula-cycle in 'formula.a' at 7: The formulas use each other in a circle: a → b → a.
+            """), await Run("query check /V/Unknown.base"));
+        Assert.False((await Run("query execute /V/Unknown.base")).IsError);
+    }
+
+    [Fact]
+    public async Task Check_gives_the_warnings_beside_the_errors_of_a_query_that_can_t_run()
+    {
+        _store.AddTextFile("/V/Both.base", "formulas:\n  loud: name.shout()\nviews:\n  - type: table\n    name: Loud\n    order: [formula.loud]\n  - type: table\n    name: Broken\n    filters: \"a &\"\n");
+
+        var both = await Run("query check /V/Both.base");
+
+        Assert.True(both.IsError);
+        Assert.Equal($"""
+            query: /V/Both.base: view Broken: syntax in 'a &' at 2: {Message("a &")}
+            query: /V/Both.base: warning: view Loud: unknown-method in 'name.shout()' at 4: There is no method 'shout'.
+            """, both.Output);
+    }
+
+    private static string Message(string expression) => Assert.Throws<QuerySyntaxError>(() => ExpressionParser.Parse(expression)).Message;
 
     [Fact]
     public async Task Properties_lists_each_with_its_type_and_how_many_notes_have_it()

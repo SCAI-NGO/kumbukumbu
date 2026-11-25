@@ -1,0 +1,26 @@
+description: A filter whose value is an error drops the row without failing the query; as a column, the error shows in the cell.
+source: obsidian 1.15.1
+notes:
+  Ann.md: |
+    ---
+    name: Ann
+    ---
+base: |
+  formulas:
+    broken: name * 2
+  views:
+    - type: table
+      name: Filtered
+      filters: formula.broken == 1
+      order: [file.name]
+    - type: table
+      name: Shown
+      order: [file.name, formula.broken]
+runs:
+  - view: Filtered
+    columns: [file.name]
+    rows: []
+  - view: Shown
+    columns: [file.name, formula.broken]
+    rows:
+      - [text Ann, error Invalid operator between String and Number]
