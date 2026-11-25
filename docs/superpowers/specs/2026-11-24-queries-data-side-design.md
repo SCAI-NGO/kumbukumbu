@@ -24,7 +24,7 @@ A property's type comes from the vault's `.obsidian/types.json` where it declare
 
 The Bases expression language: JavaScript precedence; `file.*` (name, basename, path, folder, ext, and `hasTag`, `inFolder`, `hasProperty`), `note.*` and bare property names, `formula.*`, `this.*`; dates with fields (`birthday.month`, `birthday.day`); text, list and number methods; `if`, `now`, `today`, `date`, `number`, `list`; regular expressions `/…/gimsu`, matched in linear time. Cases: `expressions/`.
 
-Limits, since an expression is anyone's input: 10,000 characters, 64 levels of nesting (parser and formulas), no backtracking in regular expressions; a base or frontmatter of at most 10,000 YAML values and 64 levels, so anchors can't expand into millions.
+Limits, since an expression is anyone's input: 10,000 characters, 64 levels of nesting (parser and formulas; a chain's steps, `.name`, `[index]` and a call, count as levels, so an expression's tree is never deeper whatever its length, and operator chains are walked in a loop), each formula checked once and worked out once per row (formulas that use one another twice per level would otherwise cost twice as much per level), no backtracking in regular expressions; a base or frontmatter of at most 10,000 YAML values and 64 levels, so anchors can't expand into millions.
 
 ## 5. Bases
 

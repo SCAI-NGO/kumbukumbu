@@ -73,6 +73,10 @@ public sealed class Evaluator
     private readonly IReadOnlyDictionary<string, string> formulaTexts;
     private readonly Dictionary<string, Expr> formulas = new(StringComparer.Ordinal);
     private readonly Dictionary<RegexExpr, Regex> regexes = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<string, int> checkedLevels = new(StringComparer.Ordinal);
+    private int deepest;
+    private readonly Dictionary<string, Value> values = new(StringComparer.Ordinal);
+    private Scope? valuesFor;
 
     public Evaluator(IReadOnlyDictionary<string, string>? formulas = null) =>
         formulaTexts = formulas ?? new Dictionary<string, string>();
@@ -89,21 +93,59 @@ public sealed class Evaluator
     {
         LiteralExpr l => l.Value,
         NameExpr n => Name(n.Name, scope),
-        MemberExpr { Target: NameExpr { Name: "formula" } } m => Evaluate(formulas[m.Name], scope),
+        MemberExpr { Target: NameExpr { Name: "formula" } } m => FormulaValue(m.Name, scope),
         MemberExpr m => Field(Evaluate(m.Target, scope), m.Name),
         IndexExpr i => Index(Evaluate(i.Target, scope), Evaluate(i.Index, scope)),
         CallExpr { Callee: NameExpr f } c => Function(f.Name, c.Arguments, scope),
         CallExpr { Callee: MemberExpr m } c => Method(Evaluate(m.Target, scope), m.Name, c.Arguments.Select(a => Evaluate(a, scope)).ToList()),
         UnaryExpr { Operator: Operator.Not } u => new BooleanValue(!Truthy(Evaluate(u.Operand, scope))),
         UnaryExpr u => Evaluate(u.Operand, scope) is NumberValue n ? new NumberValue(-n.Number) : NullValue.Instance,
-        BinaryExpr { Operator: Operator.And } b => Evaluate(b.Left, scope) is var l && !Truthy(l) ? l : Evaluate(b.Right, scope),
-        BinaryExpr { Operator: Operator.Or } b => Evaluate(b.Left, scope) is var l && Truthy(l) ? l : Evaluate(b.Right, scope),
-        BinaryExpr b => Binary(b.Operator, Evaluate(b.Left, scope), Evaluate(b.Right, scope)),
+        BinaryExpr b => Binary(b, scope),
         ListExpr l => new ListValue(l.Items.Select(i => Evaluate(i, scope)).ToList()),
         ObjectExpr o => new ObjectValue(o.Entries.GroupBy(e => e.Key).ToDictionary(g => g.Key, g => Evaluate(g.Last().Value, scope))),
         RegexExpr r => new RegexValue(regexes[r]),
         _ => NullValue.Instance,
     };
+
+    // A formula's value for a row is worked out once, however often the row's expressions use it.
+    private Value FormulaValue(string name, Scope scope)
+    {
+        if (!ReferenceEquals(scope, valuesFor))
+        {
+            values.Clear();
+            valuesFor = scope;
+        }
+
+        if (!values.TryGetValue(name, out var value)) values[name] = value = Evaluate(formulas[name], scope);
+        return value;
+    }
+
+    // The same walk of the left spine as in Check: the innermost left first, then each right on the way out.
+    private Value Binary(BinaryExpr expr, Scope scope)
+    {
+        var spine = LeftSpine(expr);
+        var value = Evaluate(spine[^1].Left, scope);
+        for (var i = spine.Count - 1; i >= 0; i--)
+        {
+            var (op, right) = (spine[i].Operator, spine[i].Right);
+            value = op switch
+            {
+                Operator.And => Truthy(value) ? Evaluate(right, scope) : value,
+                Operator.Or => Truthy(value) ? value : Evaluate(right, scope),
+                _ => Binary(op, value, Evaluate(right, scope)),
+            };
+        }
+
+        return value;
+    }
+
+    // The binary expressions down the left side of one, the outermost first.
+    private static List<BinaryExpr> LeftSpine(BinaryExpr expr)
+    {
+        var spine = new List<BinaryExpr> { expr };
+        for (var left = expr.Left; left is BinaryExpr b; left = b.Left) spine.Add(b);
+        return spine;
+    }
 
     // Formulas are checked where they are used, so one broken formula fails only the expressions that use it.
     private void Check(Expr expr, List<string> chain)
@@ -135,8 +177,10 @@ public sealed class Evaluator
                 Check(u.Operand, chain);
                 break;
             case BinaryExpr b:
-                Check(b.Left, chain);
-                Check(b.Right, chain);
+                // A long chain (a && b && c ...) nests to the left: walk its spine, not the stack.
+                var spine = LeftSpine(b);
+                Check(spine[^1].Left, chain);
+                for (var i = spine.Count - 1; i >= 0; i--) Check(spine[i].Right, chain);
                 break;
             case ListExpr l:
                 l.Items.ToList().ForEach(i => Check(i, chain));
@@ -159,10 +203,22 @@ public sealed class Evaluator
         if (chain.Count >= ExpressionParser.MaxDepth)
             throw new QueryError("too-deep", $"The formulas use each other more than {ExpressionParser.MaxDepth} levels deep.", reference.Position);
 
+        // A formula is checked once: its check holds wherever it is used again, but for the depth, which depends on where.
+        // So its levels of formulas are kept, and a reference from which they would pass the limit checks it again, to fail where it did.
+        if (checkedLevels.TryGetValue(name, out var levels) && chain.Count + levels <= ExpressionParser.MaxDepth)
+        {
+            deepest = Math.Max(deepest, chain.Count + levels);
+            return;
+        }
+
         if (!formulas.TryGetValue(name, out var expr)) formulas[name] = expr = QueryError.In(text, () => ExpressionParser.Parse(text));
+        var outer = deepest;
         chain.Add(name);
+        deepest = chain.Count;
         QueryError.In(text, () => { Check(expr, chain); return true; });
         chain.RemoveAt(chain.Count - 1);
+        checkedLevels[name] = deepest - chain.Count;
+        deepest = Math.Max(outer, deepest);
     }
 
     // Matching in linear time: a pattern is anyone's input, and backtracking would let one hang the server.

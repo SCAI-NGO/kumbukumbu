@@ -1,0 +1,13 @@
+description: Each step of a chain (.name, [index], a call) is a level of nesting, so a chain of 63 steps runs and one of 64 is a syntax error, as 64 brackets are.
+source: spec
+pending: [ts]
+notes:
+  Ann.md: |
+    ---
+    name: Ann
+    ---
+cases:
+  - { expression: name.trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().length, values: { Ann.md: number 3 } }
+  - { expression: name.trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().length.length, error: syntax }
+  - { expression: 'tags[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]', values: { Ann.md: null } }
+  - { expression: 'tags[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]', error: syntax }
