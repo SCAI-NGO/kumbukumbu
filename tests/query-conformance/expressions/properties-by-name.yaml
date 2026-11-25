@@ -1,5 +1,5 @@
 description: A bare name, note.name and note["name"] are the note's property; a property the note lacks is null.
-source: spec
+source: obsidian 1.15.1
 notes:
   Ann.md: |
     ---

@@ -1,5 +1,6 @@
-description: hasTag finds frontmatter and inline tags, nested ones under their parent, ignoring case and a leading '#'; inFolder includes subfolders.
-source: spec
+description: hasTag finds frontmatter and inline tags, nested ones under their parent, ignoring case and a leading '#'; file.tags gives them with their '#'; inFolder includes subfolders.
+source: obsidian 1.15.1
+pending: [cs, ts]
 notes:
   People/Ann.md: |
     ---
@@ -23,4 +24,4 @@ cases:
   - expression: file.inFolder("People/Friends/")
     values: { People/Ann.md: boolean false, People/Friends/Brita.md: boolean true, Peoples.md: boolean false }
   - expression: file.tags
-    values: { People/Ann.md: [text person, text Project/Kumbu], People/Friends/Brita.md: [text person], Peoples.md: [] }
+    values: { People/Ann.md: ['text #Project/Kumbu', 'text #person'], People/Friends/Brita.md: ['text #person'], Peoples.md: [] }

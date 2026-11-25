@@ -1,5 +1,6 @@
-description: Values compare within their type; across types they are unequal and not ordered, and null is equal only to null.
-source: spec
+description: Text that reads as a number compares with numbers ("11" == 11); null is equal only to null, and ordering it gives null.
+source: obsidian 1.15.1
+pending: [cs, ts]
 notes:
   Ann.md: |
     ---
@@ -8,13 +9,13 @@ notes:
     ---
 cases:
   - { expression: n == 11, values: { Ann.md: boolean true } }
-  - { expression: t == 11, values: { Ann.md: boolean false } }
+  - { expression: t == 11, values: { Ann.md: boolean true } }
   - { expression: t == "11", values: { Ann.md: boolean true } }
-  - { expression: n != t, values: { Ann.md: boolean true } }
+  - { expression: n != t, values: { Ann.md: boolean false } }
   - { expression: n > 10 && n <= 11, values: { Ann.md: boolean true } }
-  - { expression: t > 10, values: { Ann.md: boolean false } }
+  - { expression: t > 10, values: { Ann.md: boolean true } }
   - { expression: '"b" > "a"', values: { Ann.md: boolean true } }
   - { expression: missing == null, values: { Ann.md: boolean true } }
-  - { expression: missing < 5, values: { Ann.md: boolean false } }
-  - { expression: missing > 5, values: { Ann.md: boolean false } }
+  - { expression: missing < 5, values: { Ann.md: null } }
+  - { expression: missing > 5, values: { Ann.md: null } }
   - { expression: '[1, "a"] == [1, "a"]', values: { Ann.md: boolean true } }

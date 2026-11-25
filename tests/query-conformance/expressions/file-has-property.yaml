@@ -1,5 +1,5 @@
 description: hasProperty asks whether the note has the property at all, even with no value.
-source: spec
+source: obsidian 1.15.1
 notes:
   Ann.md: |
     ---
