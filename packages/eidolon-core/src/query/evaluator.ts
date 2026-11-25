@@ -98,8 +98,8 @@ export class Evaluator {
       this.check(expr, []);
       return expr;
     } catch (e) {
-      // Chains of members, calls or unary operators nest to the left or right without the parser's depth limit, which
-      // counts brackets only; the stack's end is the limit there, and an error like any other.
+      // The parser's depth limit counts brackets and prefix operators, not the steps of a chain (a.b.c..., x[0][0]...);
+      // there the stack's end is the limit, and an error like any other.
       if (e instanceof RangeError) throw new QueryError("too-deep", "The expression is nested too deeply.", 0);
       throw e;
     }

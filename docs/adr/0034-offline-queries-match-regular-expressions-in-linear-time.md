@@ -19,7 +19,7 @@ Matching time is linear in the text, whatever the pattern, on both sides. The al
 
 ## Consequences
 
-- Neither side has lookaround or backreferences: both engines accept the same subset, so a pattern that runs on the server runs offline, and one that doesn't, doesn't.
+- The two engines share a common core, not a language: no lookaround, no backreferences, linear time. At the edges they differ: `\Z`, `\p{IsGreek}` and repeat counts over 1000 compile only on .NET, `\Q…\E` only in RE2, `[a-z-[aeiou]]` means different things, and without `m` .NET's `$` also matches before a final "\n" where RE2's doesn't (a block-scalar property ends in "\n"). A pattern that keeps to the common core behaves the same on both sides.
 - RE2's `\d`, `\w`, `\s` and `\b` are ASCII-only, where .NET's are Unicode; a pattern using them can match differently on the two sides. Use explicit classes such as `[0-9]` or `\p{L}` where it matters.
 - One more runtime dependency in `packages/eidolon-core`, checked by the boundary test (permissive licence, no Node, no DOM).
 - The conformance cases (`tests/query-conformance`) hold the two engines to the same results, patterns included.

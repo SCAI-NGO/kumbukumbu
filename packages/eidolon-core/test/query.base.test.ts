@@ -52,8 +52,19 @@ test("a long chain of one operator compiles and evaluates without running out of
   expect(evaluator.evaluate(expr, { note, this: null, now: NOW }).kind).toBe("null");
 });
 
-test("a long chain of members, calls or negations is an error of the query or a value, never a RangeError", () => {
-  for (const source of [Array(4_000).fill("a").join("."), "!".repeat(9_000) + "a", "a" + ".b()".repeat(2_000)]) {
-    expect(codeOf(() => new Evaluator().compile(source))).not.toMatch(/RangeError/);
+// Chains that compile (a text's lower() calls, a list's [0] steps): one stays a value (null: no such property), the other runs the stack out and is the too-deep error, never a RangeError.
+test.each([
+  ["lower() calls", "title" + ".lower()".repeat(1_200), "null"],
+  ["[0] steps", "tags" + "[0]".repeat(3_300), "too-deep"],
+])("a long chain of %s ends as expected", (_, source, expected) => {
+  expect(source.length).toBeLessThan(10_000);
+  const evaluator = new Evaluator();
+  let outcome: string;
+  try {
+    const expr = evaluator.compile(source);
+    outcome = evaluator.evaluate(expr, { note, this: null, now: NOW }).kind;
+  } catch (e) {
+    outcome = (e as { code?: string }).code ?? String(e);
   }
+  expect(outcome).toBe(expected);
 });
