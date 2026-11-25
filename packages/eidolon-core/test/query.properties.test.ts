@@ -74,3 +74,10 @@ test("a number is written as .NET writes its round-trip form", () => {
   ];
   expect(written.map(([n]) => formatNumber(n))).toEqual(written.map(([, s]) => s));
 });
+
+test("a datetime written as a block scalar, ending in a line break, is read as .NET does", () => {
+  const types = PropertyTypes.read(JSON.stringify({ types: { at: "datetime", on: "date" } }));
+  const read = Properties.read("---\nat: |\n  2026-11-23T10:00\non: |\n  2026-11-23\n---\n", types);
+  expect(read.values.get("at")).toEqual({ kind: "datetime", dateTime: "2026-11-23T10:00:00" });
+  expect(read.values.get("on")).toEqual({ kind: "text", text: "2026-11-23\n" });
+});

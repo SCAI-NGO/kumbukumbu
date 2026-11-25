@@ -174,10 +174,11 @@ function boolean(raw: string): Value | null {
   return null;
 }
 
-// .NET's $ also matches before a final line break, and its number parser then trims it.
+// .NET's $ also matches before a final line break; its number parser then trims it and the datetime is read from the groups.
 const NUMBER = /^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?\n?$/;
+// A date keeps its plain $: .NET's pattern matches before a final line break, but the exact parse of the text then fails.
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const DATE_TIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(:(\d{2})(\.(\d{1,7}))?)?$/;
+const DATE_TIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(:(\d{2})(\.(\d{1,7}))?)?\n?$/;
 
 function number(raw: string): Value | null {
   return NUMBER.test(raw) ? numberValue(Number(raw)) : null;
