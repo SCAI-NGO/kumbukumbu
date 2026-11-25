@@ -17,6 +17,7 @@ import {
   NULL, asMilliseconds, booleanValue, dateValue, durationValue, errorValue, fileValue, formatNumber, linkValue, listValue,
   noteRefValue, numberValue, objectValue, regexValue, textValue, type Value,
 } from "./value";
+import { trimSlashes } from "./tags";
 import { QueryVault } from "./vault";
 
 /**
@@ -150,9 +151,15 @@ const firstError = (values: readonly Value[]): ErrorOf | undefined => values.fin
  * formulas that use each other twice double a value at each step, so without a bound a short expression could fill the
  * tab's memory; a property's value is far smaller. */
 export const MAX_SIZE = 1_000_000;
-/** How many steps evaluating an expression for a note may take: each part evaluated, and each item a method goes
- * through. Lambdas multiply the work (a map in a map), so it is bounded as the size is. */
+/** How many steps evaluating an expression for a note may take: each part evaluated, each item a method goes through,
+ * and each 64 characters and items of what an operation reads or builds (`work`); a regular expression's search counts
+ * each 16 characters it may read. Lambdas multiply the work (a map in a map), so it is bounded as the size is. */
 export const MAX_STEPS = 1_000_000;
+/** How many steps one run may take over all its notes and expressions: the bound on one note times the notes would let a
+ * large vault keep the tab busy for hours. */
+export const MAX_RUN_STEPS = 5_000_000;
+/** How large the values of one run may be, added up: the cells and sort keys it keeps for every row. */
+export const MAX_RUN_SIZE = 10_000_000;
 /** How deeply a value may nest, lists in lists: what compares, shows or measures a value walks it on the stack. */
 export const MAX_VALUE_DEPTH = 128;
 
@@ -187,6 +194,15 @@ function measure(value: Value): readonly [size: number, depth: number] {
   }
 }
 
+// The steps of what works out a calendar or many digits (format, relative, toFixed, date(), duration()): measured, each
+// takes as long as so many steps of the rest.
+const CALENDAR = 8;
+
+/** The steps reading, comparing or building a value takes: one for each 64 of its characters and items. */
+function work(value: Value): number {
+  return value.kind === "text" || value.kind === "list" || value.kind === "object" ? Math.floor(measure(value)[0] / 64) : 0;
+}
+
 function bounded(value: Value, at: Expr): void {
   const [size, depth] = measure(value);
   if (size > MAX_SIZE) throw tooLarge(at);
@@ -218,6 +234,8 @@ export class Evaluator {
   private readonly evaluating = new Set<string>();
   private level = 0;
   private steps = 0;
+  private runSteps = 0;
+  private runSize = 0;
   private frames: Frame[] = [];
   private valuesFor: Scope | null = null;
   private alone: { scope: Scope; vault: QueryVault } | null = null;
@@ -258,7 +276,10 @@ export class Evaluator {
     this.frames = [];
     this.evaluating.clear();
     try {
-      return this.eval(expr, scope);
+      const value = this.eval(expr, scope);
+      if ((this.runSize += measure(value)[0]) > MAX_RUN_SIZE)
+        throw new QueryError("too-large", `The values of the query grow past ${MAX_RUN_SIZE.toLocaleString("en")} characters and items over its notes.`, expr.position);
+      return value;
     } catch (e) {
       // Defence in depth, as in compile: a stack that runs out first is the same error.
       if (e instanceof RangeError) throw new QueryError("too-deep", "The expression and the formulas it uses are nested too deeply.", 0);
@@ -275,7 +296,13 @@ export class Evaluator {
   private step(count: number, at: Expr): void {
     if ((this.steps += count) > MAX_STEPS)
       throw new QueryError("too-large", `The expression takes more than ${MAX_STEPS.toLocaleString("en")} steps for one note.`, at.position);
+    if ((this.runSteps += count) > MAX_RUN_STEPS)
+      throw new QueryError("too-large", `The query takes more than ${MAX_RUN_STEPS.toLocaleString("en")} steps over its notes.`, at.position);
   }
+
+  // A regular expression's search from a place may read the rest of the text (/(?:a*c)?/ on "aaa…" does, for each match),
+  // so each search counts what it may read: a global replace or split on a long text can't take quadratic time.
+  private readonly searched = (text: string, from: number, at: Expr): void => this.step(1 + Math.floor((text.length - from) / 16), at);
 
   // Counted here, not only in the check: a check cut short by a cycle, or by a formula checked before, can't see how deep
   // the formulas really go along this path.
@@ -284,6 +311,8 @@ export class Evaluator {
     this.step(1, expr);
     const value = this.valueOf(expr, scope);
     bounded(value, expr);
+    // What a call or a literal builds is work in its size; a name or a field gives a value that is there already.
+    if (expr.kind === "call" || expr.kind === "list" || expr.kind === "object") this.step(work(value), expr);
     this.level--;
     return value;
   }
@@ -297,7 +326,7 @@ export class Evaluator {
         return this.field(this.eval(expr.target, scope), expr.name, scope);
       case "index": return index(this.eval(expr.target, scope), this.eval(expr.index, scope));
       case "call":
-        if (expr.callee.kind === "name") return this.call(expr.callee.name, expr.args, scope);
+        if (expr.callee.kind === "name") return this.call(expr.callee.name, expr.args, scope, expr);
         if (expr.callee.kind === "member") {
           const target = this.eval(expr.callee.target, scope);
           if (LAMBDAS.has(expr.callee.name)) return this.lambda(target, expr.callee.name, expr, scope);
@@ -319,7 +348,12 @@ export class Evaluator {
           const { operator, right } = spine[i]!;
           if (operator === "And") value = !truthy(value) ? booleanValue(false) : logical(this.eval(right, scope));
           else if (operator === "Or") value = truthy(value) ? booleanValue(true) : logical(this.eval(right, scope));
-          else value = binary(operator, value, this.eval(right, scope));
+          else {
+            // Comparing or joining two values reads both and builds the result.
+            const [left, other] = [value, this.eval(right, scope)];
+            value = binary(operator, left, other);
+            this.step(work(left) + work(other) + work(value), spine[i]!);
+          }
           // Each step of a chain is a value of its own: "a" + "a" + ... grows at each.
           bounded(value, spine[i]!);
         }
@@ -519,7 +553,9 @@ export class Evaluator {
     if (flags.includes("m")) options |= RE2JS.MULTILINE;
     if (flags.includes("s")) options |= RE2JS.DOTALL;
     try {
-      return regexValue(RE2JS.compile(pattern, options), flags.includes("g")) as RegexOf;
+      // As JavaScript's toString: the pattern, then the flags in their own order.
+      const written = `/${pattern}/${[..."gimsu"].filter((f) => flags.includes(f)).join("")}`;
+      return regexValue(RE2JS.compile(pattern, options), flags.includes("g"), written) as RegexOf;
     } catch (e) {
       this.warn("regex", `The regular expression doesn't compile or needs backtracking, which runs here in linear time only (no lookaround, no backreferences), so it is null: ${e instanceof Error ? e.message : String(e)}`, position);
       return null;
@@ -585,7 +621,7 @@ export class Evaluator {
     }
   }
 
-  private call(functionName: string, args: readonly Expr[], scope: Scope): Value {
+  private call(functionName: string, args: readonly Expr[], scope: Scope, at: Expr): Value {
     const argument = (i: number): Value => (i < args.length ? this.eval(args[i]!, scope) : NULL);
     if (!FUNCTIONS.has(functionName)) return errorValue(`Cannot find function "${functionName}"`);
     switch (functionName) {
@@ -607,6 +643,8 @@ export class Evaluator {
     }
     const first = argument(0);
     if (first.kind === "error") return first;
+    // number(), escapeHTML(), file() and link() read their first argument.
+    this.step(work(first) + (functionName === "date" || functionName === "duration" ? CALENDAR : 0), at);
     switch (functionName) {
       // Only the branch taken is evaluated, as in JavaScript.
       case "if": return truthy(first) ? argument(1) : argument(2);
@@ -676,8 +714,15 @@ export class Evaluator {
     if (target.kind === "error") return target;
     const error = firstError(args);
     if (error !== undefined) return error;
-    // What a method goes through counts as steps: a long list or text, many times, is work.
-    this.step(target.kind === "list" ? target.items.length : target.kind === "text" ? Math.floor(target.text.length / 64) : 0, at);
+    // What a method goes through counts as steps: each item, and the target's size, for each argument it looks for and
+    // for each round of a sort; and what the arguments hold. What it builds counts in eval.
+    const items = target.kind === "list" ? target.items.length : target.kind === "object" ? target.values.size : 0;
+    const times = methodName === "contains" || methodName === "containsAll" || methodName === "containsAny" ? Math.max(1, args.length)
+      // A comparison costs less than a step: a quarter.
+      : methodName === "sort" ? 1 + Math.floor(Math.floor(Math.log2(items + 1)) / 4)
+      : 1;
+    const calendar = methodName === "format" || methodName === "relative" || methodName === "toFixed" ? CALENDAR : 0;
+    this.step((items + work(target)) * times + args.reduce((sum, a) => sum + work(a), 0) + calendar, at);
 
     switch (methodName) {
       case "isEmpty":
@@ -710,7 +755,7 @@ export class Evaluator {
           case "lower": return textValue(text.toLowerCase());
           case "title": return textValue(title(text));
           case "trim": return textValue(trim(text));
-          case "replace": return replace(text, argument(0), argument(1), at);
+          case "replace": return replace(text, argument(0), argument(1), at, this.searched);
           case "repeat": {
             const count = numberArgument(0);
             return count === null ? NULL : repeat(text, count, at);
@@ -723,7 +768,7 @@ export class Evaluator {
           case "split": {
             const limit = argument(1);
             if (limit.kind !== "number" && limit.kind !== "null") return NULL;
-            return split(text, argument(0), limit) ?? NULL;
+            return split(text, argument(0), limit, at, this.searched) ?? NULL;
           }
           default: return missing();
         }
@@ -744,7 +789,10 @@ export class Evaluator {
           case "sort": return listValue([...items].sort(sorted));
           case "unique": {
             const seen = new Set<string>();
-            return listValue(items.filter((i) => !seen.has(key(i)) && seen.add(key(i)) !== undefined));
+            return listValue(items.filter((i) => {
+              const k = key(i);
+              return !seen.has(k) && seen.add(k) !== undefined;
+            }));
           }
           default: return missing();
         }
@@ -764,7 +812,12 @@ export class Evaluator {
       case "date":
         switch (methodName) {
           case "date": return dateValue(target.moment.slice(0, 10));
-          case "format": return textArgument(0) === null ? NULL : textValue(format(target.moment, textArgument(0)!));
+          case "format": {
+            if (textArgument(0) === null) return NULL;
+            const written = format(target.moment, textArgument(0)!, MAX_SIZE);
+            if (written === null) throw tooLarge(at);
+            return textValue(written);
+          }
           case "time": return textValue(target.moment.slice(11, 19));
           case "relative": return textValue(fromNow(target.moment, scope.now));
           default: return missing();
@@ -793,7 +846,10 @@ export class Evaluator {
           default: return missing();
         }
       case "regex":
-        return methodName === "matches" ? bool(textArgument(0) === null ? null : (target.regex as RE2JS).matcher(textArgument(0)!).find()) : missing();
+        if (methodName !== "matches") return missing();
+        if (textArgument(0) === null) return NULL;
+        this.searched(textArgument(0)!, 0, at);
+        return bool((target.regex as RE2JS).matcher(textArgument(0)!).find());
       default: return missing();
     }
   }
@@ -944,6 +1000,8 @@ function slice(length: number, start: Value, end: Value): [number, number] | nul
 function repeat(text: string, count: number, at: Expr): Value {
   const n = integer(count);
   if (n < 0 || !Number.isFinite(n)) return errorValue(`Invalid count value: ${formatNumber(count)}`);
+  // The empty text repeated is empty, however often: nothing to build.
+  if (text.length === 0 || n === 0) return textValue("");
   if (text.length * n > MAX_SIZE) throw tooLarge(at);
   return textValue(text.repeat(n));
 }
@@ -986,7 +1044,9 @@ function join(list: ListOf, separator: string, at: Expr): Value {
 // A match as JavaScript's replace and split see it: where it starts, its text, and its groups (null where a group took no part).
 type Found = { index: number; text: string; groups: Array<string | null>; named: Map<string, string | null> | null };
 
-function* matches(text: string, pattern: Value, all: boolean): Generator<Found> {
+type Searched = (text: string, from: number, at: Expr) => void;
+
+function* matches(text: string, pattern: Value, all: boolean, at: Expr, searched: Searched): Generator<Found> {
   if (pattern.kind === "text") {
     // A text matches where it stands, the empty one before every character and at the end.
     const step = Math.max(pattern.text.length, 1);
@@ -1001,6 +1061,7 @@ function* matches(text: string, pattern: Value, all: boolean): Generator<Found> 
   const names = Object.entries(regex.namedGroups());
   const m = regex.matcher(text);
   for (let start = 0; start <= text.length;) {
+    searched(text, start, at);
     if (!m.find(start)) return;
     const groups = Array.from({ length: m.groupCount() }, (_, i) => m.group(i + 1));
     yield { index: m.start(), text: m.group()!, groups, named: names.length === 0 ? null : new Map(names.map(([n, i]) => [n, m.group(i)])) };
@@ -1010,11 +1071,11 @@ function* matches(text: string, pattern: Value, all: boolean): Generator<Found> 
   }
 }
 
-function replace(text: string, pattern: Value, replacement: Value, at: Expr): Value {
+function replace(text: string, pattern: Value, replacement: Value, at: Expr, searched: Searched): Value {
   if ((pattern.kind !== "text" && pattern.kind !== "regex") || replacement.kind !== "text") return NULL;
   let result = "";
   let done = 0;
-  for (const found of matches(text, pattern, pattern.kind === "text" || pattern.global)) {
+  for (const found of matches(text, pattern, pattern.kind === "text" || pattern.global, at, searched)) {
     result += text.slice(done, found.index) + substitute(replacement.text, text, found);
     if (result.length > MAX_SIZE) throw tooLarge(at);
     done = found.index + found.text.length;
@@ -1060,11 +1121,14 @@ function substitute(template: string, text: string, found: Found): string {
 
 // JavaScript's split: by a text (the empty one splits every character) or a regular expression, whose groups join the
 // parts; at most limit parts, which counts as JavaScript's ToUint32 does.
-function split(text: string, separator: Value, limit: Value): Value | null {
+function split(text: string, separator: Value, limit: Value, at: Expr, searched: Searched): Value | null {
   const most = limit.kind === "number" ? (Number.isFinite(limit.number) ? ((Math.trunc(limit.number) % 4294967296) + 4294967296) % 4294967296 : 0) : 4294967295;
   const parts: Value[] = [];
+  let size = 1;
+  // Measured as they come, as built does: a split into many parts, or groups, fails before it fills the memory.
   const add = (part: Value): boolean => {
     if (parts.length >= most) return false;
+    if ((size += measure(part)[0]) > MAX_SIZE) throw tooLarge(at);
     parts.push(part);
     return true;
   };
@@ -1079,7 +1143,7 @@ function split(text: string, separator: Value, limit: Value): Value | null {
         return listValue(parts);
       }
       let done = 0;
-      for (const found of matches(text, separator, true)) {
+      for (const found of matches(text, separator, true, at, searched)) {
         if (!add(textValue(text.slice(done, found.index)))) return listValue(parts);
         done = found.index + found.text.length;
       }
@@ -1092,6 +1156,7 @@ function split(text: string, separator: Value, limit: Value): Value | null {
       if (text.length === 0) return listValue(m.find(0) ? [] : [textValue(text)]);
       let [p, q] = [0, 0];
       while (q < text.length) {
+        searched(text, q, at);
         if (!m.find(q)) break;
         const [start, e] = [m.start(), m.end()];
         // An empty match where the part starts, or one at the very end, splits nothing.
@@ -1125,7 +1190,18 @@ function toFixed(x: number, digits: number): Value {
 function sorted(a: Value, b: Value): number {
   const last = (v: Value) => (v.kind === "null" ? 1 : v.kind === "error" ? 2 : 0);
   if (last(a) !== last(b)) return last(a) - last(b);
-  return compare(a, b) ?? rank(a) - rank(b);
+  return order(a, b);
+}
+
+/** The order of two values in a sort: within a type as `compare` has them, NaN after the other numbers (so the order holds
+ * from one pair to the next), and types by their `rank`. */
+export function order(a: Value, b: Value): number {
+  const plain = (v: Value) => (v.kind === "number" ? v.number : v.kind === "duration" ? asMilliseconds(v) : null);
+  const known = compare(a, b);
+  if (known !== null) return known;
+  const [x, y] = [plain(a), plain(b)];
+  if (rank(a) === rank(b) && x !== null && y !== null) return Number(Number.isNaN(x)) - Number(Number.isNaN(y));
+  return rank(a) - rank(b);
 }
 
 /** Where a value of a type goes among those of other types, in a sort. */
@@ -1167,7 +1243,7 @@ function hasTag(note: QueryNote, tag: string): boolean {
 }
 
 function inFolder(path: string, folder: string): boolean {
-  const trimmed = folder.replace(/^\/+|\/+$/g, "");
+  const trimmed = trimSlashes(folder, true);
   return trimmed.length === 0 || path.startsWith(`${trimmed}/`);
 }
 
@@ -1391,7 +1467,7 @@ export function display(v: Value): string {
     case "file":
     case "noteRef": return v.note.path;
     case "link": return v.display ?? v.path;
-    case "regex": return v.regex.toString();
+    case "regex": return v.written;
     case "duration": return formatNumber(asMilliseconds(v));
     case "error": return `error: ${v.message}`;
   }

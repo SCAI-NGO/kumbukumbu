@@ -41,3 +41,6 @@ cases:
   - { expression: nums.containsAny(5), values: { Ann.md: boolean false } }
   - { expression: '[].isEmpty()', values: { Ann.md: boolean true } }
   - { expression: nums.length, values: { Ann.md: number 3 } }
+  # NaN goes after the other numbers, so the order holds from one pair to the next.
+  - { expression: '[3, 0 / 0, 1, 0 / 0, 2].sort()', values: { Ann.md: [number 1, number 2, number 3, number NaN, number NaN] } }
+  - { expression: '[0 / 0, "b", 2, 0 / 0, "a", 1].sort()', values: { Ann.md: [number 1, number 2, number NaN, number NaN, text a, text b] } }

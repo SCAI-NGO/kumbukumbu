@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// What only this engine has inside: the budget of a base's YAML, the nesting of its filters, the depth of an expression.
+// What only this engine has inside: the budget of a base's YAML, the nesting of its filters, the depth of an expression,
+// the bounds of a run.
 import { expect, test } from "vitest";
 import { Base } from "../src/query/base";
 import { QuerySyntaxError } from "../src/query/errors";
@@ -163,4 +164,33 @@ test("a long cycle gives an error value at once", () => {
   const started = performance.now();
   expect(run(formulas, "formula.f0")).toEqual({ kind: "error", message: "Infinite loop detected in formula" });
   expect(performance.now() - started).toBeLessThan(1000);
+});
+
+const notes = (count: number) => Array.from({ length: count }, (_, i) => new QueryNote(`n${String(i).padStart(3, "0")}.md`, "", Properties.read("")));
+
+test("a sort by random() orders the rows by the number each shows", () => {
+  const yaml = "formulas:\n  r: random()\nviews:\n  - type: table\n    order: [formula.r]\n    sort:\n      - property: formula.r\n";
+  const shown = Base.parse(yaml).run(null, notes(50), null, NOW).rows.map((r) => (r.cells[0] as { number: number }).number);
+  expect(shown).toEqual([...shown].sort((a, b) => a - b));
+});
+
+const thrown = (go: () => unknown): unknown => {
+  try {
+    go();
+  } catch (e) {
+    return e;
+  }
+  return null;
+};
+
+test("a run whose notes each stay within their steps still ends at the steps of the run", () => {
+  // About 460,000 steps for each note: within the bound of one, but twelve of them pass the run's.
+  const yaml = `filters: '"x".repeat(150000).split("").filter(value == "y").length == 0'\n`;
+  expect(thrown(() => Base.parse(yaml).run(null, notes(12), null, NOW))).toMatchObject({ code: "too-large", message: expect.stringContaining("over its notes") });
+});
+
+test("a run whose cells each stay within their size still ends at the size of the run", () => {
+  const yaml = `formulas:\n  big: '"x".repeat(900000)'\nviews:\n  - type: table\n    order: [formula.big]\n`;
+  expect(Base.parse(yaml).run(null, notes(1), null, NOW).rows).toHaveLength(1);
+  expect(thrown(() => Base.parse(yaml).run(null, notes(12), null, NOW))).toMatchObject({ code: "too-large", message: expect.stringContaining("over its notes") });
 });

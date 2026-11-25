@@ -107,3 +107,9 @@ test("the tags of one content are read once and remembered", () => {
   const content = "# Notes #remembered\n";
   expect(tagsOf(content)).toBe(tagsOf(content));
 });
+
+// /\/+$/ takes V8 quadratic time on a long run of slashes inside a text: seconds for this one.
+test("a tag with a long run of slashes inside is read in linear time", () => {
+  const tag = `a${"/".repeat(200_000)}b`;
+  expect(tags(`x #${tag}`)).toBe(tag);
+});

@@ -149,15 +149,26 @@ public sealed partial class Evaluator
     /// expression could fill the server's memory; a property's value is far smaller.</summary>
     public const int MaxSize = 1_000_000;
 
-    /// <summary>How many steps evaluating an expression for a note may take: each part evaluated, and each item a method
-    /// goes through. Lambdas multiply the work (a map in a map), so it is bounded as the size is.</summary>
+    /// <summary>How many steps evaluating an expression for a note may take: each part evaluated, each item a method
+    /// goes through, and each 64 characters and items of what an operation reads or builds (<see cref="Work"/>); a regular
+    /// expression's search counts each 16 characters it may read. Lambdas multiply the work (a map in a map), so it is
+    /// bounded as the size is.</summary>
     public const int MaxSteps = 1_000_000;
+
+    /// <summary>How many steps one run may take over all its notes and expressions: the bound on one note times the notes
+    /// would let a large vault keep the server busy for hours.</summary>
+    public const int MaxRunSteps = 5_000_000;
+
+    /// <summary>How large the values of one run may be, added up: the cells and sort keys it keeps for every row.</summary>
+    public const int MaxRunSize = 10_000_000;
 
     /// <summary>How deeply a value may nest, lists in lists: what compares, shows or measures a value walks it on the stack.</summary>
     public const int MaxValueDepth = 128;
 
     private int level;
     private long steps;
+    private long runSteps;
+    private long runSize;
 
     // The items a lambda's body is evaluated for, the innermost last: value, index and, in reduce, acc.
     private sealed record Frame(Value Value, int Index, Value? Acc);
@@ -198,7 +209,10 @@ public sealed partial class Evaluator
         steps = 0;
         frames = [];
         evaluating.Clear();
-        return Eval(expr, scope);
+        var value = Eval(expr, scope);
+        if ((runSize += Measure(value).Size) > MaxRunSize)
+            throw new QueryError("too-large", $"The values of the query grow past {MaxRunSize:N0} characters and items over its notes.", expr.Position);
+        return value;
     }
 
     // Counted here, not only in the check: a check cut short by a cycle, or by a formula checked before, can't see how deep
@@ -214,7 +228,7 @@ public sealed partial class Evaluator
             MemberExpr { Target: NameExpr { Name: "formula" } } m => FormulaValue(m.Name, scope),
             MemberExpr m => Field(Eval(m.Target, scope), m.Name, scope),
             IndexExpr i => Index(Eval(i.Target, scope), Eval(i.Index, scope)),
-            CallExpr { Callee: NameExpr f } c => Function(f.Name, c.Arguments, scope),
+            CallExpr { Callee: NameExpr f } c => Function(f.Name, c.Arguments, scope, c),
             CallExpr { Callee: MemberExpr { Name: "filter" or "map" or "reduce" } m } c => Lambda(Eval(m.Target, scope), m.Name, c, scope),
             CallExpr { Callee: MemberExpr m } c => Method(Eval(m.Target, scope), m.Name, c.Arguments.Select(a => Eval(a, scope)).ToList(), scope, c),
             CallExpr => new ErrorValue("Only a function or a method can be called"),
@@ -232,6 +246,8 @@ public sealed partial class Evaluator
             _ => NullValue.Instance,
         };
         Bounded(value, expr);
+        // What a call or a literal builds is work in its size; a name or a field gives a value that is there already.
+        if (expr is CallExpr or ListExpr or ObjectExpr) Step(Work(value), expr);
         level--;
         return value;
     }
@@ -240,7 +256,20 @@ public sealed partial class Evaluator
     {
         if ((steps += count) > MaxSteps)
             throw new QueryError("too-large", $"The expression takes more than {MaxSteps:N0} steps for one note.", at.Position);
+        if ((runSteps += count) > MaxRunSteps)
+            throw new QueryError("too-large", $"The query takes more than {MaxRunSteps:N0} steps over its notes.", at.Position);
     }
+
+    // The steps of what works out a calendar or many digits (format, relative, toFixed, date(), duration()): measured,
+    // each takes as long as so many steps of the rest.
+    private const int Calendar = 8;
+
+    /// <summary>The steps reading, comparing or building a value takes: one for each 64 of its characters and items.</summary>
+    private static long Work(Value value) => value is TextValue or ListValue or ObjectValue ? Measure(value).Size / 64 : 0;
+
+    // A regular expression's search from a place may read the rest of the text (/(?:a*c)?/ on "aaa…" does, for each
+    // match), so each search counts what it may read: a global replace or split on a long text can't take quadratic time.
+    private void Searched(string text, int from, Expr at) => Step(1 + (text.Length - from) / 16, at);
 
     private static void Bounded(Value value, Expr at)
     {
@@ -392,12 +421,20 @@ public sealed partial class Evaluator
             {
                 Operator.And => Truthy(value) ? Logical(Eval(right, scope)) : new BooleanValue(false),
                 Operator.Or => Truthy(value) ? new BooleanValue(true) : Logical(Eval(right, scope)),
-                _ => Binary(op, value, Eval(right, scope)),
+                _ => Charged(op, value, Eval(right, scope), spine[i]),
             };
             // Each step of a chain is a value of its own: "a" + "a" + ... grows at each.
             Bounded(value, spine[i]);
         }
 
+        return value;
+    }
+
+    // Comparing or joining two values reads both and builds the result.
+    private Value Charged(Operator op, Value left, Value right, Expr at)
+    {
+        var value = Binary(op, left, right);
+        Step(Work(left) + Work(right) + Work(value), at);
         return value;
     }
 
@@ -538,7 +575,9 @@ public sealed partial class Evaluator
         if (r.Flags.Contains('s')) options |= RegexOptions.Singleline;
         try
         {
-            return new RegexValue(new Regex(r.Pattern, options), r.Flags.Contains('g'));
+            // As JavaScript's toString: the pattern, then the flags in their own order.
+            var written = $"/{r.Pattern}/{string.Concat(RegexFlags.Where(r.Flags.Contains))}";
+            return new RegexValue(new Regex(r.Pattern, options), r.Flags.Contains('g'), written);
         }
         catch (Exception e) when (e is ArgumentException or NotSupportedException)
         {
@@ -658,7 +697,7 @@ public sealed partial class Evaluator
         _ => NullValue.Instance,
     };
 
-    private Value Function(string name, IReadOnlyList<Expr> arguments, Scope scope)
+    private Value Function(string name, IReadOnlyList<Expr> arguments, Scope scope, Expr at)
     {
         Value Argument(int i) => i < arguments.Count ? Eval(arguments[i], scope) : NullValue.Instance;
 
@@ -680,6 +719,8 @@ public sealed partial class Evaluator
 
         var first = Argument(0);
         if (first is ErrorValue) return first;
+        // number(), escapeHTML(), file() and link() read their first argument.
+        Step(Work(first) + (name is "date" or "duration" ? Calendar : 0), at);
 
         return name switch
         {
@@ -768,7 +809,8 @@ public sealed partial class Evaluator
         return new ErrorValue($"Unable to parse \"{text}\" as a number.");
     }
 
-    [GeneratedRegex(@"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")]
+    // Each digit can belong to one place only, so a long text that isn't a number fails in linear time.
+    [GeneratedRegex(@"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")]
     private static partial Regex JsDecimal();
 
     private static Value DateOf(Value v) => v switch
@@ -787,8 +829,17 @@ public sealed partial class Evaluator
         Value Bool(bool? b) => b is { } holds ? new BooleanValue(holds) : NullValue.Instance;
         if (target is ErrorValue) return target;
         if (arguments.OfType<ErrorValue>().FirstOrDefault() is { } error) return error;
-        // What a method goes through counts as steps: a long list or text, many times, is work.
-        Step(target switch { ListValue l => l.Items.Count, TextValue t => t.Text.Length / 64, _ => 0 }, at);
+        // What a method goes through counts as steps: each item, and the target's size, for each argument it looks for and
+        // for each round of a sort; and what the arguments hold. What it builds counts in Eval.
+        var items = target switch { ListValue l => l.Items.Count, ObjectValue o => o.Values.Count, _ => 0 };
+        var times = name switch
+        {
+            "contains" or "containsAll" or "containsAny" => Math.Max(1, arguments.Count),
+            // A comparison costs less than a step: a quarter.
+            "sort" => 1 + (int)Math.Log2(items + 1) / 4,
+            _ => 1,
+        };
+        Step((items + Work(target)) * times + arguments.Sum(Work) + (name is "format" or "relative" or "toFixed" ? Calendar : 0), at);
 
         return (target, name) switch
         {
@@ -816,7 +867,7 @@ public sealed partial class Evaluator
             (TextValue t, "repeat") => NumberArgument(0) is { } count ? Repeat(t.Text, count, at) : NullValue.Instance,
             (TextValue t, "reverse") => new TextValue(string.Concat(CodePoints(t.Text).Reverse())),
             (TextValue t, "slice") => Slice(t.Text.Length, Argument(0), Argument(1)) is (var from, var to) ? new TextValue(t.Text[from..to]) : NullValue.Instance,
-            (TextValue t, "split") => Argument(1) is NumberValue or NullValue ? (Value?)Split(t.Text, Argument(0), Argument(1)) ?? NullValue.Instance : NullValue.Instance,
+            (TextValue t, "split") => Argument(1) is NumberValue or NullValue ? (Value?)Split(t.Text, Argument(0), Argument(1), at) ?? NullValue.Instance : NullValue.Instance,
             (ListValue l, "contains") => new BooleanValue(l.Items.Any(i => Equal(i, Argument(0)))),
             (ListValue l, "containsAll") => new BooleanValue(arguments.All(a => l.Items.Any(i => Equal(i, a)))),
             (ListValue l, "containsAny") => new BooleanValue(arguments.Any(a => l.Items.Any(i => Equal(i, a)))),
@@ -834,7 +885,9 @@ public sealed partial class Evaluator
                 : Round(n.Number)),
             (NumberValue n, "toFixed") => ToFixed(n.Number, NumberArgument(0) ?? 0),
             (DateValue d, "date") => new DateValue(d.Date),
-            (DateValue d, "format") => TextArgument(0) is { } pattern ? new TextValue(Moment.Format(d.Moment, pattern)) : NullValue.Instance,
+            (DateValue d, "format") => TextArgument(0) is { } pattern
+                ? new TextValue(Moment.Format(d.Moment, pattern, MaxSize) ?? throw TooLarge(at))
+                : NullValue.Instance,
             (DateValue d, "time") => new TextValue(d.Moment.ToString("HH:mm:ss", CultureInfo.InvariantCulture)),
             (DateValue d, "relative") => new TextValue(Moment.FromNow(d.Moment, scope.Now)),
             (ObjectValue o, "keys") => new ListValue(o.Values.Keys.Select(k => (Value)new TextValue(k)).ToList()),
@@ -846,7 +899,7 @@ public sealed partial class Evaluator
             (FileValue f, "hasTag") => new BooleanValue(arguments.OfType<TextValue>().Any(a => HasTag(f.Note, a.Text))),
             (FileValue f, "inFolder") => Bool(TextArgument(0) is { } folder ? InFolder(f.Note.Path, folder) : null),
             (FileValue f, "hasProperty") => Bool(TextArgument(0) is { } p ? f.Note.Properties.Values.ContainsKey(p) : null),
-            (RegexValue r, "matches") => Bool(TextArgument(0) is { } s ? r.Regex.IsMatch(s) : null),
+            (RegexValue r, "matches") => Bool(TextArgument(0) is { } s ? Matches(r, s, at) : null),
             _ => NoMethod(target, name),
         };
     }
@@ -889,8 +942,10 @@ public sealed partial class Evaluator
     {
         var n = Integer(count);
         if (n < 0 || double.IsInfinity(n)) return new ErrorValue($"Invalid count value: {Display(new NumberValue(count))}");
+        // The empty text repeated is empty, however often: nothing to build, and no loop up to the count.
+        if (text.Length == 0 || n == 0) return new TextValue("");
         if (text.Length * n > MaxSize) throw TooLarge(at);
-        return new TextValue(string.Concat(Enumerable.Repeat(text, (int)n)));
+        return new TextValue(new StringBuilder(text.Length * (int)n).Insert(0, text, (int)n).ToString());
     }
 
     // Each word's first letter in upper case, the rest as it is; a word starts after white space.
@@ -932,17 +987,23 @@ public sealed partial class Evaluator
     // A match as JavaScript's replace and split see it: where it starts, its text, and its groups (null where a group took no part).
     private sealed record Found(int Index, string Text, IReadOnlyList<string?> Groups, IReadOnlyDictionary<string, string?>? Named);
 
-    private static IEnumerable<Found> Matches(string text, Value pattern, bool all)
+    private bool Matches(RegexValue r, string text, Expr at)
+    {
+        Searched(text, 0, at);
+        return r.Regex.IsMatch(text);
+    }
+
+    private IEnumerable<Found> Matches(string text, Value pattern, bool all, Expr at)
     {
         if (pattern is TextValue p)
         {
             // A text matches where it stands, the empty one before every character and at the end.
             var step = Math.Max(p.Text.Length, 1);
-            for (var at = text.IndexOf(p.Text, StringComparison.Ordinal); at >= 0;)
+            for (var where = text.IndexOf(p.Text, StringComparison.Ordinal); where >= 0;)
             {
-                yield return new Found(at, p.Text, [], null);
+                yield return new Found(where, p.Text, [], null);
                 if (!all) yield break;
-                at = at + step > text.Length ? -1 : text.IndexOf(p.Text, at + step, StringComparison.Ordinal);
+                where = where + step > text.Length ? -1 : text.IndexOf(p.Text, where + step, StringComparison.Ordinal);
             }
 
             yield break;
@@ -952,6 +1013,7 @@ public sealed partial class Evaluator
         var names = regex.GetGroupNames().Where(n => !int.TryParse(n, out _)).ToList();
         for (var start = 0; start <= text.Length;)
         {
+            Searched(text, start, at);
             var m = regex.Match(text, start);
             if (!m.Success) yield break;
             var groups = Enumerable.Range(1, m.Groups.Count - 1).Select(i => m.Groups[i].Success ? m.Groups[i].Value : null).ToList();
@@ -962,12 +1024,12 @@ public sealed partial class Evaluator
         }
     }
 
-    private static Value Replace(string text, Value pattern, Value replacement, Expr at)
+    private Value Replace(string text, Value pattern, Value replacement, Expr at)
     {
         if (pattern is not (TextValue or RegexValue) || replacement is not TextValue by) return NullValue.Instance;
         var result = new StringBuilder();
         var done = 0;
-        foreach (var found in Matches(text, pattern, pattern is TextValue || ((RegexValue)pattern).Global))
+        foreach (var found in Matches(text, pattern, pattern is TextValue || ((RegexValue)pattern).Global, at))
         {
             result.Append(text, done, found.Index - done);
             Substitute(result, by.Text, text, found);
@@ -1022,7 +1084,7 @@ public sealed partial class Evaluator
 
     // JavaScript's split: by a text (the empty one splits every character) or a regular expression, whose groups join the
     // parts; at most limit parts, which counts as JavaScript's ToUint32 does.
-    private static ListValue? Split(string text, Value separator, Value limit)
+    private ListValue? Split(string text, Value separator, Value limit, Expr at)
     {
         var most = limit switch
         {
@@ -1031,9 +1093,12 @@ public sealed partial class Evaluator
             _ => uint.MaxValue,
         };
         var parts = new List<Value>();
+        var size = 1L;
+        // Measured as they come, as Built does: a split into many parts, or groups, fails before it fills the memory.
         bool Add(Value part)
         {
             if (parts.Count >= most) return false;
+            if ((size += Measure(part).Size) > MaxSize) throw TooLarge(at);
             parts.Add(part);
             return true;
         }
@@ -1053,7 +1118,7 @@ public sealed partial class Evaluator
                 return new ListValue(parts);
             case TextValue t:
                 var done = 0;
-                foreach (var found in Matches(text, t, all: true))
+                foreach (var found in Matches(text, t, all: true, at))
                 {
                     if (!Add(new TextValue(text[done..found.Index]))) return new ListValue(parts);
                     done = found.Index + found.Text.Length;
@@ -1066,6 +1131,7 @@ public sealed partial class Evaluator
                 var (p, q) = (0, 0);
                 while (q < text.Length)
                 {
+                    Searched(text, q, at);
                     var m = r.Regex.Match(text, q);
                     if (!m.Success) break;
                     var e = m.Index + m.Length;
@@ -1305,12 +1371,22 @@ public sealed partial class Evaluator
         _ => 6,
     };
 
-    // list.sort(): within a type as Compare orders them, types by their rank, empty values and then errors last.
+    // list.sort(): within a type as Order has them, empty values and then errors last.
     private static int Sorted(Value a, Value b)
     {
         static int Last(Value v) => v switch { NullValue => 1, ErrorValue => 2, _ => 0 };
         if (Last(a) != Last(b)) return Last(a).CompareTo(Last(b));
-        return Compare(a, b) ?? Rank(a).CompareTo(Rank(b));
+        return Order(a, b);
+    }
+
+    /// <summary>The order of two values in a sort: within a type as <see cref="Compare"/> has them, NaN after the other
+    /// numbers (so the order holds from one pair to the next), and types by their <see cref="Rank"/>.</summary>
+    public static int Order(Value a, Value b)
+    {
+        static double? Plain(Value v) => v switch { NumberValue n => n.Number, DurationValue d => d.AsMilliseconds, _ => null };
+        if (Compare(a, b) is { } order) return order;
+        if (Rank(a) == Rank(b) && Plain(a) is { } x && Plain(b) is { } y) return double.IsNaN(x).CompareTo(double.IsNaN(y));
+        return Rank(a).CompareTo(Rank(b));
     }
 
     // What makes two items of list.unique() the same: their type and value, without the conversions == makes, so 1 and
@@ -1354,7 +1430,7 @@ public sealed partial class Evaluator
         FileValue f => f.Note.Path,
         NoteRefValue r => r.Note.Path,
         LinkValue l => l.Display ?? l.Path,
-        RegexValue r => r.Regex.ToString(),
+        RegexValue r => r.Written,
         DurationValue d => d.AsMilliseconds.ToString("R", CultureInfo.InvariantCulture),
         ErrorValue e => $"error: {e.Message}",
         _ => "",

@@ -18,3 +18,7 @@ cases:
   - { expression: (1).toFixed(101), values: { Ann.md: error } }
   - { expression: m.abs(), values: { Ann.md: number 2.5 } }
   - { expression: n.isEmpty(), values: { Ann.md: boolean false } }
+  - { expression: (2.5).floor(), values: { Ann.md: number 2 } }
+  - { expression: m.floor(), values: { Ann.md: number -3 } }
+  - { expression: (2.1).ceil(), values: { Ann.md: number 3 } }
+  - { expression: m.ceil(), values: { Ann.md: number -2 } }

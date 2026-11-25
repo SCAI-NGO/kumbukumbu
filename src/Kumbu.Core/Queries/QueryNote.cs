@@ -52,8 +52,9 @@ public sealed record FileValue(QueryNote Note) : Value
 /// <summary>A note as <c>this</c> gives it: <c>this.file</c>, <c>this.note</c>, and its properties by name.</summary>
 public sealed record NoteRefValue(QueryNote Note) : Value;
 
-/// <summary>A regular expression, and whether it has the flag g, which only <c>replace</c> reads.</summary>
-public sealed record RegexValue(System.Text.RegularExpressions.Regex Regex, bool Global) : Value;
+/// <summary>A regular expression, whether it has the flag g, which only <c>replace</c> reads, and how JavaScript writes
+/// it (<c>/a+b/gi</c>), which <c>toString()</c> gives.</summary>
+public sealed record RegexValue(System.Text.RegularExpressions.Regex Regex, bool Global, string Written) : Value;
 
 /// <summary>A link: the path in the vault of the file it leads to, or its target as written when it leads to none, and
 /// the text it shows, if it was given one. Links are equal when their paths are, so two that lead to one file are (bases

@@ -1,4 +1,4 @@
-description: What an expression builds for a note, and the work it does for it, are bounded, so a lambda or a formula can't make a value grow without end; past the bounds the query fails (too-large, too-deep), as the other limits do.
+description: What an expression builds for a note, and the work it does for it, are bounded, so a lambda, a formula or a long text can't make a value grow without end or the work take quadratic time; past the bounds the query fails (too-large, too-deep), as the other limits do. What reads a long text once, or builds nothing, stays well inside them.
 source: spec
 notes:
   Ann.md: ""
@@ -9,3 +9,29 @@ cases:
   - { expression: '"x".repeat(1000).split("").reduce([acc], 1)', error: too-deep }
   - { expression: '"x".repeat(3000).split("").map("y".repeat(3000).split("").filter(value == "y").length)', error: too-large }
   - { expression: '"x".repeat(100000).split("").map(value + value).length', values: { Ann.md: number 100000 } }
+  # The empty text repeated is empty, however often, and takes no time.
+  - { expression: '"".repeat(2147483647)', values: { Ann.md: text } }
+  - { expression: '"ab".repeat(0)', values: { Ann.md: text } }
+  # A regular expression's search may read the rest of the text for each match (this one does), so a global replace or a
+  # split counts what each search may read.
+  - { expression: '"a".repeat(100000).split(/(?:a*c)?/)', error: too-large }
+  - { expression: '"a".repeat(20000).replace(/(?:a*c)?/g, "")', error: too-large }
+  - { expression: '/(?:a*c)?/.matches("a".repeat(500000))', values: { Ann.md: boolean true } }
+  - { expression: '"a,".repeat(2000).split(/,/).length', values: { Ann.md: number 2001 } }
+  # A split into more parts, groups included, than a value may hold fails as it splits.
+  - { expression: '"x".repeat(600000).split("")', error: too-large }
+  - { expression: '"x".repeat(1000).split(/()()()()()()()()()()x/).length', values: { Ann.md: number 11001 } }
+  # Looking for each of many values in a long list is work for each of them.
+  - { expression: '"1".repeat(30000).split("").containsAny(2, 2)', values: { Ann.md: boolean false } }
+  - { expression: '"1".repeat(30000).split("").containsAny(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2)', error: too-large }
+  - { expression: '"1".repeat(30000).containsAll("2", "2")', values: { Ann.md: boolean false } }
+  # A long text that is almost a number is read in linear time.
+  - { expression: '("1".repeat(30000) + "x") == 1', values: { Ann.md: boolean false } }
+  - { expression: '(".1".repeat(30000) + "x") == 1', values: { Ann.md: boolean false } }
+  # A date's pattern is read once, however many [ it holds, and what it writes is bounded as any value.
+  - { expression: 'now().format("[".repeat(500000)).length', values: { Ann.md: number 500000 } }
+  - { expression: 'now().format("[" + "x".repeat(500000)).length', values: { Ann.md: number 500001 } }
+  - { expression: 'now().format("MMMM".repeat(200000))', error: too-large }
+  # Comparing or joining long values is work in their size, each time.
+  - { expression: '"x".repeat(5000).split("").map("y".repeat(500000) == "y".repeat(500000)).length', error: too-large }
+  - { expression: '"x".repeat(5000).split("").map(["y".repeat(500000)].toString().length).length', error: too-large }

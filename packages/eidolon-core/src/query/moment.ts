@@ -62,16 +62,22 @@ function written(p: Parts, token: string): string {
 }
 
 /** The date in Moment's tokens: YYYY YY M MM MMM MMMM D DD Do d dd ddd dddd H HH h hh m mm s ss S SS SSS A a; `[text]`
- * and `\x` stand as written. */
-export function format(moment: string, pattern: string): string {
+ * and `\x` stand as written. Null when the text would grow past `limit` characters. */
+export function format(moment: string, pattern: string, limit: number): string | null {
   const p = parts(moment);
   let text = "";
   for (let i = 0; i < pattern.length;) {
-    const close = pattern.indexOf("]", i + 1);
-    if (pattern[i] === "[" && close > 0 && !pattern.slice(i + 1, close).includes("[")) {
-      text += pattern.slice(i + 1, close);
-      i = close + 1;
-      continue;
+    if (text.length > limit) return null;
+    // [text] is what stands up to the next ], unless a [ comes first: then this [ is a character of its own. Read forward
+    // to whichever comes first, so a pattern of many [ stays linear.
+    if (pattern[i] === "[") {
+      let close = i + 1;
+      while (close < pattern.length && pattern[close] !== "[" && pattern[close] !== "]") close++;
+      if (pattern[close] === "]") {
+        text += pattern.slice(i + 1, close);
+        i = close + 1;
+        continue;
+      }
     }
     if (pattern[i] === "\\" && i + 1 < pattern.length) {
       text += pattern[i + 1];
@@ -86,7 +92,7 @@ export function format(moment: string, pattern: string): string {
     text += written(p, token);
     i += token.length;
   }
-  return text;
+  return text.length > limit ? null : text;
 }
 
 // A moment as milliseconds and the 100 ns ticks below them, read as UTC since it has no zone.

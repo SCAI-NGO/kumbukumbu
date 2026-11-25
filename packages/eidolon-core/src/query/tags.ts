@@ -31,6 +31,15 @@ function readTags(content: string): TagUse[] {
   return result;
 }
 
+/** The text without the slashes it ends in (and, with `start`, begins with): by a loop, since V8 runs /\/+$/ in
+ * quadratic time on a long run of slashes inside a text. */
+export function trimSlashes(text: string, start: boolean): string {
+  let [from, to] = [0, text.length];
+  while (to > 0 && text[to - 1] === "/") to--;
+  while (start && from < to && text[from] === "/") from++;
+  return text.slice(from, to);
+}
+
 const isAsciiDigit = (code: number) => code >= 0x30 && code <= 0x39;
 
 /** Whether `text` (without '#') is a whole tag: tag characters only, at least one of them not a digit. */
@@ -87,7 +96,7 @@ function fromFrontmatter(content: string, lines: readonly string[], end: number)
 
     // Older notes write "tags: a, b" or "tags: a b"; Obsidian splits those.
     for (const part of value.split(/[, \t]/)) {
-      const tag = part.replace(/^#+/, "").replace(/\/+$/, "").normalize("NFC");
+      const tag = trimSlashes(part.replace(/^#+/, ""), false).normalize("NFC");
       if (part.length > 0 && isTag(tag)) result.push({ tag, line });
     }
   }
@@ -144,7 +153,7 @@ function fromText(lines: readonly string[], start: number, result: TagUse[]): vo
 
       let stop = p + 1;
       while (stop < line.length && isTagChar(line[stop]!)) stop++;
-      const tag = line.slice(p + 1, stop).replace(/\/+$/, "");
+      const tag = trimSlashes(line.slice(p + 1, stop), false);
       if (isTag(tag)) result.push({ tag: tag.normalize("NFC"), line: i });
       p = stop;
     }

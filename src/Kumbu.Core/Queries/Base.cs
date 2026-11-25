@@ -187,7 +187,7 @@ public sealed class Base
                     return Last(a).CompareTo(Last(b));
                 }
 
-                var order = Evaluator.Compare(a, b) ?? Evaluator.Rank(a).CompareTo(Evaluator.Rank(b));
+                var order = Evaluator.Order(a, b);
                 if (order != 0) return descending[i] ? -order : order;
             }
 

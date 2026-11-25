@@ -2,7 +2,7 @@
 // A base in Obsidian's format (a .base file, or a ```base block of a query note): filters, formulas and views with their
 // columns, sort and limit (Kumbu.Core Queries/Base). A view is checked when it runs, so one broken view or formula doesn't
 // take the others down. The cases are in tests/query-conformance/bases.
-import { Evaluator, compare, truthy, type Scope } from "./evaluator";
+import { Evaluator, order as ordered, truthy, type Scope } from "./evaluator";
 import { QueryError, inExpression, type QueryWarning } from "./errors";
 import type { Expr } from "./expr";
 import { ExpressionParser } from "./parser";
@@ -185,7 +185,7 @@ function keyOrder(x: readonly Value[], y: readonly Value[], descending: readonly
       return last(a) - last(b);
     }
 
-    const order = compare(a, b) ?? rank(a) - rank(b);
+    const order = ordered(a, b);
     if (order !== 0) return descending[i] ? -order : order;
   }
   return 0;
@@ -193,14 +193,3 @@ function keyOrder(x: readonly Value[], y: readonly Value[], descending: readonly
 
 // Empty values go after the others, and errors after them, whichever the direction.
 const last = (v: Value): number => (v.kind === "null" ? 1 : v.kind === "error" ? 2 : 0);
-
-function rank(v: Value): number {
-  switch (v.kind) {
-    case "number": return 0;
-    case "duration": return 1;
-    case "date": return 2;
-    case "text": return 3;
-    case "boolean": return 4;
-    default: return 5;
-  }
-}

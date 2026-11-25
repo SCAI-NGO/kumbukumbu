@@ -14,13 +14,17 @@ public static class Moment
         ["YYYY", "YY", "MMMM", "MMM", "MM", "M", "Do", "DD", "D", "dddd", "ddd", "dd", "d", "HH", "H", "hh", "h", "mm", "m", "ss", "s", "SSS", "SS", "S", "A", "a"];
 
     /// <summary>The date in Moment's tokens: YYYY YY M MM MMM MMMM D DD Do d dd ddd dddd H HH h hh m mm s ss S SS SSS A a;
-    /// <c>[text]</c> and <c>\x</c> stand as written.</summary>
-    public static string Format(DateTime date, string pattern)
+    /// <c>[text]</c> and <c>\x</c> stand as written. Null when the text would grow past <paramref name="limit"/>
+    /// characters.</summary>
+    public static string? Format(DateTime date, string pattern, int limit)
     {
         var text = new StringBuilder();
         for (var i = 0; i < pattern.Length;)
         {
-            if (pattern[i] == '[' && pattern.IndexOf(']', i + 1) is var close and > 0 && pattern.IndexOf('[', i + 1, close - i - 1) < 0)
+            if (text.Length > limit) return null;
+            // [text] is what stands up to the next ], unless a [ comes first: then this [ is a character of its own. Read
+            // forward to whichever comes first, so a pattern of many [ stays linear.
+            if (pattern[i] == '[' && pattern.IndexOfAny(Brackets, i + 1) is var close and > 0 && pattern[close] == ']')
             {
                 text.Append(pattern, i + 1, close - i - 1);
                 i = close + 1;
@@ -45,8 +49,10 @@ public static class Moment
             i += token.Length;
         }
 
-        return text.ToString();
+        return text.Length > limit ? null : text.ToString();
     }
+
+    private static readonly char[] Brackets = ['[', ']'];
 
     private static string Written(DateTime date, string token)
     {

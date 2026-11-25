@@ -1,4 +1,4 @@
-description: A regular expression matches a text through its matches(); one with an unknown or repeated flag, one that doesn't compile, or one that needs backtracking (lookaround, backreferences), which RE2 can't run, is null, not an error.
+description: A regular expression matches a text through its matches(); one with an unknown or repeated flag, one that doesn't compile, or one that needs backtracking (lookaround, backreferences), which RE2 can't run, is null, not an error. Its toString() is how JavaScript writes it.
 source: spec
 notes:
   Ann.md: ""
@@ -14,3 +14,6 @@ cases:
   - { expression: '/a(?=b)/.matches("ab")', values: { Ann.md: null } }
   - { expression: '/(a)\1/.matches("aa")', values: { Ann.md: null } }
   - { expression: '/a/y', values: { Ann.md: null } }
+  # A regular expression shows as JavaScript writes it: the pattern, then its flags in their own order.
+  - { expression: /a+b/.toString(), values: { Ann.md: text /a+b/ } }
+  - { expression: /a+b/ig.toString(), values: { Ann.md: text /a+b/gi } }
