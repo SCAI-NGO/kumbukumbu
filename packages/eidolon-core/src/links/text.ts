@@ -63,6 +63,12 @@ export function codeSpans(line: string): Array<[start: number, end: number]> {
 const SPACE = "[\\t-\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
 const LEADING = new RegExp(`^${SPACE}+`);
 const TRAILING = new RegExp(`${SPACE}+$`);
+const ONE_SPACE = new RegExp(`^${SPACE}$`);
+
+/** char.IsWhiteSpace, for one UTF-16 code unit. */
+export function isWhiteSpace(char: string): boolean {
+  return ONE_SPACE.test(char);
+}
 
 /** string.Trim() as the server trims. */
 export function trim(text: string): string {
