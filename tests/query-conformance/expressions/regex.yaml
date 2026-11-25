@@ -1,0 +1,16 @@
+description: A regular expression matches a text through its matches(); one with an unknown or repeated flag, one that doesn't compile, or one that needs backtracking (lookaround, backreferences), which RE2 can't run, is null, not an error.
+source: spec
+notes:
+  Ann.md: ""
+cases:
+  - { expression: '/abc/.matches("abcde")', values: { Ann.md: boolean true } }
+  - { expression: '/^ann/i.matches("Ann")', values: { Ann.md: boolean true } }
+  - { expression: '/^b$/m.matches("a\nb")', values: { Ann.md: boolean true } }
+  - { expression: '/a.b/.matches("a\nb")', values: { Ann.md: boolean false } }
+  - { expression: '/a.b/s.matches("a\nb")', values: { Ann.md: boolean true } }
+  - { expression: '/x/gu.matches("x")', values: { Ann.md: boolean true } }
+  - { expression: '/x/.matches(missing)', values: { Ann.md: null } }
+  - { expression: '/a/ii.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a(?=b)/.matches("ab")', values: { Ann.md: null } }
+  - { expression: '/(a)\1/.matches("aa")', values: { Ann.md: null } }
+  - { expression: '/a/y', values: { Ann.md: null } }

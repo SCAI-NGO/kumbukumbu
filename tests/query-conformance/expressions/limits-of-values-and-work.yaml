@@ -1,0 +1,11 @@
+description: What an expression builds for a note, and the work it does for it, are bounded, so a lambda or a formula can't make a value grow without end; past the bounds the query fails (too-large, too-deep), as the other limits do.
+source: spec
+notes:
+  Ann.md: ""
+cases:
+  - { expression: '"x".repeat(2000000)', error: too-large }
+  - { expression: '"x".repeat(100).split("").reduce(acc + acc, "x")', error: too-large }
+  - { expression: '"x".repeat(100).split("").reduce([acc, acc], 1)', error: too-large }
+  - { expression: '"x".repeat(1000).split("").reduce([acc], 1)', error: too-deep }
+  - { expression: '"x".repeat(3000).split("").map("y".repeat(3000).split("").filter(value == "y").length)', error: too-large }
+  - { expression: '"x".repeat(100000).split("").map(value + value).length', values: { Ann.md: number 100000 } }

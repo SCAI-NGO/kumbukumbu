@@ -2,14 +2,13 @@
 // A pattern is anyone's input: it runs in linear time (RE2), so a note in a shared vault can't hang the tab with one.
 import { expect, test } from "vitest";
 import { Evaluator } from "../src/query/evaluator";
-import { QueryError } from "../src/query/errors";
 import { QueryNote } from "../src/query/note";
 import { Properties } from "../src/query/properties";
 
 const note = new QueryNote("Ann.md", "", Properties.read(""));
 const matches = (text: string, regex: string) => {
   const evaluator = new Evaluator();
-  const expr = evaluator.compile(`${JSON.stringify(text)}.matches(${regex})`);
+  const expr = evaluator.compile(`${regex}.matches(${JSON.stringify(text)})`);
   return evaluator.evaluate(expr, { note, this: null, now: "2026-01-01T12:00:00" });
 };
 
@@ -29,13 +28,11 @@ test("a pattern matches anywhere in the text, with its flags", () => {
   expect(matches("a\nb", "/a.b/s")).toEqual({ kind: "boolean", boolean: true });
 });
 
-test("what RE2 can't do is the regex error: lookaround, backreferences, a broken pattern", () => {
-  for (const pattern of ["/a(?=b)/", "/(?<!a)b/", "/(a)\\1/", "/(a/", "/a{2,1}/"]) {
-    expect(() => new Evaluator().compile(`"a".matches(${pattern})`), pattern).toThrow(QueryError);
-    try {
-      new Evaluator().compile(`"a".matches(${pattern})`);
-    } catch (e) {
-      expect((e as QueryError).code).toBe("regex");
-    }
+test("what RE2 can't do is null, with a warning: lookaround, backreferences, a broken pattern, an unknown flag", () => {
+  for (const pattern of ["/a(?=b)/", "/(?<!a)b/", "/(a)\\1/", "/(a/", "/a{2,1}/", "/a/x"]) {
+    const evaluator = new Evaluator();
+    const expr = evaluator.compile(`${pattern}.matches("a")`);
+    expect(evaluator.evaluate(expr, { note, this: null, now: "2026-01-01T12:00:00" }), pattern).toEqual({ kind: "null" });
+    expect(evaluator.warnings.map((w) => w.code), pattern).toEqual(["regex"]);
   }
 });

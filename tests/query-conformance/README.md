@@ -54,10 +54,10 @@ cases:
   - expression: nothing(1)
     values: { Ann.md: error Cannot find function "nothing" }
   - expression: a = 1
-    error: syntax             # or regex, too-deep
+    error: syntax             # or too-deep, too-large
 ```
 
-An expression that runs but can't give a value for a note (an unknown function or method, a formula that doesn't exist or uses itself, a calculation between types that don't fit) gives an error value in that note's cell, as Obsidian does; `error` is only for what fails the whole query before any note is read.
+An expression that runs but can't give a value for a note (an unknown function or method, a formula that doesn't exist or uses itself, a calculation between types that don't fit) gives an error value in that note's cell, as Obsidian does; `error` is only for what fails the whole query: syntax, before any note is read, and the limits, which the runner looks for by evaluating the expression for every note. The expressions of one file are one run over its notes, so `random()` gives a note the same number in each.
 
 A case about bases (in `bases/`) gives the base and a list of `runs`, each a view (the first when left out) with its columns and rows in order, or the error it is. Without `file`, the base is a block outside the vault and not a row; with it, the base is that file of the vault, a row where its filters let it be:
 
@@ -75,7 +75,7 @@ runs:
     rows:
       - [text Ann, date 1980-11-03]
   - view: Missing
-    error: unknown-view        # or base, and the expressions' errors (syntax, regex, too-deep)
+    error: unknown-view        # or base, and the expressions' errors (syntax, too-deep, too-large)
 ```
 
 A case about query notes (in `queries/`) names the query, optionally its parameters and views as read, and `runs` with the call's `args` (a list gives a multitext parameter one value per item); a run may name a `query` of its own:
@@ -111,6 +111,7 @@ A typed value is written as its type and its normalised text, so a comparison te
 | `[text a, text b]` (a YAML list) | a list |
 | a YAML map of values | an object |
 | `file People/Ann.md` | a note's file, as `file` and `this.file` give it |
+| `link People/Ann.md`, `link People/Ann.md\|Ann` | a link, by the path of the file it leads to (its target as written when it leads to none), and after `\|` the text it shows, if it was given one |
 | `error`, `error Cannot find function "nothing"` | an error value: any (`error` alone), or one whose message starts with the text given, so a case can quote as much of Obsidian's message as it needs |
 
 A runner fails on an empty folder and on a file it can't read; the offline runner also fails on a folder below this one that it doesn't know.

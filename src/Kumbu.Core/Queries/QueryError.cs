@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 namespace Kumbu.Core.Queries;
 
-/// <summary>A query that can't run: an expression that doesn't parse or nests too deeply, a regular expression that
-/// doesn't compile, a base that can't be read, a call that doesn't fit the query. <see cref="Code"/> is the same for every engine
+/// <summary>A query that can't run: an expression that doesn't parse, nests too deeply or builds too much for a note, a
+/// base that can't be read, a call that doesn't fit the query. <see cref="Code"/> is the same for every engine
 /// (the conformance cases compare it); the message is for people.</summary>
 public sealed class QueryError(string code, string message, int position) : Exception(message)
 {

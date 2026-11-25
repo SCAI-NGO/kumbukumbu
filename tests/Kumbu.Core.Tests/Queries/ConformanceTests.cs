@@ -100,13 +100,20 @@ public class ConformanceTests
             ? DateTime.ParseExact(Text(n), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
             : DefaultNow;
 
+        // One run: random() is one number per note across the case's expressions.
+        var vault = new QueryVault(notes.Values);
         foreach (var c in cases.Children.Cast<YamlMappingNode>())
         {
             var text = Text(c["expression"]);
             var evaluator = new Evaluator(formulas);
             if (c.Children.TryGetValue("error", out var error))
             {
-                var code = Assert.ThrowsAny<Exception>(() => evaluator.Compile(text)) switch
+                // Most errors of the query come from compiling; the limits of what an expression builds come from evaluating it.
+                var code = Assert.ThrowsAny<Exception>(() =>
+                {
+                    var compiled = evaluator.Compile(text);
+                    foreach (var note in notes.Values) evaluator.Evaluate(compiled, new Scope(note, self, now) { Vault = vault });
+                }) switch
                 {
                     QuerySyntaxError => "syntax",
                     QueryError e => e.Code,
@@ -121,7 +128,7 @@ public class ConformanceTests
             Assert.True(expected.Children.Count == notes.Count, $"{text}: a value for every note.");
             foreach (var (path, value) in expected.Children)
             {
-                var actual = Shown(value, evaluator.Evaluate(expr, new Scope(notes[Text(path)], self, now)));
+                var actual = Shown(value, evaluator.Evaluate(expr, new Scope(notes[Text(path)], self, now) { Vault = vault }));
                 Assert.True(Describe(value) == actual, $"{text} on {Text(path)}: expected {Describe(value)}, got {actual}.");
             }
         }
@@ -272,6 +279,7 @@ public class ConformanceTests
         ListValue l => "[" + string.Join(", ", l.Items.Select(Describe)) + "]",
         ObjectValue o => "{" + string.Join(", ", o.Values.Select(v => $"{v.Key}: {Describe(v.Value)}").Order(StringComparer.Ordinal)) + "}",
         FileValue f => $"file {f.Note.Path}",
+        LinkValue l => l.Display is { } display ? $"link {l.Path}|{display}" : $"link {l.Path}",
         ErrorValue e => $"error {e.Message}",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, null),
     };

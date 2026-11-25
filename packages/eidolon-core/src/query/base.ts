@@ -8,6 +8,7 @@ import type { Expr } from "./expr";
 import { ExpressionParser } from "./parser";
 import type { QueryNote } from "./note";
 import { textValue, type Value } from "./value";
+import { QueryVault } from "./vault";
 import { child, readYaml, YamlProblem, type YamlNode } from "./yamlTree";
 
 type YamlMap = Extract<YamlNode, { kind: "map" }>;
@@ -110,9 +111,11 @@ export class Base {
       limit = n;
     }
 
-    const rows = [...notes]
+    const files = [...notes];
+    const vault = new QueryVault(files);
+    const rows = files
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-      .map((note): Scope => ({ note, this: self, now }))
+      .map((note): Scope => ({ note, this: self, now, vault }))
       .filter((scope) => filter.every((f) => f(scope) === true))
       .map((scope) => ({ scope, keys: sort.map((k) => evaluator.evaluate(k.expr, scope)) }));
     // A stable sort (as Array.prototype.sort is): ties keep the notes in path order.

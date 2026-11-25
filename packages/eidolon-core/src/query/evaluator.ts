@@ -2,27 +2,30 @@
 // Evaluates expressions of the Bases language over a note (Kumbu.Core Queries/Evaluator). As in Obsidian, what an
 // expression can't give for a note (a function, method or formula that doesn't exist, formulas in a circle, a calculation
 // between types that don't fit) is an error value in its cell, and it taints whatever uses it (bases spec 2026-11-25
-// decision 9); compiling names each unknown function, method and formula as a QueryWarning. Only what can't be read at
-// all (syntax, a regular expression that doesn't compile, the limits) is a QueryError, before any note is read. The cases
-// are in tests/query-conformance/expressions.
+// decision 9); compiling names each unknown function, method and formula, and each regular expression that is null, as a
+// QueryWarning. Only syntax, found before any note is read, and the limits are a QueryError. The cases are in
+// tests/query-conformance/expressions.
 import { RE2JS } from "re2js";
 import { foldCase } from "../links/text";
 import { QueryError, inExpression, type QueryWarning } from "./errors";
 import type { Expr, Operator } from "./expr";
+import { format, fromNow } from "./moment";
 import { ExpressionParser, isWhiteSpace } from "./parser";
 import type { QueryNote } from "./note";
 import { Properties } from "./properties";
 import {
-  NULL, asMilliseconds, booleanValue, dateValue, durationValue, errorValue, fileValue, formatNumber, listValue, noteRefValue,
-  numberValue, objectValue, regexValue, textValue, type Value,
+  NULL, asMilliseconds, booleanValue, dateValue, durationValue, errorValue, fileValue, formatNumber, linkValue, listValue,
+  noteRefValue, numberValue, objectValue, regexValue, textValue, type Value,
 } from "./value";
+import { QueryVault } from "./vault";
 
 /**
  * What an expression is evaluated for: the note of the row, the note the query is shown in (`this`, if any) and the clock
  * of the run, fixed so every row sees the same `now()`: a date and time without a zone, "yyyy-MM-ddTHH:mm:ss" with up to 7
- * fractional digits.
+ * fractional digits. `vault`: the files of the run, for what reaches beyond the row's file (file(), links, backlinks) and
+ * for random(); left out, the row's note and the one it is shown in.
  */
-export type Scope = { readonly note: QueryNote; readonly this: QueryNote | null; readonly now: string };
+export type Scope = { readonly note: QueryNote; readonly this: QueryNote | null; readonly now: string; readonly vault?: QueryVault };
 
 /** One function, method or field of the language: its name, how it is written, and what it gives. */
 export type LanguageEntry = { readonly name: string; readonly written: string; readonly gives: string };
@@ -31,36 +34,71 @@ const entry = (name: string, written: string, gives: string): LanguageEntry => (
 
 /** The functions, as `help query` shows them: the help and what compiles are one list, so they can't drift. */
 export const FunctionReference: readonly LanguageEntry[] = [
-  entry("if", "if(condition, then, else)", "then when the condition holds, else else; only the branch taken is evaluated"),
+  entry("if", "if(condition, then, else)", "then when the condition holds, else else (null without one); only the branch taken is evaluated"),
   entry("now", "now()", "the date of the run with its time, in your time zone"),
   entry("today", "today()", "the date of the run, without a time"),
-  entry("date", "date(text)", "the date a text writes, with its time if it has one (2026-11-23, 2026-11-23T14:00), else null"),
-  entry("number", "number(value)", "a number from a number, a checkbox (1 or 0) or a text, read as JavaScript's Number() reads it (12, 1e3, 0x1F, Infinity; the empty text is 0), else an error"),
-  entry("list", "list(value)", "the value as a list: a list stays one, null is the empty list"),
+  entry("date", "date(text)", "the date a text writes, with its time if it has one (2026-11-23, 2026-11-23 14:00), else null"),
   entry("duration", "duration(text)", "the duration a text writes, in the units a date takes (1d, 2 hours, 1y 2M); a text that writes none is an error"),
+  entry("number", "number(value)", "a number from a number, a checkbox (1 or 0), a date (milliseconds since 1970) or a text, read as JavaScript's Number() reads it (12, 1e3, 0x1F, Infinity; the empty text is 0), else an error"),
+  entry("list", "list(value)", "the value as a list: a list stays one, null stays null, anything else is a list of it"),
+  entry("max", "max(number, ...)", "the largest of the numbers, nulls left out"),
+  entry("min", "min(number, ...)", "the smallest of the numbers, nulls left out"),
+  entry("random", "random()", "a number from 0 up to 1, one per row for the whole run"),
+  entry("file", "file(path)", "the file of the vault at a path, or the one a link to it leads to ([[Ann]], a link, a file), else null"),
+  entry("link", "link(path, display)", "a link to the file a path leads to, as [[path]] would, showing display if given"),
+  entry("escapeHTML", "escapeHTML(text)", "the text with & < > \" ' written as HTML entities"),
 ];
 
 /** The methods, by what they are called on, as `help query` shows them. */
 export const MethodReference: readonly LanguageEntry[] = [
   entry("isEmpty", "any.isEmpty()", "true for null, the empty text, list or object"),
+  entry("isTruthy", "any.isTruthy()", "whether the value counts as true (not null, false, 0 or the empty text)"),
+  entry("isType", "any.isType(name)", "whether the value is of the type: string, number, boolean, date, duration, list, object, file, link or null"),
   entry("toString", "any.toString()", "the value as text"),
   entry("contains", "text.contains(text)", "whether the text holds the other, case counting"),
+  entry("containsAll", "text.containsAll(text, ...)", "whether the text holds every one of the others"),
+  entry("containsAny", "text.containsAny(text, ...)", "whether the text holds one of the others"),
   entry("startsWith", "text.startsWith(text)", "whether the text starts with the other"),
   entry("endsWith", "text.endsWith(text)", "whether the text ends with the other"),
   entry("lower", "text.lower()", "the text in lower case"),
-  entry("upper", "text.upper()", "the text in upper case"),
+  entry("title", "text.title()", "the text with each word's first letter in upper case"),
   entry("trim", "text.trim()", "the text without spaces at either end"),
-  entry("matches", "text.matches(/regex/flags)", "whether a regular expression matches (flags g, i, m, s, u)"),
+  entry("replace", "text.replace(pattern, text)", "the text with a text replaced everywhere, or a /regex/ the first time (everywhere with g); $1 is a group"),
+  entry("repeat", "text.repeat(count)", "the text that many times"),
+  entry("reverse", "text.reverse()", "the text backwards"),
+  entry("slice", "text.slice(start, end)", "the characters from start up to end (from the end when negative)"),
+  entry("split", "text.split(separator, limit)", "the parts between a text or a /regex/, at most limit of them"),
   entry("contains", "list.contains(value)", "whether the list holds the value"),
+  entry("containsAll", "list.containsAll(value, ...)", "whether the list holds every one of the values"),
+  entry("containsAny", "list.containsAny(value, ...)", "whether the list holds one of the values"),
+  entry("filter", "list.filter(condition)", "the items for which the condition holds; value is the item, index its place from 0"),
+  entry("map", "list.map(expression)", "each item turned into the expression's value, with value and index"),
+  entry("reduce", "list.reduce(expression, start)", "acc, from start, turned into the expression's value for each item in turn, with value and index"),
+  entry("flat", "list.flat()", "the list with the items of lists in it put in their place"),
   entry("join", "list.join(text)", "the items as one text, the text between them (a comma without one)"),
+  entry("reverse", "list.reverse()", "the items backwards"),
+  entry("slice", "list.slice(start, end)", "the items from start up to end (from the end when negative)"),
+  entry("sort", "list.sort()", "the items in order: numbers, dates and texts each in theirs, empty values last"),
+  entry("unique", "list.unique()", "the items, each once"),
   entry("abs", "number.abs()", "the number without its sign"),
   entry("floor", "number.floor()", "the number rounded down"),
   entry("ceil", "number.ceil()", "the number rounded up"),
-  entry("round", "number.round()", "the number rounded, halves up"),
+  entry("round", "number.round(digits)", "the number rounded, halves up, to so many digits after the point (none without)"),
+  entry("toFixed", "number.toFixed(digits)", "the number as text with so many digits after the point"),
   entry("date", "date.date()", "the date without its time"),
+  entry("format", "date.format(pattern)", "the date written in Moment's tokens (YYYY-MM-DD, D MMMM YYYY, HH:mm, [text] as it stands)"),
+  entry("time", "date.time()", "the time as HH:mm:ss"),
+  entry("relative", "date.relative()", "how far from now, in English (3 days ago, in an hour)"),
+  entry("keys", "object.keys()", "the keys as a list"),
+  entry("values", "object.values()", "the values as a list"),
+  entry("asFile", "link.asFile()", "the file the link leads to, null if it leads to none"),
+  entry("linksTo", "link.linksTo(file)", "whether the file the link leads to links to the file"),
+  entry("asLink", "file.asLink(display)", "a link to the file, showing display if given"),
+  entry("hasLink", "file.hasLink(file)", "whether the note links to the file (a file, a link or a path)"),
   entry("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it, ignoring case and a leading #"),
   entry("inFolder", "file.inFolder(folder)", "whether the file lies in the folder or below it"),
   entry("hasProperty", "file.hasProperty(name)", "whether the note's frontmatter has the property"),
+  entry("matches", "/regex/flags.matches(text)", "whether the regular expression matches the text (flags g, i, m, s, u; one RE2 can't run, such as lookaround, is null)"),
 ];
 
 /** The fields, by what they are read on. */
@@ -75,11 +113,19 @@ export const FieldReference: readonly LanguageEntry[] = [
   entry("mtime", "file.mtime", "when the file was last changed, a date with its time"),
   entry("tags", "file.tags", "the note's tags with their #, text and frontmatter; none for other files"),
   entry("properties", "file.properties", "the frontmatter as an object; empty for other files"),
+  entry("links", "file.links", "the links of the note's text, as links; embeds are in file.embeds"),
+  entry("embeds", "file.embeds", "the embeds of the note's text (![[photo.png]]), as links"),
+  entry("backlinks", "file.backlinks", "the files that link to this one"),
+  entry("file", "file.file", "the file itself"),
   entry("length", "text.length, list.length", "how many characters or items"),
-  entry("year", "date.year, .month, .day", "a date's parts, and .hour, .minute, .second (0 for a date without a time)"),
+  entry("year", "date.year, .month, .day", "a date's parts, and .hour, .minute, .second, .millisecond (0 for a date without a time)"),
 ];
 
 type BinaryExpr = Extract<Expr, { kind: "binary" }>;
+type CallExpr = Extract<Expr, { kind: "call" }>;
+type ListOf = Extract<Value, { kind: "list" }>;
+type FileOf = Extract<Value, { kind: "file" }>;
+type RegexOf = Extract<Value, { kind: "regex" }>;
 
 // && and || give a checkbox, as Obsidian's do (finding 12), and pass on an error of the side they had to read.
 const logical = (v: Value): Value => (v.kind === "error" ? v : booleanValue(truthy(v)));
@@ -93,15 +139,77 @@ function leftSpine(expr: BinaryExpr): BinaryExpr[] {
 
 const FUNCTIONS = new Set(FunctionReference.map((f) => f.name));
 const METHODS = new Set(MethodReference.map((m) => m.name));
+const LAMBDAS = new Set(["filter", "map", "reduce"]);
 
 const CYCLE = errorValue("Infinite loop detected in formula");
 
 type ErrorOf = Extract<Value, { kind: "error" }>;
 const firstError = (values: readonly Value[]): ErrorOf | undefined => values.find((v): v is ErrorOf => v.kind === "error");
 
+/** How large a value an expression may build for a note: its characters, and its items and keys, added up. A lambda or
+ * formulas that use each other twice double a value at each step, so without a bound a short expression could fill the
+ * tab's memory; a property's value is far smaller. */
+export const MAX_SIZE = 1_000_000;
+/** How many steps evaluating an expression for a note may take: each part evaluated, and each item a method goes
+ * through. Lambdas multiply the work (a map in a map), so it is bounded as the size is. */
+export const MAX_STEPS = 1_000_000;
+/** How deeply a value may nest, lists in lists: what compares, shows or measures a value walks it on the stack. */
+export const MAX_VALUE_DEPTH = 128;
+
+const tooLarge = (at: Expr) => new QueryError("too-large", `A value of the expression grows past ${MAX_SIZE.toLocaleString("en")} characters and items.`, at.position);
+
+// A list or an object is measured once, from its items' measures, so a value built of the same parts many times costs
+// what it holds once to measure.
+const measures = new WeakMap<Value, readonly [number, number]>();
+
+function measure(value: Value): readonly [size: number, depth: number] {
+  switch (value.kind) {
+    case "text": return [1 + value.text.length, 0];
+    case "file": return [1 + value.note.path.length, 0];
+    case "link": return [1 + value.path.length + (value.display?.length ?? 0), 0];
+    case "list":
+    case "object": {
+      const known = measures.get(value);
+      if (known !== undefined) return known;
+      let [total, deepest] = [1, 0];
+      const parts: Array<[string, Value]> = value.kind === "list" ? value.items.map((i) => ["", i]) : [...value.values];
+      for (const [key, part] of parts) {
+        const [size, depth] = measure(part);
+        total += key.length + size;
+        deepest = Math.max(deepest, depth);
+      }
+      const result = [total, deepest + 1] as const;
+      measures.set(value, result);
+      return result;
+    }
+    // A number, a date or a duration shows in a few characters.
+    default: return [8, 0];
+  }
+}
+
+function bounded(value: Value, at: Expr): void {
+  const [size, depth] = measure(value);
+  if (size > MAX_SIZE) throw tooLarge(at);
+  if (depth > MAX_VALUE_DEPTH) throw new QueryError("too-deep", `A value of the expression nests more than ${MAX_VALUE_DEPTH} levels deep.`, at.position);
+}
+
+// Items added up as they come, so a list too large fails before it is all built.
+function built(items: Iterable<Value>, at: Expr): ListOf {
+  const list: Value[] = [];
+  let size = 1;
+  for (const item of items) {
+    if ((size += measure(item)[0]) > MAX_SIZE) throw tooLarge(at);
+    list.push(item);
+  }
+  return { kind: "list", items: list };
+}
+
+// The items a lambda's body is evaluated for, the innermost last: value, index and, in reduce, acc.
+type Frame = { readonly value: Value; readonly index: number; readonly acc: Value | null };
+
 export class Evaluator {
   private readonly formulaExprs = new Map<string, Expr>();
-  private readonly regexes = new Map<Expr, RE2JS>();
+  private readonly regexes = new Map<Expr, RegexOf | null>();
   private readonly checkedLevels = new Map<string, number>();
   private deepest = 0;
   private readonly found: QueryWarning[] = [];
@@ -109,7 +217,10 @@ export class Evaluator {
   private readonly values = new Map<string, Value>();
   private readonly evaluating = new Set<string>();
   private level = 0;
+  private steps = 0;
+  private frames: Frame[] = [];
   private valuesFor: Scope | null = null;
+  private alone: { scope: Scope; vault: QueryVault } | null = null;
 
   constructor(private readonly formulaTexts: ReadonlyMap<string, string> = new Map()) {}
 
@@ -129,7 +240,8 @@ export class Evaluator {
     }
   }
 
-  /** What the expressions compiled so far name that doesn't exist, each once, in the order found. */
+  /** What the expressions compiled so far name that doesn't exist, and the regular expressions that are null, each once,
+   * in the order found. */
   get warnings(): readonly QueryWarning[] {
     return this.found;
   }
@@ -139,9 +251,11 @@ export class Evaluator {
   static readonly MAX_LEVELS = 512;
 
   /** Evaluates a compiled expression for a row; throws `QueryError` `too-deep` when it and the formulas it uses go more
-   * than `MAX_LEVELS` levels down. */
+   * than `MAX_LEVELS` levels down, `too-large` when it builds a value larger than `MAX_SIZE` or takes more than `MAX_STEPS`. */
   evaluate(expr: Expr, scope: Scope): Value {
     this.level = 0;
+    this.steps = 0;
+    this.frames = [];
     this.evaluating.clear();
     try {
       return this.eval(expr, scope);
@@ -158,11 +272,18 @@ export class Evaluator {
       throw new QueryError("too-deep", `The expression and the formulas it uses go more than ${Evaluator.MAX_LEVELS} levels deep.`, expr.position);
   }
 
+  private step(count: number, at: Expr): void {
+    if ((this.steps += count) > MAX_STEPS)
+      throw new QueryError("too-large", `The expression takes more than ${MAX_STEPS.toLocaleString("en")} steps for one note.`, at.position);
+  }
+
   // Counted here, not only in the check: a check cut short by a cycle, or by a formula checked before, can't see how deep
   // the formulas really go along this path.
   private eval(expr: Expr, scope: Scope): Value {
     this.down(expr);
+    this.step(1, expr);
     const value = this.valueOf(expr, scope);
+    bounded(value, expr);
     this.level--;
     return value;
   }
@@ -170,15 +291,18 @@ export class Evaluator {
   private valueOf(expr: Expr, scope: Scope): Value {
     switch (expr.kind) {
       case "literal": return expr.value;
-      case "name": return name(expr.name, scope);
+      case "name": return this.name(expr.name, scope);
       case "member":
         if (expr.target.kind === "name" && expr.target.name === "formula") return this.formulaValue(expr.name, scope);
-        return field(this.eval(expr.target, scope), expr.name);
+        return this.field(this.eval(expr.target, scope), expr.name, scope);
       case "index": return index(this.eval(expr.target, scope), this.eval(expr.index, scope));
       case "call":
         if (expr.callee.kind === "name") return this.call(expr.callee.name, expr.args, scope);
-        if (expr.callee.kind === "member")
-          return method(this.eval(expr.callee.target, scope), expr.callee.name, expr.args.map((a) => this.eval(a, scope)));
+        if (expr.callee.kind === "member") {
+          const target = this.eval(expr.callee.target, scope);
+          if (LAMBDAS.has(expr.callee.name)) return this.lambda(target, expr.callee.name, expr, scope);
+          return this.method(target, expr.callee.name, expr.args.map((a) => this.eval(a, scope)), scope, expr);
+        }
         return errorValue("Only a function or a method can be called");
       case "unary": {
         const operand = this.eval(expr.operand, scope);
@@ -196,26 +320,35 @@ export class Evaluator {
           if (operator === "And") value = !truthy(value) ? booleanValue(false) : logical(this.eval(right, scope));
           else if (operator === "Or") value = truthy(value) ? booleanValue(true) : logical(this.eval(right, scope));
           else value = binary(operator, value, this.eval(right, scope));
+          // Each step of a chain is a value of its own: "a" + "a" + ... grows at each.
+          bounded(value, spine[i]!);
         }
         return value;
       }
       case "list": {
-        const items = expr.items.map((i) => this.eval(i, scope));
-        return firstError(items) ?? listValue(items);
+        const items = built((function* (self: Evaluator) { for (const i of expr.items) yield self.eval(i, scope); })(this), expr);
+        return firstError(items.items) ?? items;
       }
       case "object": {
         // A key written twice keeps its first place and its last value.
         const last = new Map<string, Expr>();
         for (const [key, value] of expr.entries) last.set(key, value);
-        const values = new Map([...last].map(([key, value]) => [key, this.eval(value, scope)]));
+        const values = new Map<string, Value>();
+        let size = 1;
+        for (const [key, value] of last) {
+          const v = this.eval(value, scope);
+          values.set(key, v);
+          if ((size += key.length + measure(v)[0]) > MAX_SIZE) throw tooLarge(expr);
+        }
         return firstError([...values.values()]) ?? objectValue(values);
       }
-      case "regex": return regexValue(this.regexes.get(expr)!);
+      case "regex": return this.regexes.get(expr) ?? NULL;
     }
   }
 
   // A formula's value for a row is worked out once, however often the row's expressions use it; one that is asked for
-  // while it is being worked out uses itself, in a circle.
+  // while it is being worked out uses itself, in a circle. A formula is an expression of its own: a lambda's names don't
+  // reach into it, so its value is the same wherever it is used.
   private formulaValue(formulaName: string, scope: Scope): Value {
     const expr = this.formulaExprs.get(formulaName);
     if (expr === undefined) return errorValue(`Cannot find "${formulaName}" on type Formulas`);
@@ -227,10 +360,45 @@ export class Evaluator {
     if (value !== undefined) return value;
     if (this.evaluating.has(formulaName)) return CYCLE;
     this.evaluating.add(formulaName);
+    const outer = this.frames;
+    this.frames = [];
     value = this.eval(expr, scope);
+    this.frames = outer;
     this.evaluating.delete(formulaName);
     this.values.set(formulaName, value);
     return value;
+  }
+
+  // filter, map and reduce evaluate their first argument for each item, with value, index and (in reduce) acc as names;
+  // the body counts one level more than where it is written (bases spec 2026-11-25 decision 17).
+  private lambda(target: Value, methodName: string, call: CallExpr, scope: Scope): Value {
+    if (target.kind === "error" || target.kind === "null") return target;
+    if (target.kind !== "list") return noMethod(target, methodName);
+    const body = call.args[0];
+    if (body === undefined) return NULL;
+    let acc: Value | null = null;
+    if (methodName === "reduce") {
+      acc = call.args.length > 1 ? this.eval(call.args[1]!, scope) : NULL;
+      if (acc.kind === "error") return acc;
+    }
+    const results: Value[] = [];
+    let size = 1;
+    for (let i = 0; i < target.items.length; i++) {
+      this.frames.push({ value: target.items[i]!, index: i, acc });
+      this.down(body);
+      const value = this.eval(body, scope);
+      this.level--;
+      this.frames.pop();
+      if (value.kind === "error") return value;
+      if (methodName === "reduce") acc = value;
+      else if (methodName === "filter") {
+        if (truthy(value)) results.push(target.items[i]!);
+      } else {
+        if ((size += measure(value)[0]) > MAX_SIZE) throw tooLarge(call);
+        results.push(value);
+      }
+    }
+    return acc ?? listValue(results);
   }
 
   private warn(code: string, message: string, position: number): void {
@@ -245,14 +413,23 @@ export class Evaluator {
       case "call":
         if (expr.callee.kind === "name") {
           if (!FUNCTIONS.has(expr.callee.name)) this.warn("unknown-function", `There is no function '${expr.callee.name}'.`, expr.callee.position);
+          for (const a of expr.args) this.check(a, chain);
         } else if (expr.callee.kind === "member") {
-          if (!METHODS.has(expr.callee.name)) this.warn("unknown-method", `There is no method '${expr.callee.name}'.`, expr.callee.position);
+          const { name: methodName } = expr.callee;
+          if (!METHODS.has(methodName)) this.warn("unknown-method", `There is no method '${methodName}'.`, expr.callee.position);
           this.check(expr.callee.target, chain);
+          expr.args.forEach((a, i) => {
+            // A lambda's body is one level deeper, as when it is evaluated.
+            const body = i === 0 && LAMBDAS.has(methodName);
+            if (body) this.down(a);
+            this.check(a, chain);
+            if (body) this.level--;
+          });
         } else {
           this.warn("unknown-function", "Only a function or a method can be called.", expr.position);
           this.check(expr.callee, chain);
+          for (const a of expr.args) this.check(a, chain);
         }
-        for (const a of expr.args) this.check(a, chain);
         break;
       case "member":
         if (expr.target.kind === "name" && expr.target.name === "formula") this.formula(expr, chain);
@@ -279,7 +456,7 @@ export class Evaluator {
         for (const [, value] of expr.entries) this.check(value, chain);
         break;
       case "regex":
-        this.regexes.set(expr, compileRegex(expr.pattern, expr.flags, expr.position));
+        this.regexes.set(expr, this.compileRegex(expr.pattern, expr.flags, expr.position));
         break;
     }
     this.level--;
@@ -327,11 +504,107 @@ export class Evaluator {
     this.deepest = Math.max(outer, this.deepest);
   }
 
+  // Matching in linear time: a pattern is anyone's input, and backtracking would let one hang the tab. An unknown or
+  // repeated flag, a pattern that doesn't compile, and one that needs backtracking (lookaround, backreferences), which
+  // RE2 has not, are null, as Obsidian gives null for its own failures (bases spec 2026-11-25 decision 15); query check
+  // tells each.
+  private compileRegex(pattern: string, flags: string, position: number): RegexOf | null {
+    const flag = [...flags].find((f) => !"gimsu".includes(f) || flags.indexOf(f) !== flags.lastIndexOf(f));
+    if (flag !== undefined) {
+      this.warn("regex", `The regular expression has the unknown or repeated flag '${flag}' (flags are g, i, m, s, u), so it is null.`, position);
+      return null;
+    }
+    let options = 0;
+    if (flags.includes("i")) options |= RE2JS.CASE_INSENSITIVE;
+    if (flags.includes("m")) options |= RE2JS.MULTILINE;
+    if (flags.includes("s")) options |= RE2JS.DOTALL;
+    try {
+      return regexValue(RE2JS.compile(pattern, options), flags.includes("g")) as RegexOf;
+    } catch (e) {
+      this.warn("regex", `The regular expression doesn't compile or needs backtracking, which runs here in linear time only (no lookaround, no backreferences), so it is null: ${e instanceof Error ? e.message : String(e)}`, position);
+      return null;
+    }
+  }
+
+  private name(propertyName: string, scope: Scope): Value {
+    // value, index and acc are the lambda's where there is one; elsewhere they are properties.
+    const frame = this.frames[this.frames.length - 1];
+    if (frame !== undefined && propertyName === "value") return frame.value;
+    if (frame !== undefined && propertyName === "index") return numberValue(frame.index);
+    if (propertyName === "acc") {
+      for (let i = this.frames.length - 1; i >= 0; i--) if (this.frames[i]!.acc !== null) return this.frames[i]!.acc!;
+    }
+    switch (propertyName) {
+      case "file": return fileValue(scope.note);
+      case "note": return objectValue(scope.note.properties.values);
+      case "this": return scope.this !== null ? noteRefValue(scope.this) : NULL;
+      case "formula": return NULL;
+      default: return property(scope.note, propertyName);
+    }
+  }
+
+  // The files of the run; an expression evaluated on its own sees its note and the one it is shown in.
+  private vault(scope: Scope): QueryVault {
+    if (scope.vault !== undefined) return scope.vault;
+    if (this.alone?.scope !== scope) this.alone = { scope, vault: new QueryVault(scope.this === null ? [scope.note] : [scope.note, scope.this]) };
+    return this.alone.vault;
+  }
+
+  private field(value: Value, fieldName: string, scope: Scope): Value {
+    switch (value.kind) {
+      case "error":
+      case "null": return value;
+      case "file":
+        switch (fieldName) {
+          case "name": return textValue(value.note.isNote ? fileName(value.note.path).slice(0, -".md".length) : fileName(value.note.path));
+          case "basename": return textValue(baseName(fileName(value.note.path)));
+          case "path": return textValue(value.note.path);
+          case "folder": return textValue(folderOf(value.note.path));
+          case "ext": return textValue(extension(fileName(value.note.path)));
+          case "size": return numberValue(value.note.size);
+          case "ctime": return value.note.created === null ? NULL : dateValue(value.note.created);
+          case "mtime": return value.note.modified === null ? NULL : dateValue(value.note.modified);
+          case "tags": return listValue(value.note.tags.map(textValue));
+          case "properties": return objectValue(value.note.properties.values);
+          case "links":
+          case "embeds":
+            return listValue(this.vault(scope).linksOf(value.note).filter((l) => l.embed === (fieldName === "embeds")).map((l) => linkValue(l.path, null)));
+          case "backlinks": return listValue(this.vault(scope).backlinksOf(value.note).map(fileValue));
+          case "file": return value;
+          default: return noField(value, fieldName);
+        }
+      case "noteRef":
+        if (fieldName === "file") return fileValue(value.note);
+        if (fieldName === "note") return objectValue(value.note.properties.values);
+        return property(value.note, fieldName);
+      case "object": return value.values.get(fieldName) ?? NULL;
+      case "text": return fieldName === "length" ? numberValue(value.text.length) : noField(value, fieldName);
+      case "list": return fieldName === "length" ? numberValue(value.items.length) : noField(value, fieldName);
+      case "date": return part(value, fieldName);
+      default: return noField(value, fieldName);
+    }
+  }
+
   private call(functionName: string, args: readonly Expr[], scope: Scope): Value {
     const argument = (i: number): Value => (i < args.length ? this.eval(args[i]!, scope) : NULL);
     if (!FUNCTIONS.has(functionName)) return errorValue(`Cannot find function "${functionName}"`);
-    if (functionName === "now") return dateValue(scope.now);
-    if (functionName === "today") return dateValue(scope.now.slice(0, 10));
+    switch (functionName) {
+      case "now": return dateValue(scope.now);
+      case "today": return dateValue(scope.now.slice(0, 10));
+      case "random": return numberValue(this.vault(scope).random(scope.note));
+      case "max":
+      case "min": {
+        const all = args.map((a) => this.eval(a, scope));
+        const error = firstError(all);
+        if (error !== undefined) return error;
+        const other = all.find((v) => v.kind !== "number" && v.kind !== "null");
+        if (other !== undefined) return errorValue(`${functionName}() takes numbers, not ${typeName(other)}`);
+        const numbers = all.flatMap((v) => (v.kind === "number" ? [v.number] : []));
+        // As JavaScript's Math.max and Math.min: NaN wins.
+        if (numbers.length === 0) return NULL;
+        return numberValue(functionName === "max" ? Math.max(...numbers) : Math.min(...numbers));
+      }
+    }
     const first = argument(0);
     if (first.kind === "error") return first;
     switch (functionName) {
@@ -341,27 +614,223 @@ export class Evaluator {
       case "number":
         if (first.kind === "number") return first;
         if (first.kind === "boolean") return numberValue(first.boolean ? 1 : 0);
+        // A date has no zone, so its milliseconds are counted as if it were UTC.
+        if (first.kind === "date") return numberValue(millisecondsBetween(first.moment, "1970-01-01T00:00:00"));
         return first.kind === "text" ? numberOf(first.text) : NULL;
       case "duration": return first.kind === "text" ? durationOf(first.text) : first.kind === "duration" ? first : NULL;
-      default: // list
-        return first.kind === "list" ? first : first.kind === "null" ? listValue([]) : listValue([first]);
+      case "list": return first.kind === "list" || first.kind === "null" ? first : listValue([first]);
+      case "file": return this.fileOf(first, scope);
+      case "link": {
+        const shown = argument(1);
+        if (shown.kind === "error") return shown;
+        return this.linkOf(first, shown.kind === "null" ? null : display(shown), scope);
+      }
+      default: // escapeHTML
+        return first.kind === "null" ? first : textValue(escapeHtml(display(first)));
     }
+  }
+
+  // A path, a link or a file as the file it leads to: a text is read as a link from the row's note is ([[Ann]], Ann, People/Ann.md).
+  private fileOf(v: Value, scope: Scope): Value {
+    const vault = this.vault(scope);
+    switch (v.kind) {
+      case "file": return v;
+      case "noteRef": return fileValue(v.note);
+      case "link": {
+        const file = vault.file(v.path);
+        return file === null ? NULL : fileValue(file);
+      }
+      case "text": {
+        const path = vault.resolve(scope.note, wikilink(v.text).target);
+        return path === null ? NULL : fileValue(vault.file(path)!);
+      }
+      default: return NULL;
+    }
+  }
+
+  private linkOf(v: Value, shown: string | null, scope: Scope): Value {
+    switch (v.kind) {
+      case "file":
+      case "noteRef": return linkValue(v.note.path, shown);
+      case "link": return linkValue(v.path, shown ?? v.display);
+      case "text": {
+        const { target, display: inner } = wikilink(v.text);
+        return linkValue(this.vault(scope).resolve(scope.note, target) ?? target, shown ?? inner);
+      }
+      default: return NULL;
+    }
+  }
+
+  private method(target: Value, methodName: string, args: readonly Value[], scope: Scope, at: Expr): Value {
+    const argument = (i: number): Value => args[i] ?? NULL;
+    const textArgument = (i: number): string | null => {
+      const a = argument(i);
+      return a.kind === "text" ? a.text : null;
+    };
+    const numberArgument = (i: number): number | null => {
+      const a = argument(i);
+      return a.kind === "number" ? a.number : null;
+    };
+    const texts = (): string[] | null => (args.every((a) => a.kind === "text") ? args.map((a) => (a as { text: string }).text) : null);
+    const bool = (b: boolean | null): Value => (b === null ? NULL : booleanValue(b));
+    if (target.kind === "error") return target;
+    const error = firstError(args);
+    if (error !== undefined) return error;
+    // What a method goes through counts as steps: a long list or text, many times, is work.
+    this.step(target.kind === "list" ? target.items.length : target.kind === "text" ? Math.floor(target.text.length / 64) : 0, at);
+
+    switch (methodName) {
+      case "isEmpty":
+        switch (target.kind) {
+          case "null": return booleanValue(true);
+          case "text": return booleanValue(target.text.length === 0);
+          case "list": return booleanValue(target.items.length === 0);
+          case "object": return booleanValue(target.values.size === 0);
+          default: return booleanValue(false);
+        }
+      case "isTruthy": return booleanValue(truthy(target));
+      case "isType": {
+        const type = textArgument(0);
+        return bool(type === null ? null : typeOf(target) === type);
+      }
+    }
+    if (target.kind === "null") return NULL;
+    if (methodName === "toString") return textValue(display(target));
+    const missing = () => noMethod(target, methodName);
+
+    switch (target.kind) {
+      case "text": {
+        const text = target.text;
+        switch (methodName) {
+          case "contains": return bool(textArgument(0) === null ? null : text.includes(textArgument(0)!));
+          case "containsAll": return bool(texts()?.every((s) => text.includes(s)) ?? null);
+          case "containsAny": return bool(texts()?.some((s) => text.includes(s)) ?? null);
+          case "startsWith": return bool(textArgument(0) === null ? null : text.startsWith(textArgument(0)!));
+          case "endsWith": return bool(textArgument(0) === null ? null : text.endsWith(textArgument(0)!));
+          case "lower": return textValue(text.toLowerCase());
+          case "title": return textValue(title(text));
+          case "trim": return textValue(trim(text));
+          case "replace": return replace(text, argument(0), argument(1), at);
+          case "repeat": {
+            const count = numberArgument(0);
+            return count === null ? NULL : repeat(text, count, at);
+          }
+          case "reverse": return textValue(codePoints(text).reverse().join(""));
+          case "slice": {
+            const range = slice(text.length, argument(0), argument(1));
+            return range === null ? NULL : textValue(text.slice(range[0], range[1]));
+          }
+          case "split": {
+            const limit = argument(1);
+            if (limit.kind !== "number" && limit.kind !== "null") return NULL;
+            return split(text, argument(0), limit) ?? NULL;
+          }
+          default: return missing();
+        }
+      }
+      case "list": {
+        const { items } = target;
+        switch (methodName) {
+          case "contains": return booleanValue(items.some((i) => equal(i, argument(0))));
+          case "containsAll": return booleanValue(args.every((a) => items.some((i) => equal(i, a))));
+          case "containsAny": return booleanValue(args.some((a) => items.some((i) => equal(i, a))));
+          case "flat": return built(items.flatMap((i) => (i.kind === "list" ? i.items : [i])), at);
+          case "join": return join(target, textArgument(0) ?? ",", at);
+          case "reverse": return listValue([...items].reverse());
+          case "slice": {
+            const range = slice(items.length, argument(0), argument(1));
+            return range === null ? NULL : listValue(items.slice(range[0], range[1]));
+          }
+          case "sort": return listValue([...items].sort(sorted));
+          case "unique": {
+            const seen = new Set<string>();
+            return listValue(items.filter((i) => !seen.has(key(i)) && seen.add(key(i)) !== undefined));
+          }
+          default: return missing();
+        }
+      }
+      case "number":
+        switch (methodName) {
+          case "abs": return numberValue(Math.abs(target.number));
+          case "floor": return numberValue(Math.floor(target.number));
+          case "ceil": return numberValue(Math.ceil(target.number));
+          case "round": {
+            const digits = integer(numberArgument(0) ?? 0);
+            return numberValue(digits !== 0 ? round(target.number * 10 ** digits) / 10 ** digits : round(target.number));
+          }
+          case "toFixed": return toFixed(target.number, numberArgument(0) ?? 0);
+          default: return missing();
+        }
+      case "date":
+        switch (methodName) {
+          case "date": return dateValue(target.moment.slice(0, 10));
+          case "format": return textArgument(0) === null ? NULL : textValue(format(target.moment, textArgument(0)!));
+          case "time": return textValue(target.moment.slice(11, 19));
+          case "relative": return textValue(fromNow(target.moment, scope.now));
+          default: return missing();
+        }
+      case "object":
+        switch (methodName) {
+          case "keys": return listValue([...target.values.keys()].map(textValue));
+          case "values": return listValue([...target.values.values()]);
+          default: return missing();
+        }
+      case "link": {
+        const file = this.vault(scope).file(target.path);
+        switch (methodName) {
+          case "asFile": return file === null ? NULL : fileValue(file);
+          case "linksTo": return file === null ? booleanValue(false) : bool(this.linksTo(file, argument(0), scope));
+          default: return missing();
+        }
+      }
+      case "file":
+        switch (methodName) {
+          case "asLink": return linkValue(target.note.path, argument(0).kind === "null" ? null : display(argument(0)));
+          case "hasLink": return bool(this.linksTo(target.note, argument(0), scope));
+          case "hasTag": return booleanValue(args.some((a) => a.kind === "text" && hasTag(target.note, a.text)));
+          case "inFolder": return bool(textArgument(0) === null ? null : inFolder(target.note.path, textArgument(0)!));
+          case "hasProperty": return bool(textArgument(0) === null ? null : target.note.properties.values.has(textArgument(0)!));
+          default: return missing();
+        }
+      case "regex":
+        return methodName === "matches" ? bool(textArgument(0) === null ? null : (target.regex as RE2JS).matcher(textArgument(0)!).find()) : missing();
+      default: return missing();
+    }
+  }
+
+  // Whether the note links to a file, a link's file or a path read as a link from it; null for anything else.
+  private linksTo(note: QueryNote, other: Value, scope: Scope): boolean | null {
+    const vault = this.vault(scope);
+    let path: string | null;
+    switch (other.kind) {
+      case "file":
+      case "noteRef": path = other.note.path; break;
+      case "link": path = other.path; break;
+      case "text": {
+        const { target } = wikilink(other.text);
+        path = vault.resolve(note, target) ?? target;
+        break;
+      }
+      default: path = null;
+    }
+    return path === null ? null : vault.linksOf(note).some((l) => l.path === path);
   }
 }
 
-// Matching in linear time: a pattern is anyone's input, and backtracking would let one hang the tab. RE2 has no
-// backtracking and no lookaround; what it rejects is the regex error, as the server's non-backtracking engine does.
-function compileRegex(pattern: string, flags: string, position: number): RE2JS {
-  let options = 0;
-  if (flags.includes("i")) options |= RE2JS.CASE_INSENSITIVE;
-  if (flags.includes("m")) options |= RE2JS.MULTILINE;
-  if (flags.includes("s")) options |= RE2JS.DOTALL;
-  try {
-    return RE2JS.compile(pattern, options);
-  } catch (e) {
-    throw new QueryError("regex", `The regular expression doesn't compile: ${e instanceof Error ? e.message : String(e)}`, position);
-  }
+// A text as a wikilink: [[target#heading|display]], the brackets optional; the heading names no other file.
+function wikilink(text: string): { target: string; display: string | null } {
+  let inner = trim(text);
+  if (inner.startsWith("[[") && inner.endsWith("]]")) inner = inner.slice(2, -2);
+  let shown: string | null = null;
+  const bar = inner.indexOf("|");
+  if (bar >= 0) [inner, shown] = [inner.slice(0, bar), inner.slice(bar + 1)];
+  const hash = inner.indexOf("#");
+  if (hash >= 0) inner = inner.slice(0, hash);
+  return { target: trim(inner), display: shown };
 }
+
+const escapeHtml = (text: string): string =>
+  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 
 // A text as JavaScript's Number() reads it: decimal with an exponent, Infinity, 0x, 0o and 0b; the empty text is 0. Trimmed
 // as the server trims, so both engines read the same texts: what Number() would trim beyond that (U+FEFF) is no number.
@@ -369,16 +838,6 @@ function numberOf(text: string): Value {
   const trimmed = trim(text);
   const n = /^\s|\s$/.test(trimmed) ? NaN : Number(trimmed);
   return Number.isNaN(n) ? errorValue(`Unable to parse "${text}" as a number.`) : numberValue(n);
-}
-
-function name(propertyName: string, scope: Scope): Value {
-  switch (propertyName) {
-    case "file": return fileValue(scope.note);
-    case "note": return objectValue(scope.note.properties.values);
-    case "this": return scope.this !== null ? noteRefValue(scope.this) : NULL;
-    case "formula": return NULL;
-    default: return property(scope.note, propertyName);
-  }
 }
 
 const property = (note: QueryNote, propertyName: string): Value => note.properties.values.get(propertyName) ?? NULL;
@@ -390,37 +849,8 @@ const folderOf = (path: string) => (path.lastIndexOf("/") >= 0 ? path.slice(0, p
 const baseName = (file: string) => (file.lastIndexOf(".") >= 0 ? file.slice(0, file.lastIndexOf(".")) : file);
 const extension = (file: string) => (file.lastIndexOf(".") >= 0 && file.lastIndexOf(".") < file.length - 1 ? file.slice(file.lastIndexOf(".") + 1) : "");
 
-function field(value: Value, fieldName: string): Value {
-  switch (value.kind) {
-    case "error":
-    case "null": return value;
-    case "file":
-      switch (fieldName) {
-        case "name": return textValue(value.note.isNote ? fileName(value.note.path).slice(0, -".md".length) : fileName(value.note.path));
-        case "basename": return textValue(baseName(fileName(value.note.path)));
-        case "path": return textValue(value.note.path);
-        case "folder": return textValue(folderOf(value.note.path));
-        case "ext": return textValue(extension(fileName(value.note.path)));
-        case "size": return numberValue(value.note.size);
-        case "ctime": return value.note.created === null ? NULL : dateValue(value.note.created);
-        case "mtime": return value.note.modified === null ? NULL : dateValue(value.note.modified);
-        case "tags": return listValue(value.note.tags.map(textValue));
-        case "properties": return objectValue(value.note.properties.values);
-        default: return noField(value, fieldName);
-      }
-    case "noteRef":
-      if (fieldName === "file") return fileValue(value.note);
-      if (fieldName === "note") return objectValue(value.note.properties.values);
-      return property(value.note, fieldName);
-    case "object": return value.values.get(fieldName) ?? NULL;
-    case "text": return fieldName === "length" ? numberValue(value.text.length) : noField(value, fieldName);
-    case "list": return fieldName === "length" ? numberValue(value.items.length) : noField(value, fieldName);
-    case "date": return part(value, fieldName);
-    default: return noField(value, fieldName);
-  }
-}
-
 const noField = (value: Value, fieldName: string): Value => errorValue(`Cannot find "${fieldName}" on type ${typeName(value)}`);
+const noMethod = (value: Value, methodName: string): Value => errorValue(`Cannot find function "${methodName}" on type ${typeName(value)}`);
 
 /** A value's type as Obsidian's messages name it. */
 export function typeName(value: Value): string {
@@ -434,9 +864,20 @@ export function typeName(value: Value): string {
     case "object": return "Object";
     case "file":
     case "noteRef": return "File";
+    case "link": return "Link";
     case "regex": return "RegExp";
     case "duration": return "Duration";
     case "error": return "Error";
+  }
+}
+
+// The names isType takes, which the reference doesn't list: the types' own, in lower case.
+function typeOf(value: Value): string {
+  switch (value.kind) {
+    case "text": return "string";
+    case "noteRef": return "file";
+    case "regex": return "regexp";
+    default: return value.kind;
   }
 }
 
@@ -450,6 +891,7 @@ function part(date: Value & { kind: "date" }, partName: string): Value {
     case "hour": return numberValue(Number(moment.slice(11, 13)));
     case "minute": return numberValue(Number(moment.slice(14, 16)));
     case "second": return numberValue(Number(moment.slice(17, 19)));
+    case "millisecond": return numberValue(Number(moment.slice(20, 23).padEnd(3, "0")));
     default: return noField(date, partName);
   }
 }
@@ -481,69 +923,237 @@ function trim(text: string): string {
   return text.slice(start, end);
 }
 
-function method(target: Value, methodName: string, args: readonly Value[]): Value {
-  const argument = (i: number): Value => args[i] ?? NULL;
-  const textArgument = (i: number): string | null => {
-    const a = argument(i);
-    return a.kind === "text" ? a.text : null;
+// JavaScript's Math.round, written as the server's engine rounds: halves go up, so -2.5 rounds to -2.
+const round = (n: number) => Math.floor(n + 0.5);
+
+// JavaScript's ToIntegerOrInfinity, which the indices and counts of its methods go through.
+const integer = (n: number) => (Number.isNaN(n) ? 0 : Math.trunc(n));
+
+// The range JavaScript's slice takes: negative indices count from the end, and an end before the start is empty.
+function slice(length: number, start: Value, end: Value): [number, number] | null {
+  const at = (v: Value, otherwise: number): number => {
+    if (v.kind !== "number") return otherwise;
+    const i = integer(v.number);
+    return i < 0 ? Math.max(length + i, 0) : Math.min(i, length);
   };
-  const bool = (b: boolean | null): Value => (b === null ? NULL : booleanValue(b));
-  const missing = (): Value => errorValue(`Cannot find function "${methodName}" on type ${typeName(target)}`);
-  if (target.kind === "error") return target;
-  const error = firstError(args);
-  if (error !== undefined) return error;
+  if ((start.kind !== "number" && start.kind !== "null") || (end.kind !== "number" && end.kind !== "null")) return null;
+  const [from, to] = [at(start, 0), at(end, length)];
+  return [from, Math.max(from, to)];
+}
 
-  if (methodName === "isEmpty") {
-    switch (target.kind) {
-      case "null": return booleanValue(true);
-      case "text": return booleanValue(target.text.length === 0);
-      case "list": return booleanValue(target.items.length === 0);
-      case "object": return booleanValue(target.values.size === 0);
-      default: return booleanValue(false);
-    }
+function repeat(text: string, count: number, at: Expr): Value {
+  const n = integer(count);
+  if (n < 0 || !Number.isFinite(n)) return errorValue(`Invalid count value: ${formatNumber(count)}`);
+  if (text.length * n > MAX_SIZE) throw tooLarge(at);
+  return textValue(text.repeat(n));
+}
+
+// Each word's first letter in upper case, the rest as it is; a word starts after white space. One unit for one, as .NET
+// changes case, so a letter whose upper case is two (ß) stays.
+function title(text: string): string {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    const upper = c.toUpperCase();
+    result += (i === 0 || isWhiteSpace(text[i - 1]!)) && upper.length === 1 ? upper : c;
   }
-  if (target.kind === "null") return NULL;
-  if (methodName === "toString") return textValue(display(target));
+  return result;
+}
 
-  switch (target.kind) {
-    case "text":
-      switch (methodName) {
-        case "contains": return bool(textArgument(0) === null ? null : target.text.includes(textArgument(0)!));
-        case "startsWith": return bool(textArgument(0) === null ? null : target.text.startsWith(textArgument(0)!));
-        case "endsWith": return bool(textArgument(0) === null ? null : target.text.endsWith(textArgument(0)!));
-        case "lower": return textValue(target.text.toLowerCase());
-        case "upper": return textValue(target.text.toUpperCase());
-        case "trim": return textValue(trim(target.text));
-        case "matches": {
-          const r = argument(0);
-          return r.kind === "regex" ? booleanValue((r.regex as RE2JS).test(target.text)) : NULL;
+// The code points of a text, a lone surrogate as one of its own.
+function codePoints(text: string): string[] {
+  const points: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const pair = /[\uD800-\uDBFF]/.test(text[i]!) && i + 1 < text.length && /[\uDC00-\uDFFF]/.test(text[i + 1]!);
+    points.push(text.slice(i, pair ? i + 2 : i + 1));
+    if (pair) i++;
+  }
+  return points;
+}
+
+function join(list: ListOf, separator: string, at: Expr): Value {
+  const parts: string[] = [];
+  let length = 0;
+  list.items.forEach((item, i) => {
+    const shown = display(item);
+    length += (i > 0 ? separator.length : 0) + shown.length;
+    if (length > MAX_SIZE) throw tooLarge(at);
+    parts.push(shown);
+  });
+  return textValue(parts.join(separator));
+}
+
+// A match as JavaScript's replace and split see it: where it starts, its text, and its groups (null where a group took no part).
+type Found = { index: number; text: string; groups: Array<string | null>; named: Map<string, string | null> | null };
+
+function* matches(text: string, pattern: Value, all: boolean): Generator<Found> {
+  if (pattern.kind === "text") {
+    // A text matches where it stands, the empty one before every character and at the end.
+    const step = Math.max(pattern.text.length, 1);
+    for (let at = text.indexOf(pattern.text); at >= 0;) {
+      yield { index: at, text: pattern.text, groups: [], named: null };
+      if (!all) return;
+      at = at + step > text.length ? -1 : text.indexOf(pattern.text, at + step);
+    }
+    return;
+  }
+  const regex = (pattern as RegexOf).regex as RE2JS;
+  const names = Object.entries(regex.namedGroups());
+  const m = regex.matcher(text);
+  for (let start = 0; start <= text.length;) {
+    if (!m.find(start)) return;
+    const groups = Array.from({ length: m.groupCount() }, (_, i) => m.group(i + 1));
+    yield { index: m.start(), text: m.group()!, groups, named: names.length === 0 ? null : new Map(names.map(([n, i]) => [n, m.group(i)])) };
+    if (!all) return;
+    // An empty match moves on by one, as JavaScript's lastIndex does.
+    start = m.start() + Math.max(m.end() - m.start(), 1);
+  }
+}
+
+function replace(text: string, pattern: Value, replacement: Value, at: Expr): Value {
+  if ((pattern.kind !== "text" && pattern.kind !== "regex") || replacement.kind !== "text") return NULL;
+  let result = "";
+  let done = 0;
+  for (const found of matches(text, pattern, pattern.kind === "text" || pattern.global)) {
+    result += text.slice(done, found.index) + substitute(replacement.text, text, found);
+    if (result.length > MAX_SIZE) throw tooLarge(at);
+    done = found.index + found.text.length;
+  }
+  return textValue(result + text.slice(done));
+}
+
+const isDigit = (c: string | undefined) => c !== undefined && c >= "0" && c <= "9";
+
+// JavaScript's GetSubstitution: $$, $&, $`, $', $1 to $99 and $<name>; anything else stays as written.
+function substitute(template: string, text: string, found: Found): string {
+  let into = "";
+  for (let i = 0; i < template.length; i++) {
+    const next = template[i + 1];
+    if (template[i] !== "$" || next === undefined) {
+      into += template[i];
+      continue;
+    }
+    if (next === "$") into += "$";
+    else if (next === "&") into += found.text;
+    else if (next === "`") into += text.slice(0, found.index);
+    else if (next === "'") into += text.slice(Math.min(found.index + found.text.length, text.length));
+    else if (isDigit(next)) {
+      let two = isDigit(template[i + 2]);
+      let index = two ? Number(next) * 10 + Number(template[i + 2]) : Number(next);
+      if (two && index > found.groups.length) [two, index] = [false, Number(next)];
+      into += index >= 1 && index <= found.groups.length ? found.groups[index - 1] ?? "" : template.slice(i, i + (two ? 3 : 2));
+      i += two ? 2 : 1;
+      continue;
+    } else if (next === "<" && found.named !== null && template.indexOf(">", i + 2) > 0) {
+      const close = template.indexOf(">", i + 2);
+      into += found.named.get(template.slice(i + 2, close)) ?? "";
+      i = close;
+      continue;
+    } else {
+      into += "$";
+      continue;
+    }
+    i++;
+  }
+  return into;
+}
+
+// JavaScript's split: by a text (the empty one splits every character) or a regular expression, whose groups join the
+// parts; at most limit parts, which counts as JavaScript's ToUint32 does.
+function split(text: string, separator: Value, limit: Value): Value | null {
+  const most = limit.kind === "number" ? (Number.isFinite(limit.number) ? ((Math.trunc(limit.number) % 4294967296) + 4294967296) % 4294967296 : 0) : 4294967295;
+  const parts: Value[] = [];
+  const add = (part: Value): boolean => {
+    if (parts.length >= most) return false;
+    parts.push(part);
+    return true;
+  };
+  if (most === 0) return listValue(parts);
+  switch (separator.kind) {
+    case "null":
+      add(textValue(text));
+      return listValue(parts);
+    case "text": {
+      if (separator.text === "") {
+        for (const c of text.split("")) if (!add(textValue(c))) break;
+        return listValue(parts);
+      }
+      let done = 0;
+      for (const found of matches(text, separator, true)) {
+        if (!add(textValue(text.slice(done, found.index)))) return listValue(parts);
+        done = found.index + found.text.length;
+      }
+      add(textValue(text.slice(done)));
+      return listValue(parts);
+    }
+    case "regex": {
+      const regex = separator.regex as RE2JS;
+      const m = regex.matcher(text);
+      if (text.length === 0) return listValue(m.find(0) ? [] : [textValue(text)]);
+      let [p, q] = [0, 0];
+      while (q < text.length) {
+        if (!m.find(q)) break;
+        const [start, e] = [m.start(), m.end()];
+        // An empty match where the part starts, or one at the very end, splits nothing.
+        if (e === p || start >= text.length) {
+          q = start + 1;
+          continue;
         }
-        default: return missing();
+        if (!add(textValue(text.slice(p, start)))) return listValue(parts);
+        for (let g = 1; g <= m.groupCount(); g++) {
+          const group = m.group(g);
+          if (!add(group === null ? NULL : textValue(group))) return listValue(parts);
+        }
+        [p, q] = [e, e === start ? e + 1 : e];
       }
-    case "list":
-      switch (methodName) {
-        case "contains": return booleanValue(target.items.some((i) => equal(i, argument(0))));
-        case "join": return textValue(target.items.map(display).join(textArgument(0) ?? ","));
-        default: return missing();
-      }
-    case "number":
-      switch (methodName) {
-        case "abs": return numberValue(Math.abs(target.number));
-        case "floor": return numberValue(Math.floor(target.number));
-        case "ceil": return numberValue(Math.ceil(target.number));
-        // Halves go up, as the server's engine rounds (floor(x + 0.5)): -2.5 becomes -2.
-        case "round": return numberValue(Math.floor(target.number + 0.5));
-        default: return missing();
-      }
-    case "date": return methodName === "date" ? dateValue(target.moment.slice(0, 10)) : missing();
+      add(textValue(text.slice(p)));
+      return listValue(parts);
+    }
+    default: return null;
+  }
+}
+
+// JavaScript's toFixed, so many digits after the point; from 1e21 on the number as it is written otherwise.
+function toFixed(x: number, digits: number): Value {
+  const f = integer(digits);
+  if (f < 0 || f > 100) return errorValue("toFixed() digits argument must be between 0 and 100");
+  if (Number.isNaN(x) || Math.abs(x) >= 1e21) return textValue(formatNumber(x));
+  return textValue(x.toFixed(f));
+}
+
+// list.sort(): within a type as compare orders them, types by their rank, empty values and then errors last.
+function sorted(a: Value, b: Value): number {
+  const last = (v: Value) => (v.kind === "null" ? 1 : v.kind === "error" ? 2 : 0);
+  if (last(a) !== last(b)) return last(a) - last(b);
+  return compare(a, b) ?? rank(a) - rank(b);
+}
+
+/** Where a value of a type goes among those of other types, in a sort. */
+export function rank(v: Value): number {
+  switch (v.kind) {
+    case "number": return 0;
+    case "duration": return 1;
+    case "date": return 2;
+    case "text": return 3;
+    case "boolean": return 4;
+    case "link": return 5;
+    default: return 6;
+  }
+}
+
+// What makes two items of list.unique() the same: their type and value, without the conversions == makes, so 1 and "1"
+// stay two, as a JavaScript Set keeps them. A text has its length before it, so no text can end where another part begins.
+function key(v: Value): string {
+  const prefixed = (kind: string, text: string) => `${kind}${text.length}:${text}`;
+  switch (v.kind) {
+    case "text": return prefixed("t", v.text);
+    case "number": return `n${v.number === 0 ? "0" : formatNumber(v.number)}`;
+    case "list": return `[${v.items.map(key).join(",")}]`;
+    case "object": return `{${[...v.values].map(([k, value]) => prefixed("", k) + key(value)).join(",")}}`;
     case "file":
-      switch (methodName) {
-        case "hasTag": return booleanValue(args.some((a) => a.kind === "text" && hasTag(target.note, a.text)));
-        case "inFolder": return bool(textArgument(0) === null ? null : inFolder(target.note.path, textArgument(0)!));
-        case "hasProperty": return bool(textArgument(0) === null ? null : target.note.properties.values.has(textArgument(0)!));
-        default: return missing();
-      }
-    default: return missing();
+    case "noteRef": return prefixed("f", v.note.path);
+    case "link": return prefixed("l", v.path);
+    default: return `${typeOf(v)}:${display(v)}`;
   }
 }
 
@@ -731,8 +1341,10 @@ export function equal(a: Value, b: Value): boolean {
     case "text": return b.kind === "text" && a.text === b.text;
     case "boolean": return b.kind === "boolean" && a.boolean === b.boolean;
     case "date": return b.kind === "date" && a.moment === b.moment;
-    case "file": return b.kind === "file" && a.note.path === b.note.path;
-    case "noteRef": return b.kind === "noteRef" && a.note.path === b.note.path;
+    // A link equals another, or the file, that it leads to: author == this holds where author links to the query note.
+    case "file": return (b.kind === "file" && a.note.path === b.note.path) || (b.kind === "link" && b.path === a.note.path);
+    case "noteRef": return (b.kind === "noteRef" && a.note.path === b.note.path) || (b.kind === "link" && b.path === a.note.path);
+    case "link": return (b.kind === "link" && a.path === b.path) || ((b.kind === "file" || b.kind === "noteRef") && a.path === b.note.path);
     case "list": return b.kind === "list" && a.items.length === b.items.length && a.items.every((item, i) => equal(item, b.items[i]!));
     case "object":
       return b.kind === "object" && a.values.size === b.values.size
@@ -749,6 +1361,7 @@ export function compare(a: Value, b: Value): number | null {
   if (a.kind === "text" && b.kind === "text") return a.text < b.text ? -1 : a.text > b.text ? 1 : 0;
   // Both written as "yyyy-MM-ddTHH:mm:ss[.fraction]" with the fraction's trailing zeros gone, so ordering the text orders the moments.
   if (a.kind === "date" && b.kind === "date") return a.moment < b.moment ? -1 : a.moment > b.moment ? 1 : 0;
+  if (a.kind === "link" && b.kind === "link") return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
   return null;
 }
 
@@ -777,6 +1390,7 @@ export function display(v: Value): string {
     case "object": return `{${[...v.values].map(([key, value]) => `${key}: ${display(value)}`).join(", ")}}`;
     case "file":
     case "noteRef": return v.note.path;
+    case "link": return v.display ?? v.path;
     case "regex": return v.regex.toString();
     case "duration": return formatNumber(asMilliseconds(v));
     case "error": return `error: ${v.message}`;

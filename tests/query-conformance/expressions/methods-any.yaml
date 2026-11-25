@@ -1,0 +1,32 @@
+description: Every value has isTruthy, isType and toString; isType takes the names string, number, boolean, date, duration, list, object, file, link and null.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    name: Ann
+    zero: 0
+    birthday: 1980-11-03
+    tags: [a]
+    obj: { a: 1 }
+    ---
+cases:
+  - { expression: (1).isTruthy(), values: { Ann.md: boolean true } }
+  - { expression: zero.isTruthy(), values: { Ann.md: boolean false } }
+  - { expression: '"".isTruthy()', values: { Ann.md: boolean false } }
+  - { expression: '[].isTruthy()', values: { Ann.md: boolean true } }
+  - { expression: missing.isTruthy(), values: { Ann.md: boolean false } }
+  - { expression: '"example".isType("string")', values: { Ann.md: boolean true } }
+  - { expression: 'true.isType("boolean")', values: { Ann.md: boolean true } }
+  - { expression: 'zero.isType("number")', values: { Ann.md: boolean true } }
+  - { expression: 'birthday.isType("date")', values: { Ann.md: boolean true } }
+  - { expression: 'duration("1d").isType("duration")', values: { Ann.md: boolean true } }
+  - { expression: 'tags.isType("list")', values: { Ann.md: boolean true } }
+  - { expression: 'obj.isType("object")', values: { Ann.md: boolean true } }
+  - { expression: 'file.isType("file")', values: { Ann.md: boolean true } }
+  - { expression: 'file.asLink().isType("link")', values: { Ann.md: boolean true } }
+  - { expression: 'missing.isType("null")', values: { Ann.md: boolean true } }
+  - { expression: 'zero.isType("string")', values: { Ann.md: boolean false } }
+  - { expression: 'name.isType("String")', values: { Ann.md: boolean false } }
+  - { expression: (123).toString(), values: { Ann.md: text 123 } }
+  - { expression: true.toString(), values: { Ann.md: text true } }
+  - { expression: missing.toString(), values: { Ann.md: null } }

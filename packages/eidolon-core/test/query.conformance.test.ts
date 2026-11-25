@@ -12,6 +12,7 @@ import { QueryError, QuerySyntaxError } from "../src/query/errors";
 import { QueryNote } from "../src/query/note";
 import { Properties } from "../src/query/properties";
 import { Query, type QueryParam } from "../src/query/query";
+import { QueryVault } from "../src/query/vault";
 import { asMilliseconds, formatNumber, type Value } from "../src/query/value";
 
 const ME = "ts";
@@ -80,6 +81,7 @@ function describeValue(value: Value): string {
     case "list": return `[${value.items.map(describeValue).join(", ")}]`;
     case "object": return `{${describeMap([...value.values].map(([k, v]) => [k, describeValue(v)])).join(", ")}}`;
     case "file": return `file ${value.note.path}`;
+    case "link": return value.display === null ? `link ${value.path}` : `link ${value.path}|${value.display}`;
     case "error": return `error ${value.message}`;
     default: throw new Error(`Cannot describe a ${value.kind}.`);
   }
@@ -167,13 +169,17 @@ function expressions(root: Case): void {
   const self = root.this === undefined ? null : notes.get(text(root.this))!;
   const now = root.now === undefined ? DEFAULT_NOW : text(root.now);
 
+  // One run: random() is one number per note across the case's expressions.
+  const vault = new QueryVault(notes.values());
   for (const c of list(root.cases).map(map)) {
     const source = text(c.expression);
     const evaluator = new Evaluator(formulas);
     if (c.error !== undefined) {
       let code = "none";
       try {
-        evaluator.compile(source);
+        // Most errors of the query come from compiling; the limits of what an expression builds come from evaluating it.
+        const compiled = evaluator.compile(source);
+        for (const note of notes.values()) evaluator.evaluate(compiled, { note, this: self, now, vault });
       } catch (e) {
         code = codeOf(e);
       }
@@ -185,7 +191,7 @@ function expressions(root: Case): void {
     const expected = map(c.values);
     expect(Object.keys(expected).length, `${source}: a value for every note.`).toBe(notes.size);
     for (const [path, value] of Object.entries(expected))
-      expect(shown(value, evaluator.evaluate(expr, { note: notes.get(path)!, this: self, now })), `${source} on ${path}`).toBe(describeExpected(value));
+      expect(shown(value, evaluator.evaluate(expr, { note: notes.get(path)!, this: self, now, vault })), `${source} on ${path}`).toBe(describeExpected(value));
   }
 }
 

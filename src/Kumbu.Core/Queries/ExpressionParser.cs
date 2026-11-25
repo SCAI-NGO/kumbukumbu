@@ -13,8 +13,6 @@ public sealed class ExpressionParser
     public const int MaxLength = 10_000;
     public const int MaxDepth = 64;
 
-    private const string RegexFlags = "gimsu";
-
     private readonly string text;
     private int at;
     private int depth;
@@ -269,13 +267,9 @@ public sealed class ExpressionParser
 
         if (at >= text.Length || text[at] != '/') throw new QuerySyntaxError("The regular expression is unterminated.", start);
         at++;
+        // Any letters are its flags: an unknown or repeated one makes it null, not a syntax error, as in Obsidian.
         var flags = at;
-        while (char.IsAsciiLetter(Peek()))
-        {
-            if (!RegexFlags.Contains(Peek()) || text.IndexOf(Peek(), flags, at - flags) >= 0)
-                throw new QuerySyntaxError($"Unknown or repeated flag '{Peek()}' of the regular expression: use {string.Join(", ", RegexFlags.ToCharArray())}.", at);
-            at++;
-        }
+        while (char.IsAsciiLetter(Peek())) at++;
 
         return new RegexExpr(pattern.ToString(), text[flags..at], start);
     }

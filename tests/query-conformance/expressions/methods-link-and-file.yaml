@@ -1,0 +1,48 @@
+description: A file's links and embeds are those of its text, resolved as a link from it is, and its backlinks the files whose links lead to it; links are equal when they lead to the same file.
+source: spec
+notes:
+  People/Ann.md: |
+    ---
+    role: lead
+    ---
+    Works with [[Brita]] and [Cem](../Cem.md).
+    ![[photo.png]]
+  People/Brita.md: |
+    Back to [[Ann]].
+  Cem.md: ""
+  People/photo.png: png
+cases:
+  - expression: file.links
+    values: { People/Ann.md: [link People/Brita.md, link Cem.md], People/Brita.md: [link People/Ann.md], Cem.md: [], People/photo.png: [] }
+  - expression: file.embeds
+    values: { People/Ann.md: [link People/photo.png], People/Brita.md: [], Cem.md: [], People/photo.png: [] }
+  - expression: file.backlinks
+    values: { People/Ann.md: [file People/Brita.md], People/Brita.md: [file People/Ann.md], Cem.md: [file People/Ann.md], People/photo.png: [file People/Ann.md] }
+  - expression: file.hasLink("Brita")
+    values: { People/Ann.md: boolean true, People/Brita.md: boolean false, Cem.md: boolean false, People/photo.png: boolean false }
+  - expression: file.hasLink(file("Cem.md"))
+    values: { People/Ann.md: boolean true, People/Brita.md: boolean false, Cem.md: boolean false, People/photo.png: boolean false }
+  - expression: file.asLink()
+    values: { People/Ann.md: link People/Ann.md, People/Brita.md: link People/Brita.md, Cem.md: link Cem.md, People/photo.png: link People/photo.png }
+  - expression: file.asLink("A")
+    values: { People/Ann.md: link People/Ann.md|A, People/Brita.md: link People/Brita.md|A, Cem.md: link Cem.md|A, People/photo.png: link People/photo.png|A }
+  - expression: file.asLink().asFile()
+    values: { People/Ann.md: file People/Ann.md, People/Brita.md: file People/Brita.md, Cem.md: file Cem.md, People/photo.png: file People/photo.png }
+  - expression: link("Nowhere").asFile()
+    values: { People/Ann.md: null, People/Brita.md: null, Cem.md: null, People/photo.png: null }
+  - expression: link("Brita").linksTo(file("People/Ann.md"))
+    values: { People/Ann.md: boolean true, People/Brita.md: boolean true, Cem.md: boolean true, People/photo.png: boolean true }
+  - expression: link("Brita").linksTo(file("Cem.md"))
+    values: { People/Ann.md: boolean false, People/Brita.md: boolean false, Cem.md: boolean false, People/photo.png: boolean false }
+  - expression: link("Brita") == link("People/Brita.md")
+    values: { People/Ann.md: boolean true, People/Brita.md: boolean true, Cem.md: boolean true, People/photo.png: boolean true }
+  - expression: link("Brita") == file("People/Brita.md")
+    values: { People/Ann.md: boolean true, People/Brita.md: boolean true, Cem.md: boolean true, People/photo.png: boolean true }
+  - expression: file.asLink() == link("Cem")
+    values: { People/Ann.md: boolean false, People/Brita.md: boolean false, Cem.md: boolean true, People/photo.png: boolean false }
+  - expression: file.file
+    values: { People/Ann.md: file People/Ann.md, People/Brita.md: file People/Brita.md, Cem.md: file Cem.md, People/photo.png: file People/photo.png }
+  - expression: file.links.length
+    values: { People/Ann.md: number 2, People/Brita.md: number 1, Cem.md: number 0, People/photo.png: number 0 }
+  - expression: file.hasProperty("role")
+    values: { People/Ann.md: boolean true, People/Brita.md: boolean false, Cem.md: boolean false, People/photo.png: boolean false }

@@ -1,0 +1,13 @@
+description: An object gives its keys and its values as lists, in the order written, and is empty without keys.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    obj: { b: 2, a: 1 }
+    ---
+cases:
+  - { expression: obj.keys(), values: { Ann.md: [text b, text a] } }
+  - { expression: obj.values(), values: { Ann.md: [number 2, number 1] } }
+  - { expression: obj.isEmpty(), values: { Ann.md: boolean false } }
+  - { expression: '{}.isEmpty()', values: { Ann.md: boolean true } }
+  - { expression: file.properties.keys(), values: { Ann.md: [text obj] } }

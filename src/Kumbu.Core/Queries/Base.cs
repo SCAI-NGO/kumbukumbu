@@ -115,9 +115,11 @@ public sealed class Base
             ? int.TryParse(l, out var n) && n >= 0 ? n : throw Invalid("limit is not a whole number.")
             : int.MaxValue;
 
-        var rows = notes
+        var files = notes.ToList();
+        var vault = new QueryVault(files);
+        var rows = files
             .OrderBy(note => note.Path, StringComparer.Ordinal)
-            .Select(note => new Scope(note, self, now))
+            .Select(note => new Scope(note, self, now) { Vault = vault })
             .Where(scope => filter.All(f => f(scope) == true))
             .Select(scope => (Scope: scope, Keys: sort.Select(k => evaluator.Evaluate(k.Expr, scope)).ToList()))
             .ToList();
@@ -185,7 +187,7 @@ public sealed class Base
                     return Last(a).CompareTo(Last(b));
                 }
 
-                var order = Evaluator.Compare(a, b) ?? Rank(a).CompareTo(Rank(b));
+                var order = Evaluator.Compare(a, b) ?? Evaluator.Rank(a).CompareTo(Evaluator.Rank(b));
                 if (order != 0) return descending[i] ? -order : order;
             }
 
@@ -198,16 +200,6 @@ public sealed class Base
             NullValue => 1,
             ErrorValue => 2,
             _ => 0,
-        };
-
-        private static int Rank(Value v) => v switch
-        {
-            NumberValue => 0,
-            DurationValue => 1,
-            DateValue => 2,
-            TextValue => 3,
-            BooleanValue => 4,
-            _ => 5,
         };
     }
 

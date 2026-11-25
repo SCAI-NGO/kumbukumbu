@@ -298,6 +298,24 @@ public class QueryCommandTests
     }
 
     [Fact]
+    public async Task Check_warns_of_each_regular_expression_that_is_null_and_the_query_still_runs()
+    {
+        _store.AddTextFile("/V/Patterns.base", """
+            views:
+              - type: table
+                name: Patterns
+                order: ['file.name + /a(?=b)/.matches(file.name)', 'file.name + /a/x.matches(file.name)']
+            """);
+
+        var check = (await Run("query check /V/Patterns.base")).Output.Split('\n');
+
+        Assert.Equal("/V/Patterns.base: ok, 1 view (Patterns), 0 parameters; 2 warnings", check[0]);
+        Assert.StartsWith("warning: view Patterns: regex in 'file.name + /a(?=b)/.matches(file.name)' at 12: The regular expression doesn't compile or needs backtracking", check[1]);
+        Assert.Equal("warning: view Patterns: regex in 'file.name + /a/x.matches(file.name)' at 12: The regular expression has the unknown or repeated flag 'x' (flags are g, i, m, s, u), so it is null.", check[2]);
+        Assert.False((await Run("query execute /V/Patterns.base")).IsError);
+    }
+
+    [Fact]
     public async Task Check_gives_the_warnings_beside_the_errors_of_a_query_that_can_t_run()
     {
         _store.AddTextFile("/V/Both.base", "formulas:\n  loud: name.shout()\nviews:\n  - type: table\n    name: Loud\n    order: [formula.loud]\n  - type: table\n    name: Broken\n    filters: \"a &\"\n");

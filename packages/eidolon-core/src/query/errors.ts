@@ -10,8 +10,8 @@ export class QuerySyntaxError extends Error {
 }
 
 /**
- * A query that can't run: an expression that doesn't parse or nests too deeply, a regular expression that doesn't compile,
- * a base that can't be read, a call that doesn't fit the query. `code` is the same for every engine (the conformance cases compare
+ * A query that can't run: an expression that doesn't parse, nests too deeply or builds too much for a note, a base that
+ * can't be read, a call that doesn't fit the query. `code` is the same for every engine (the conformance cases compare
  * it); the message is for people. `expression` is where `position` counts in, once known.
  */
 export class QueryError extends Error {

@@ -52,8 +52,8 @@ test("a regular expression literal keeps an escaped slash and reads its flags", 
   expect(parse("/a\\/b/i")).toMatchObject({ kind: "regex", pattern: "a\\/b", flags: "i" });
   expect(parse("/x/gimsu")).toMatchObject({ flags: "gimsu" });
   expect(failure("/abc").message).toBe("The regular expression is unterminated.");
-  expect(failure("/a/ii").message).toBe("Unknown or repeated flag 'i' of the regular expression: use g, i, m, s, u.");
-  expect(failure("/a/x").message).toMatch(/Unknown or repeated flag 'x'/);
+  // An unknown or repeated flag is the evaluator's to make null, not a syntax error.
+  expect(parse("/a/ix")).toMatchObject({ kind: "regex", pattern: "a", flags: "ix" });
 });
 
 test("a name is letters, digits and underscores, as .NET counts them", () => {

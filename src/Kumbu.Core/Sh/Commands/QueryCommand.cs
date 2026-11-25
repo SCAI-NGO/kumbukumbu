@@ -81,7 +81,10 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         The language (JavaScript's operators: == != < <= > >= + - * / % && || !). && || and ! give
         true or false; a text that reads as a number compares as that number, and - * / % read it
         as one; a date plus or minus "1d", "2 hours" or "1y 2M" is a date (units y M w d h m s, or
-        their names), a date minus a date a duration, shown in milliseconds:
+        their names), a date minus a date a duration, shown in milliseconds. A regular expression
+        is /pattern/flags, and matches through its own method: /^ann/i.matches(name). In filter,
+        map and reduce, value is the item, index its place and acc (reduce) what came so far:
+        tags.filter(value.startsWith("#project")), nums.reduce(acc + value, 0):
         {Reference("Functions", Evaluator.FunctionReference)}
         {Reference("Methods", Evaluator.MethodReference)}
         {Reference("Fields", Evaluator.FieldReference)}
@@ -90,8 +93,9 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           hasn't, a formula that doesn't exist or uses itself, a calculation between types that don't
           fit, number() of a text that isn't one. Whatever uses an error is that error; a filter that
           gives one drops the row; a sort puts it after the empty values. null passes through most
-          of it: a method or field of null is null. Only what can't be read (syntax, a regular
-          expression that doesn't compile, the limits) is an error of the query.
+          of it: a method or field of null is null. A regular expression that doesn't compile or
+          needs backtracking is null, and query check says so. Only what can't be read (syntax) and
+          the limits (too-deep, too-large) are an error of the query.
 
           query ls
           query inspect Birthdays

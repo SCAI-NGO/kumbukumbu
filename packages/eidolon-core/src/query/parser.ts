@@ -9,8 +9,6 @@ import { NULL, booleanValue, numberValue, textValue } from "./value";
 export const MAX_LENGTH = 10_000;
 export const MAX_NESTING = 64;
 
-const REGEX_FLAGS = "gimsu";
-
 // .NET's char.IsLetter, IsLetterOrDigit (decimal digits only) and IsWhiteSpace, on one UTF-16 unit.
 const LETTER = /^\p{L}$/u;
 const LETTER_OR_DIGIT = /^[\p{L}\p{Nd}]$/u;
@@ -245,13 +243,9 @@ class Parser {
 
     if (this.at >= this.text.length || this.text[this.at] !== "/") throw new QuerySyntaxError("The regular expression is unterminated.", start);
     this.at++;
+    // Any letters are its flags: an unknown or repeated one makes it null, not a syntax error, as in Obsidian.
     const flags = this.at;
-    while (isAsciiLetter(this.peek())) {
-      if (!REGEX_FLAGS.includes(this.peek()) || this.text.slice(flags, this.at).includes(this.peek()))
-        throw new QuerySyntaxError(
-          `Unknown or repeated flag '${this.peek()}' of the regular expression: use ${[...REGEX_FLAGS].join(", ")}.`, this.at);
-      this.at++;
-    }
+    while (isAsciiLetter(this.peek())) this.at++;
 
     return { kind: "regex", pattern, flags: this.text.slice(flags, this.at), position: start };
   }

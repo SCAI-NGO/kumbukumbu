@@ -1,0 +1,20 @@
+description: Numbers round, to digits too, as JavaScript's Math.round does (halves up), and toFixed writes them as JavaScript's toFixed does.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    n: 2.3333
+    m: -2.5
+    ---
+cases:
+  - { expression: (2.5).round(), values: { Ann.md: number 3 } }
+  - { expression: m.round(), values: { Ann.md: number -2 } }
+  - { expression: n.round(2), values: { Ann.md: number 2.33 } }
+  - { expression: (3.14159).toFixed(2), values: { Ann.md: text 3.14 } }
+  - { expression: (2.5).toFixed(0), values: { Ann.md: text 3 } }
+  - { expression: m.toFixed(0), values: { Ann.md: text -3 } }
+  - { expression: (1.005).toFixed(2), values: { Ann.md: text 1.00 } }
+  - { expression: (0.000001).toFixed(7), values: { Ann.md: text 0.0000010 } }
+  - { expression: (1).toFixed(101), values: { Ann.md: error } }
+  - { expression: m.abs(), values: { Ann.md: number 2.5 } }
+  - { expression: n.isEmpty(), values: { Ann.md: boolean false } }
