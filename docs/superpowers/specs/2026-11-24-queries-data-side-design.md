@@ -13,14 +13,18 @@ Notes carry typed properties (a person's `birthday`, a task's `status`), and Obs
 3. **A query is a Markdown note** (`type: query`, a `params:` schema, prose, one or more ` ```base ` blocks); a `.base` file is a query too, without parameters ([ADR 0026](../../adr/0026-a-query-is-a-note-its-arguments-bound-into-this.md)). *Why:* queries are knowledge, versioned, linkable and in the graph; Obsidian renders the embedded base natively.
 4. **A call's arguments are bound into `this`**, over the query note's own properties. *Why:* in Obsidian, `this` is the note a base is shown in; a query that reads `this.month` renders in Obsidian through the note it is embedded in, with that note's `month`. A separate `param.*` namespace would not render there.
 5. **The ` ```base ` block stays pure Bases.** Kumbu²'s additions live in the frontmatter (`params:`). *Why:* an unknown function makes the whole base fail in Obsidian.
-6. **One rule for failures.** What no note can fix (an unknown function or method, a formula that doesn't exist or uses itself, a regular expression that doesn't compile, a base that isn't one, a schema that isn't one, a missing or wrong argument) is an error with a code, before any note is read; a value of the wrong type in a note gives null. *Why:* messy notes are normal; a broken query is the author's to fix, and the code tells an agent what to fix.
+6. **One rule for failures.** What no note can fix (an unknown function or method, a formula that doesn't exist or uses itself, a regular expression that doesn't compile, a base that isn't one, a schema that isn't one, a missing or wrong argument) is an error with a code, before any note is read; a value of the wrong type in a note gives null. *Why:* messy notes are normal; a broken query is the author's to fix, and the code tells an agent what to fix. *Superseded* by [Bases follow Obsidian](2026-11-25-bases-follow-obsidian-design.md) (2026-11-25), decisions 9, 21 and 22: an error in a cell is a value, as in Obsidian, and Kumbu² reports it beside the rows.
 7. **Two engines, one set of cases.** The C# engine (`src/Kumbu.Core/Queries`) and, later in 0.8.0, the TypeScript one of the offline mode (`packages/eidolon-core`) are held to the same language-neutral cases in `tests/query-conformance/` (its README has the format). *Why:* two implementations of one semantics drift unless one set of cases holds them both.
 
 ## 3. Values and types
 
+*Changed* by [Bases follow Obsidian](2026-11-25-bases-follow-obsidian-design.md) §2: declared types don't change a base's values, and there is one date type.
+
 A property's type comes from the vault's `.obsidian/types.json` where it declares one (`birthday: date`), else from how the value is written (a plain `11` is a number, a quoted `"11"` text). `tags`, `aliases` and `cssclasses` are lists of text in every vault. A value that doesn't fit its declared type stays the text it is. Types: text, multitext (a list of text), number, checkbox, date, datetime (without a zone, as Obsidian keeps it). Cases: `properties/`.
 
 ## 4. The language
+
+*Changed* by [Bases follow Obsidian](2026-11-25-bases-follow-obsidian-design.md) §3–4: the functions and methods are Obsidian's, comparisons coerce as Obsidian's do. The limits below hold.
 
 The Bases expression language: JavaScript precedence; `file.*` (name, basename, path, folder, ext, and `hasTag`, `inFolder`, `hasProperty`), `note.*` and bare property names, `formula.*`, `this.*`; dates with fields (`birthday.month`, `birthday.day`); text, list and number methods; `if`, `now`, `today`, `date`, `number`, `list`; regular expressions `/…/gimsu`, matched in linear time. Cases: `expressions/`.
 
@@ -28,7 +32,7 @@ Limits, since an expression is anyone's input: 10,000 characters, 64 levels of n
 
 ## 5. Bases
 
-Global `filters` and a view's own, groups `and`, `or`, `not` (none of its items); `formulas`; views with `order` (the columns), `sort` (stable, empty values last in both directions, ties by path), `limit`. A view without a name is called "View N". No views: a table of `file.name`. Cases: `bases/`.
+Global `filters` and a view's own, groups `and`, `or`, `not` (none of its items); `formulas`; views with `order` (the columns), `sort` (stable, empty values last in both directions, ties by path), `limit`. A view without a name makes the whole base an error, and only `ASC` and `DESC` sort (*changed* by [Bases follow Obsidian](2026-11-25-bases-follow-obsidian-design.md) §5). No views: a table of `file.name`. Cases: `bases/`.
 
 ## 6. Query notes and parameters
 
@@ -84,7 +88,7 @@ No tool per query (fifty queries would be fifty tools); one command, the agent f
 | `query properties [path]` | The properties below a path: name, type (declared, or as the values are written), how many notes have it. Without knowing there is a date `birthday` in `People/`, nobody writes a good query. |
 | `help query` | The language: functions, methods and fields, from the evaluator's own lists, so the help never drifts from what runs. |
 
-`<query>` is a path, or a name: the file name of exactly one marked query in the caller's vaults (ignoring case); two with the name is an error listing both. A query runs over the notes of its own vault, archived notes left out, with its vault's `types.json`. Arguments are untrusted input (an agent may have read them on a web page): they are only ever values, never expressions.
+`<query>` is a path, or a name: the file name of exactly one marked query in the caller's vaults (ignoring case); two with the name is an error listing both. A query runs over the files of its own vault, archived notes included (*changed* by [Bases follow Obsidian](2026-11-25-bases-follow-obsidian-design.md) §1), with its vault's `types.json`. Arguments are untrusted input (an agent may have read them on a web page): they are only ever values, never expressions.
 
 A system skill **`create-query`** (as `create-skill`) teaches the format, the `params:` schema, the rule that the base block stays pure Bases, a few examples, and the loop write → `query check` → `query execute`. *Why:* Bases is from 2025, models know it in patches, and Kumbu²'s additions not at all.
 
@@ -98,4 +102,4 @@ A system skill **`create-query`** (as `create-skill`) teaches the format, the `p
 
 ## 9. Later
 
-The web UI (a form from `params:`, results as table and cards; UX session first); embeddable text properties and semantic queries; views beyond the table; summaries.
+The web UI (a form from `params:`, results as table and cards; UX session first); views beyond the table; summaries.

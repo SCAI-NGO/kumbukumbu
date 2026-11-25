@@ -82,7 +82,7 @@ runs:
     error: missing-param   # or no-base, params, unknown-param, param-value, and the bases' codes
 ```
 
-`source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian. Where Obsidian gives another result, the case takes Obsidian's ([ADR 0028](../../docs/adr/0028-bases-follow-obsidian.md)).
+`source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian. Where Obsidian gives another result, the case takes Obsidian's ([ADR 0039](../../docs/adr/0039-bases-follow-obsidian.md)).
 
 ## Values
 
