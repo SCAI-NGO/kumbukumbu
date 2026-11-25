@@ -24,7 +24,7 @@ A property's type comes from the vault's `.obsidian/types.json` where it declare
 
 The Bases expression language: JavaScript precedence; `file.*` (name, basename, path, folder, ext, and `hasTag`, `inFolder`, `hasProperty`), `note.*` and bare property names, `formula.*`, `this.*`; dates with fields (`birthday.month`, `birthday.day`); text, list and number methods; `if`, `now`, `today`, `date`, `number`, `list`; regular expressions `/…/gimsu`, matched in linear time. Cases: `expressions/`.
 
-Limits, since an expression is anyone's input: 10,000 characters, 64 levels of nesting (parser and formulas), no backtracking in regular expressions; a base or frontmatter of at most 10,000 YAML values and 64 levels, so anchors can't expand into millions.
+Limits, since an expression is anyone's input: 10,000 characters, 64 levels of nesting (parser and formulas; a chain's steps, `.name`, `[index]` and a call, count as levels, so an expression's tree is never deeper whatever its length, and operator chains are walked in a loop), each formula checked once and worked out once per row (formulas that use one another twice per level would otherwise cost twice as much per level), no backtracking in regular expressions; a base or frontmatter of at most 10,000 YAML values and 64 levels, so anchors can't expand into millions.
 
 ## 5. Bases
 
@@ -88,6 +88,8 @@ No tool per query (fifty queries would be fifty tools); one command, the agent f
 
 A system skill **`create-query`** (as `create-skill`) teaches the format, the `params:` schema, the rule that the base block stays pure Bases, a few examples, and the loop write → `query check` → `query execute`. *Why:* Bases is from 2025, models know it in patches, and Kumbu²'s additions not at all.
 
+**The offline engine.** The same language runs in the browser's offline mode: `packages/eidolon-core/src/query/` (a TypeScript port of `Kumbu.Core/Queries`, held to the same cases in `tests/query-conformance`, runner `packages/eidolon-core/test/query.conformance.test.ts`). It reads YAML with the `yaml` package (ISC), which keeps each scalar's source text and style, so a plain `2026-11-03` and a quoted one stay what they are, as in YamlDotNet; aliases are resolved under the same budget as the server's (10,000 nodes, 64 levels). It matches regular expressions with `re2js` (MIT, RE2 in pure JavaScript), never the browser's own `RegExp`: a pattern is anyone's input, and a backtracking engine would let a query note in a shared vault hang a reader's tab; the server's counterpart is .NET's non-backtracking engine ([ADR 0034](../../adr/0034-offline-queries-match-regular-expressions-in-linear-time.md)); the two share a common core of the syntax and differ at its edges (see the ADR), so a pattern that keeps to the core behaves the same. *Why a port, not a shared core:* the server stays C# and the offline mode must run without it, so two implementations hold one semantics, and one set of cases keeps them from drifting.
+
 ## 8. Security
 
 - Every query reads only what the caller's shell reads: the same note reader, scoped to the caller's vaults.
@@ -96,4 +98,4 @@ A system skill **`create-query`** (as `create-skill`) teaches the format, the `p
 
 ## 9. Later
 
-The TypeScript evaluator for the offline mode (after the C# one has fixed the semantics); the web UI (a form from `params:`, results as table and cards; UX session first); embeddable text properties and semantic queries; views beyond the table; summaries.
+The web UI (a form from `params:`, results as table and cards; UX session first); embeddable text properties and semantic queries; views beyond the table; summaries.

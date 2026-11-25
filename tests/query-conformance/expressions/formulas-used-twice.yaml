@@ -1,0 +1,39 @@
+description: A formula used twice is worked out once, so 30 formulas that each use the next twice run at once and give 2 to the 30th.
+source: spec
+formulas:
+  f0: formula.f1 + formula.f1
+  f1: formula.f2 + formula.f2
+  f2: formula.f3 + formula.f3
+  f3: formula.f4 + formula.f4
+  f4: formula.f5 + formula.f5
+  f5: formula.f6 + formula.f6
+  f6: formula.f7 + formula.f7
+  f7: formula.f8 + formula.f8
+  f8: formula.f9 + formula.f9
+  f9: formula.f10 + formula.f10
+  f10: formula.f11 + formula.f11
+  f11: formula.f12 + formula.f12
+  f12: formula.f13 + formula.f13
+  f13: formula.f14 + formula.f14
+  f14: formula.f15 + formula.f15
+  f15: formula.f16 + formula.f16
+  f16: formula.f17 + formula.f17
+  f17: formula.f18 + formula.f18
+  f18: formula.f19 + formula.f19
+  f19: formula.f20 + formula.f20
+  f20: formula.f21 + formula.f21
+  f21: formula.f22 + formula.f22
+  f22: formula.f23 + formula.f23
+  f23: formula.f24 + formula.f24
+  f24: formula.f25 + formula.f25
+  f25: formula.f26 + formula.f26
+  f26: formula.f27 + formula.f27
+  f27: formula.f28 + formula.f28
+  f28: formula.f29 + formula.f29
+  f29: formula.f30 + formula.f30
+  f30: "1"
+notes:
+  Ann.md: ""
+cases:
+  - { expression: formula.f0, values: { Ann.md: number 1073741824 } }
+  - { expression: formula.f0 + formula.f0, values: { Ann.md: number 2147483648 } }

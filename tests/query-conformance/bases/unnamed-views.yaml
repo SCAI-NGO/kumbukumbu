@@ -1,6 +1,6 @@
 description: A view without a name makes the whole base an error, its named views too.
 source: obsidian 1.15.1
-pending: [cs]
+pending: [cs, ts]
 notes:
   Ann.md: |
     ---

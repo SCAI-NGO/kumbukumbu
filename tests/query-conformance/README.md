@@ -1,6 +1,6 @@
 # Query conformance cases
 
-The cases every query implementation of Kumbu² is held to: the C# engine in `src/Kumbu.Core/Queries` (runner: `tests/Kumbu.Core.Tests/Queries/ConformanceTests.cs`) and, from 0.8.0 on, the offline engine in `packages/eidolon-core`. A case is written once, here, and never copied into a test of either side; each side has one runner that reads every file below this folder. Why: two implementations of one semantics drift unless one set of cases holds them both.
+The cases every query implementation of Kumbu² is held to: the C# engine in `src/Kumbu.Core/Queries` (runner: `tests/Kumbu.Core.Tests/Queries/ConformanceTests.cs`) and, from 0.8.0 on, the offline engine in `packages/eidolon-core/src/query` (runner: `packages/eidolon-core/test/query.conformance.test.ts`). A case is written once, here, and never copied into a test of either side; each side has one runner that reads every file below this folder. Why: two implementations of one semantics drift unless one set of cases holds them both.
 
 What a person sees as a result belongs here: how a note's properties are typed, which rows a query gives and in what order, which error it gives. What only one implementation has inside (its parser, its limits, its storage) keeps ordinary unit tests on its own side.
 
@@ -24,7 +24,7 @@ expect:
       birthday: date 1980-11-03
   problems:           # optional: the notes whose frontmatter can't be read
     - People/Broken.md
-pending: [ts]         # optional: implementations that don't pass it yet; never skipped silently
+pending: [ts]         # optional: implementations that don't pass it yet (cs, ts); each runner skips it visibly, never silently
 ```
 
 A case about expressions (in `expressions/`) gives a list of `cases` instead of `expect`, each an expression with its value for every note, or the error the expression is:
@@ -100,4 +100,4 @@ A typed value is written as its type and its normalised text, so a comparison te
 | a YAML map of values | an object |
 | `file People/Ann.md` | a note's file, as `file` and `this.file` give it |
 
-A runner fails on an empty folder and on a file it can't read.
+A runner fails on an empty folder and on a file it can't read; the offline runner also fails on a folder below this one that it doesn't know.

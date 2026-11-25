@@ -1,6 +1,6 @@
 description: hasTag finds frontmatter and inline tags, nested ones under their parent, ignoring case and a leading '#'; file.tags gives them with their '#'; inFolder includes subfolders.
 source: obsidian 1.15.1
-pending: [cs]
+pending: [cs, ts]
 notes:
   People/Ann.md: |
     ---

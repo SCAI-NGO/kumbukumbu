@@ -94,8 +94,10 @@ public sealed class ExpressionParser
         return new UnaryExpr(op, operand, start);
     }
 
+    // Each step of a chain (.name, [index], a call) is a level, held until the chain ends: its tree nests one deeper per step.
     private Expr Postfix(Expr expr)
     {
+        var steps = 0;
         while (true)
         {
             SkipSpace();
@@ -119,8 +121,12 @@ public sealed class ExpressionParser
                     expr = new CallExpr(expr, Items(')'), start);
                     break;
                 default:
+                    depth -= steps;
                     return expr;
             }
+
+            Enter();
+            steps++;
         }
     }
 

@@ -2,7 +2,7 @@
 // The Eidolon core's boundary (offline mode design §2a): it is to be taken out of Kumbu² as a library, so its code
 // imports nothing of the web app, of React or of Obsidian, and depends only on packages under permissive licences.
 // The DOM is kept out by tsconfig.json, which gives the code no DOM types.
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,8 +66,21 @@ test("the core's code imports nothing of the web app, React, Obsidian or Node", 
 
 test("every package the core depends on, and theirs, has a permissive licence", () => {
   const seen = new Map<string, string>();
+  // A package whose "exports" hides its package.json is found from its entry point, the nearest manifest of its name above.
+  const manifestOf = (name: string, from: string): string => {
+    const require = createRequire(join(from, "package.json"));
+    try {
+      return realpathSync(require.resolve(`${name}/package.json`));
+    } catch {
+      for (let dir = dirname(realpathSync(require.resolve(name))); ; dir = dirname(dir)) {
+        const candidate = join(dir, "package.json");
+        if (existsSync(candidate) && (JSON.parse(readFileSync(candidate, "utf8")) as { name?: string }).name === name) return candidate;
+        if (dirname(dir) === dir) throw new Error(`No package.json found for ${name}.`);
+      }
+    }
+  };
   const visit = (name: string, from: string) => {
-    const manifestPath = realpathSync(createRequire(join(from, "package.json")).resolve(`${name}/package.json`));
+    const manifestPath = manifestOf(name, from);
     if (seen.has(manifestPath)) return;
     const dep = JSON.parse(readFileSync(manifestPath, "utf8")) as { license?: string; dependencies?: Record<string, string> };
     seen.set(manifestPath, `${name}: ${dep.license ?? "no licence"}`);
