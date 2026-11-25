@@ -58,5 +58,13 @@ runs:
     error: missing-param
   - args: { month: "eleven" }
     error: param-value
+  - args: { month: ".nan" }
+    error: param-value
+  - args: { month: ".inf" }
+    error: param-value
+  - args: { month: "0x0B" }
+    error: param-value
+  - args: { month: "0o13" }
+    error: param-value
   - args: { month: "11", year: "1980" }
     error: unknown-param

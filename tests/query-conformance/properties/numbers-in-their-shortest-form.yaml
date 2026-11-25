@@ -1,4 +1,4 @@
-description: Numbers read as YAML 1.2's core schema reads them, in decimal, exponent, hex and octal form, and its infinities and NaN.
+description: Numbers read as YAML 1.2's core schema reads them, in decimal and exponent form, and its other infinities and NaN; what only looks like hex or octal stays text.
 source: spec
 notes:
   Ann.md: |
@@ -6,9 +6,6 @@ notes:
     a: 1.50
     b: 1e3
     c: -7
-    d: 0x1F
-    e: .inf
-    f: 0o17
     g: -.inf
     h: .Inf
     i: +.INF
@@ -22,9 +19,6 @@ expect:
       a: number 1.5
       b: number 1000
       c: number -7
-      d: number 31
-      e: number Infinity
-      f: number 15
       g: number -Infinity
       h: number Infinity
       i: number Infinity

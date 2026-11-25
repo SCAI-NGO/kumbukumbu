@@ -118,7 +118,8 @@ public static partial class Properties
     /// <summary>A text as a value of <paramref name="type"/>, as a parameter of that type reads it; null when it doesn't fit.</summary>
     internal static Value? Typed(string raw, PropertyType type) => type switch
     {
-        PropertyType.Number => Number(raw),
+        // An argument is anyone's input: a plain decimal number only, no NaN, infinity, hex or octal.
+        PropertyType.Number => Decimal(raw),
         PropertyType.Checkbox => Boolean(raw),
         PropertyType.Date => Date(raw) ?? (DateTime(raw) is DateValue t ? new DateValue(t.Date) : null),
         PropertyType.Datetime => DateTime(raw) ?? (Date(raw) is DateValue d ? d with { HasTime = true } : null),
@@ -144,10 +145,12 @@ public static partial class Properties
         "-.inf" or "-.Inf" or "-.INF" => new NumberValue(double.NegativeInfinity),
         ".nan" or ".NaN" or ".NAN" => new NumberValue(double.NaN),
         _ when HexPattern().IsMatch(raw) => new NumberValue((double)BigInteger.Parse("0" + raw[2..], NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture)),
-        _ when OctalPattern().IsMatch(raw) => new NumberValue(raw[2..].Aggregate(0d, (value, digit) => value * 8 + (digit - '0'))),
-        _ when NumberPattern().IsMatch(raw) && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var n) => new NumberValue(n),
-        _ => null,
+        _ when OctalPattern().IsMatch(raw) => new NumberValue((double)raw[2..].Aggregate(BigInteger.Zero, (value, digit) => value * 8 + (digit - '0'))),
+        _ => Decimal(raw),
     };
+
+    private static Value? Decimal(string raw) =>
+        NumberPattern().IsMatch(raw) && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var n) ? new NumberValue(n) : null;
 
     private static Value? Date(string raw) =>
         DatePattern().IsMatch(raw) && DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? new DateValue(d) : null;

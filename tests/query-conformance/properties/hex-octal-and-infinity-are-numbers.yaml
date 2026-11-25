@@ -1,0 +1,15 @@
+description: YAML's hex, octal and infinity are numbers.
+source: obsidian 1.15.1
+notes:
+  Ann.md: |
+    ---
+    d: 0x1F
+    e: .inf
+    f: 0o17
+    ---
+expect:
+  properties:
+    Ann.md:
+      d: number 31
+      e: number Infinity
+      f: number 15

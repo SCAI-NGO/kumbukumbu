@@ -137,7 +137,8 @@ function tagged(value: Value): Value {
 /** A text as a value of `type`, as a parameter of that type reads it; null when it doesn't fit. */
 function typed(raw: string, type: PropertyType): Value | null {
   switch (type) {
-    case "number": return number(raw);
+    // An argument is anyone's input: a plain decimal number only, no NaN, infinity, hex or octal.
+    case "number": return decimal(raw);
     case "checkbox": return boolean(raw);
     case "date": {
       const moment = dateTime(raw);
@@ -179,8 +180,12 @@ function number(raw: string): Value | null {
   if (INFINITY.test(raw)) return numberValue(raw.startsWith("-") ? -Infinity : Infinity);
   if (NAN.test(raw)) return numberValue(NaN);
   // JavaScript's Number reads 0x and 0o as YAML writes them.
-  if (HEX.test(raw) || OCTAL.test(raw) || NUMBER.test(raw)) return numberValue(Number(raw));
-  return null;
+  if (HEX.test(raw) || OCTAL.test(raw)) return numberValue(Number(raw));
+  return decimal(raw);
+}
+
+function decimal(raw: string): Value | null {
+  return NUMBER.test(raw) ? numberValue(Number(raw)) : null;
 }
 
 function validDay(year: number, month: number, day: number): boolean {
