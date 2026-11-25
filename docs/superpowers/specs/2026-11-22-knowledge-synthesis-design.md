@@ -88,6 +88,7 @@ With `--between`: `score 0.71 (0.74 to A, 0.71 to C)  2 steps from A, not connec
 - `semsearch --without-tag T` drops the notes carrying T before ranking; PDF pages stay (they carry no tags), unlike `--tag`, which leaves them out.
 - `graph --without-tag T` (every mode): `GraphFilter.WithoutTags`, a note carrying any of them isn't kept, as `--tag` keeps only those that carry all. The two ends of `graph --path` stay, as with `--tag`.
 - `graph --hubs --without-tag T` counts only the links whose other end is kept by `--without-tag`, as `--unresolved` counts the links of kept notes only. Decided by Chris on 2026-11-24 ([ADR 0028](../../adr/0028-hubs-without-tag-count-only-kept-links.md)), *because* otherwise the hypothesis notes the filter leaves out still raise a note's degree, which is what the filter is meant to prevent.
+- `graph --orphans --without-tag T` follows the same rule: a note whose only links are to or from notes the filter leaves out is an orphan. Decided by Chris on 2026-11-25 ([ADR 0032](../../adr/0032-orphans-without-tag-count-only-kept-links.md)), *because* one rule for every mode is easier to reason about, and a note linked only by a hypothesis is exactly what a run looking for unlinked notes should see.
 
 ## 7. The skill
 
