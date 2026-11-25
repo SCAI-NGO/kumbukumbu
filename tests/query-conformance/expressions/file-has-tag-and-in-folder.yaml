@@ -24,4 +24,4 @@ cases:
   - expression: file.inFolder("People/Friends/")
     values: { People/Ann.md: boolean false, People/Friends/Brita.md: boolean true, Peoples.md: boolean false }
   - expression: file.tags
-    values: { People/Ann.md: [text '#Project/Kumbu', text '#person'], People/Friends/Brita.md: [text '#person'], Peoples.md: [] }
+    values: { People/Ann.md: ['text #Project/Kumbu', 'text #person'], People/Friends/Brita.md: ['text #person'], Peoples.md: [] }
