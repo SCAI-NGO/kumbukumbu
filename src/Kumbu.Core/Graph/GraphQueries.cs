@@ -75,12 +75,16 @@ public static partial class GraphQueries
         return new LocalGraph(order, [.. edges], leftOut);
     }
 
-    /// <summary>The notes (day notes included) the filter keeps that no note links to and that link to nothing.</summary>
+    /// <summary>The notes (day notes included) the filter keeps that no note links to and that link to nothing. As for
+    /// <see cref="Hubs"/>, a link to or from a note <see cref="GraphFilter.WithoutTags"/> leaves out doesn't count (ADR 0032).</summary>
     public static IReadOnlyList<int> Orphans(LinkGraph g, GraphFilter f)
     {
         var kept = Kept(g, f);
+        var without = Normalised(f.WithoutTags);
+        bool Counts(int other) => !Carries(g.Nodes[other], without);
         return [.. Enumerable.Range(0, g.Nodes.Count)
-            .Where(i => kept[i] && g.Nodes[i].Kind is NodeKind.Note or NodeKind.Day && g.InEdges(i).Count == 0 && g.OutEdges(i).Count == 0)];
+            .Where(i => kept[i] && g.Nodes[i].Kind is NodeKind.Note or NodeKind.Day
+                && !g.InEdges(i).Any(e => Counts(g.Edges[e].From)) && !g.OutEdges(i).Any(e => Counts(g.Edges[e].To)))];
     }
 
     /// <summary>The <paramref name="top"/> kept notes by links in plus links out, then by path. A link to or from a note

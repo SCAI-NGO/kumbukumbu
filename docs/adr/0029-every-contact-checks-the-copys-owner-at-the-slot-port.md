@@ -1,8 +1,8 @@
 # 0029. Every contact checks the copy's owner at the slot port, just before it goes out
 
 - **Date:** 2026-11-24
-- **Status:** Proposed
-- **Decided by:** proposed with the fix of the 0.7.0 test run's finding F-10; Chris confirms in review
+- **Status:** Accepted
+- **Decided by:** proposed with the fix of the 0.7.0 test run's finding F-10; accepted by Chris on 2026-11-25, to be looked at again once real use shows how it is received
 - **Spec:** [offline mode](../superpowers/specs/2026-11-22-offline-mode-design.md) §4.11
 
 ## Context
