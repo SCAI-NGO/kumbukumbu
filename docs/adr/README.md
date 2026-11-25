@@ -43,6 +43,8 @@ Records are public. A security decision says what we do and why, never which con
 | [0026](0026-a-query-is-a-note-its-arguments-bound-into-this.md) | A query is a note, its arguments bound into `this` | Accepted |
 | [0027](0027-query-properties-are-parsed-once-per-content.md) | Queries run in memory over the unlocked vault, each note's properties parsed once per content | Accepted |
 | [0034](0034-offline-queries-match-regular-expressions-in-linear-time.md) | Offline queries match regular expressions in linear time | Accepted |
+| [0035](0035-summary-and-description-are-embedded-in-every-vault.md) | A note's `summary` and `description` are embedded in every vault | Accepted |
+| [0036](0036-meaning-enters-a-query-through-its-frontmatter.md) | Meaning enters a query through its frontmatter, as a score the base can read | Accepted |
 | [0039](0039-bases-follow-obsidian.md) | Bases follow Obsidian's semantics; Kumbu² only adds diagnostics | Accepted |
 | [0040](0040-query-work-is-bounded-and-regexes-are-a-common-subset.md) | A query's work is bounded, and its regular expressions are a common subset | Accepted |
 
