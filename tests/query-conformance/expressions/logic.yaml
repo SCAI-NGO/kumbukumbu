@@ -1,4 +1,4 @@
-description: && and || give one of their operands, as in JavaScript; ! gives a checkbox; null, 0 and "" count as false.
+description: '&& and || give one of their operands, as in JavaScript; ! gives a checkbox; null, 0 and "" count as false.'
 source: spec
 notes:
   Ann.md: |
