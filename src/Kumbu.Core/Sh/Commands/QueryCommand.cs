@@ -34,7 +34,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         query execute <query> [--view <view>] [--param <name>=<value>]...
           Runs the query's first view, or the one named, over every file of its vault, archived
           notes, attachments and .base files too (file.ext == "md" keeps the notes,
-          !file.inFolder("_archive") leaves out the archive): the view, how many notes, then a
+          !file.inFolder("_archive") leaves out the archive): the view, how many rows, then a
           table led by each file's path. Each --param gives a parameter; a list parameter takes
           one --param per item. A value is only ever a value, never an expression.
         query check <query>
@@ -167,21 +167,24 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         var (found, error) = await FindAsync(options.Operands[0], ct);
         if (found is null) return error!;
         var (path, note) = found.Value;
-        var vault = await VaultAsync(path, ct);
-        // The query note as this, with its size and times as its row has them.
-        if (vault.Keys.FirstOrDefault(n => n.Path == note.Path) is { } row) note = new QueryNote(note.Path, note.Content, note.Properties, row.Size, row.Created, row.Modified);
         QueryResult result;
+        Dictionary<QueryNote, VaultPath> vault;
         try
         {
-            result = Query.Read(note).Run(options.Value("view"), arguments.ToDictionary(a => a.Key, a => (IReadOnlyList<string>)a.Value), vault.Keys, await LocalNowAsync(ct));
+            var query = Query.Read(note);
+            vault = await VaultAsync(path, query.Mentions("ctime") || query.Mentions("mtime"), ct);
+            // The query note as this, with its size and times as its row has them.
+            if (vault.Keys.FirstOrDefault(n => n.Path == note.Path) is { } row)
+                query = Query.Read(new QueryNote(note.Path, note.Content, note.Properties, row.Size, row.Created, row.Modified));
+            result = query.Run(options.Value("view"), arguments.ToDictionary(a => a.Key, a => (IReadOnlyList<string>)a.Value), vault.Keys, await LocalNowAsync(ct));
         }
         catch (QueryError e)
         {
             return Failed(path, e);
         }
 
-        var count = result.Rows.Count == 1 ? "1 note" : result.Rows.Count == 0 ? "no notes" : $"{result.Rows.Count:N0} notes";
-        if (result.Rows.Count == 0) return ShellResult.Ok($"{result.View}: no notes");
+        var count = result.Rows.Count == 1 ? "1 row" : $"{result.Rows.Count:N0} rows";
+        if (result.Rows.Count == 0) return ShellResult.Ok($"{result.View}: no rows");
         var header = new[] { $"{result.View}: {count}", Row(["path", .. result.Columns]), Row([.. Enumerable.Repeat("---", result.Columns.Count + 1)]) };
         var rows = result.Rows.Select(r => Row([vault[r.Note].Value, .. r.Cells.Select(Evaluator.Display)])).ToList();
         var listed = TextFiles.Listed(Name, rows, "\n", "rows", "a limit in the view, or a filter, narrows it", Lines.Join(header).Length + 1);
@@ -336,7 +339,8 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         new(InVault(path), content, Properties.Read(content, await TypesAsync(path.Segments[0], ct)));
 
     // The files a query of this vault runs over, each with its path in the store; times in the caller's zone, as now() is.
-    private async Task<Dictionary<QueryNote, VaultPath>> VaultAsync(VaultPath query, CancellationToken ct)
+    // A note's times take a read of each note, so only a query that may ask for them pays it; an attachment's come with its listing.
+    private async Task<Dictionary<QueryNote, VaultPath>> VaultAsync(VaultPath query, bool noteTimes, CancellationToken ct)
     {
         var vault = VaultPath.Root.Child(query.Segments[0]);
         var types = await TypesAsync(query.Segments[0], ct);
@@ -347,7 +351,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         foreach (var note in await notes.ReadNotesUnderAsync(vault, ct))
         {
             if (!InObsidian(note.Path)) continue;
-            var stored = await notes.GetAsync(note.Path, ct);
+            var stored = noteTimes ? await notes.GetAsync(note.Path, ct) : null;
             all[new QueryNote(InVault(note.Path), note.Content, Properties.Read(note.Content, types), null,
                 stored is null ? null : Local(NoteCreation.Of(stored).At), stored is null ? null : Local(stored.LastWriteAt))] = note.Path;
         }

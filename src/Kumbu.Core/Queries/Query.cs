@@ -35,6 +35,9 @@ public sealed partial class Query
     /// <summary>The views of its bases, in the order they are written; the first is the one a call without a view runs.</summary>
     public IReadOnlyList<string> ViewNames => views.Where(v => v.View is not null).Select(v => v.View!).ToList();
 
+    /// <summary>Whether a text of one of its bases holds <paramref name="word"/> (<see cref="Base.Mentions"/>).</summary>
+    public bool Mentions(string word) => views.Any(v => v.Base.Mentions(word));
+
     public static bool IsBaseFile(string path) => path.EndsWith(".base", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether a note is meant as a query, read cheaply: <c>type: query</c> in its frontmatter, or a <c>.base</c> file.</summary>

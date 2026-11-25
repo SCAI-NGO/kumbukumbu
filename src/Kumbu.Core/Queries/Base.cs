@@ -17,15 +17,40 @@ public sealed class Base
 {
     private const int MaxNodes = 10_000;
 
+    private readonly YamlNode? root;
     private readonly YamlNode? filters;
     private readonly IReadOnlyDictionary<string, string> formulas;
     private readonly IReadOnlyList<YamlMappingNode> views;
 
-    private Base(YamlNode? filters, IReadOnlyDictionary<string, string> formulas, IReadOnlyList<YamlMappingNode> views)
+    private Base(YamlNode? root, YamlNode? filters, IReadOnlyDictionary<string, string> formulas, IReadOnlyList<YamlMappingNode> views)
     {
+        this.root = root;
         this.filters = filters;
         this.formulas = formulas;
         this.views = views;
+    }
+
+    /// <summary>Whether a text of the base holds <paramref name="word"/>, as YAML reads its values: what reads something
+    /// costly for every row (a file's times) does so only when an expression could ask for it.</summary>
+    public bool Mentions(string word)
+    {
+        var stack = new Stack<YamlNode>(root is null ? [] : [root]);
+        while (stack.TryPop(out var node))
+        {
+            switch (node)
+            {
+                case YamlScalarNode s when s.Value?.Contains(word, StringComparison.Ordinal) == true:
+                    return true;
+                case YamlMappingNode m:
+                    foreach (var (key, value) in m.Children) { stack.Push(key); stack.Push(value); }
+                    break;
+                case YamlSequenceNode q:
+                    foreach (var item in q.Children) stack.Push(item);
+                    break;
+            }
+        }
+
+        return false;
     }
 
     public IReadOnlyList<string> ViewNames => views.Select((v, i) => Scalar(v, "name") ?? $"View {i + 1}").ToList();
@@ -45,7 +70,7 @@ public sealed class Base
             throw Invalid($"The base isn't valid YAML: {e.Message}");
         }
 
-        if (root is null) return new Base(null, new Dictionary<string, string>(), []);
+        if (root is null) return new Base(null, null, new Dictionary<string, string>(), []);
         if (root is not YamlMappingNode map) throw Invalid("The base is not a map of keys and values.");
         Budget(map);
 
@@ -61,7 +86,7 @@ public sealed class Base
             YamlSequenceNode v when v.Children.All(c => c is YamlMappingNode) => v.Children.Cast<YamlMappingNode>().ToList(),
             _ => throw Invalid("views is not a list of views."),
         };
-        return new Base(Child(map, "filters"), formulas, views);
+        return new Base(map, Child(map, "filters"), formulas, views);
     }
 
     /// <summary>Runs a view (by name; the first when null) over the notes.</summary>

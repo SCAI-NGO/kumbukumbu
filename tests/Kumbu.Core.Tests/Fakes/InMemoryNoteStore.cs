@@ -36,6 +36,13 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         _vaults.Add(note.Path.Vault!);
     }
 
+    /// <summary>Puts an attachment record directly, for tests that need a chosen history.</summary>
+    public void Put(StoredAttachment attachment)
+    {
+        _attachments[attachment.Path] = attachment;
+        _vaults.Add(attachment.Path.Vault!);
+    }
+
     /// <summary>Records a move directly, for tests that need a chosen writer and time.</summary>
     public void AddMove(MoveRecord move) => _moves.Add(move);
 
@@ -135,8 +142,14 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         return Task.FromResult(result);
     }
 
-    public Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct) =>
-        Task.FromResult(_notes.GetValueOrDefault(path));
+    /// <summary>How often a note was read by <see cref="GetAsync"/>.</summary>
+    public int Gets { get; private set; }
+
+    public Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct)
+    {
+        Gets++;
+        return Task.FromResult(_notes.GetValueOrDefault(path));
+    }
 
     public Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string changesetKey, CancellationToken ct) =>
         Task.FromResult(Changeset.Latest(
