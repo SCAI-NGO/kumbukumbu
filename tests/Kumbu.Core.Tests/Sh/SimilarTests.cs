@@ -291,4 +291,20 @@ public class SimilarTests
         Assert.Contains("0  /R/Island.md  (0 in, 0 out)", without);
         Assert.DoesNotContain("/R/Finding.md", without);
     }
+
+    [Fact]
+    public async Task Graph_orphans_without_tag_count_only_the_links_of_the_notes_kept()
+    {
+        var store = Store(("/R/Finding.md", "#synthesis/hypothesis\n\n[[Fish]] and [[Island]]\n"));
+
+        var with = (await Run("graph --orphans /R", store)).Output;
+        var without = (await Run("graph --orphans /R --without-tag synthesis", store)).Output;
+
+        // Island is linked by the hypothesis alone; Far by nothing.
+        Assert.DoesNotContain("/R/Island.md", with);
+        Assert.Contains("/R/Far.md", with);
+        Assert.Contains("/R/Island.md", without);
+        Assert.Contains("/R/Far.md", without);
+        Assert.DoesNotContain("/R/Finding.md", without);
+    }
 }
