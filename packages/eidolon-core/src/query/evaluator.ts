@@ -13,8 +13,8 @@ import { ExpressionParser, isWhiteSpace } from "./parser";
 import type { QueryNote } from "./note";
 import { Properties } from "./properties";
 import {
-  NULL, booleanValue, dateValue, errorValue, fileValue, formatNumber, listValue, noteRefValue, numberValue, objectValue,
-  regexValue, textValue, type Value,
+  NULL, asMilliseconds, booleanValue, dateValue, durationValue, errorValue, fileValue, formatNumber, listValue, noteRefValue,
+  numberValue, objectValue, regexValue, textValue, type Value,
 } from "./value";
 
 /**
@@ -37,6 +37,7 @@ export const FunctionReference: readonly LanguageEntry[] = [
   entry("date", "date(text)", "the date a text writes, with its time if it has one (2026-11-23, 2026-11-23T14:00), else null"),
   entry("number", "number(value)", "a number from a number, a checkbox (1 or 0) or a text, read as JavaScript's Number() reads it (12, 1e3, 0x1F, Infinity; the empty text is 0), else an error"),
   entry("list", "list(value)", "the value as a list: a list stays one, null is the empty list"),
+  entry("duration", "duration(text)", "the duration a text writes, in the units a date takes (1d, 2 hours, 1y 2M); a text that writes none is an error"),
 ];
 
 /** The methods, by what they are called on, as `help query` shows them. */
@@ -79,6 +80,9 @@ export const FieldReference: readonly LanguageEntry[] = [
 ];
 
 type BinaryExpr = Extract<Expr, { kind: "binary" }>;
+
+// && and || give a checkbox, as Obsidian's do (finding 12), and pass on an error of the side they had to read.
+const logical = (v: Value): Value => (v.kind === "error" ? v : booleanValue(truthy(v)));
 
 // The binary expressions down the left side of one, the outermost first.
 function leftSpine(expr: BinaryExpr): BinaryExpr[] {
@@ -189,8 +193,8 @@ export class Evaluator {
         for (let i = spine.length - 1; i >= 0; i--) {
           if (value.kind === "error") return value;
           const { operator, right } = spine[i]!;
-          if (operator === "And") value = !truthy(value) ? value : this.eval(right, scope);
-          else if (operator === "Or") value = truthy(value) ? value : this.eval(right, scope);
+          if (operator === "And") value = !truthy(value) ? booleanValue(false) : logical(this.eval(right, scope));
+          else if (operator === "Or") value = truthy(value) ? booleanValue(true) : logical(this.eval(right, scope));
           else value = binary(operator, value, this.eval(right, scope));
         }
         return value;
@@ -338,6 +342,7 @@ export class Evaluator {
         if (first.kind === "number") return first;
         if (first.kind === "boolean") return numberValue(first.boolean ? 1 : 0);
         return first.kind === "text" ? numberOf(first.text) : NULL;
+      case "duration": return first.kind === "text" ? durationOf(first.text) : first.kind === "duration" ? first : NULL;
       default: // list
         return first.kind === "list" ? first : first.kind === "null" ? listValue([]) : listValue([first]);
     }
@@ -430,6 +435,7 @@ export function typeName(value: Value): string {
     case "file":
     case "noteRef": return "File";
     case "regex": return "RegExp";
+    case "duration": return "Duration";
     case "error": return "Error";
   }
 }
@@ -561,25 +567,167 @@ function binary(operator: Operator, left: Value, right: Value): Value {
   switch (operator) {
     case "Equal": return booleanValue(equal(left, right));
     case "NotEqual": return booleanValue(!equal(left, right));
-    case "Less": return booleanValue((compare(left, right) ?? NaN) < 0);
-    case "LessOrEqual": return booleanValue((compare(left, right) ?? NaN) <= 0);
-    case "Greater": return booleanValue((compare(left, right) ?? NaN) > 0);
-    case "GreaterOrEqual": return booleanValue((compare(left, right) ?? NaN) >= 0);
+    case "Less":
+    case "LessOrEqual":
+    case "Greater":
+    case "GreaterOrEqual": return ordered(operator, left, right);
   }
+  const sign = operator === "Subtract" ? -1 : 1;
+  const shifting = operator === "Add" || operator === "Subtract";
+  if (shifting && left.kind === "date" && right.kind === "text") {
+    const span = durationOf(right.text);
+    return span.kind === "duration" ? shifted(left, span, sign) : span;
+  }
+  if (shifting && left.kind === "date" && right.kind === "duration") return shifted(left, right, sign);
+  if (operator === "Subtract" && left.kind === "date" && right.kind === "date") return durationValue(0, 0, millisecondsBetween(left.moment, right.moment));
+  if (shifting && left.kind === "duration" && right.kind === "duration")
+    return durationValue(left.months + sign * right.months, left.days + sign * right.days, left.milliseconds + sign * right.milliseconds);
+  if (operator === "Multiply" && left.kind === "duration" && right.kind === "number")
+    return durationValue(left.months * right.number, left.days * right.number, left.milliseconds * right.number);
+  if (operator === "Divide" && left.kind === "duration" && right.kind === "number")
+    return durationValue(left.months / right.number, left.days / right.number, left.milliseconds / right.number);
   if (operator === "Add" && (left.kind === "text" || right.kind === "text")) return textValue(display(left) + display(right));
-  if (left.kind === "null" || right.kind === "null") return NULL;
-  if (left.kind !== "number" || right.kind !== "number") return errorValue(`Invalid operator between ${typeName(left)} and ${typeName(right)}`);
-  const l = left.number;
-  const r = right.number;
-  const result = operator === "Add" ? l + r : operator === "Subtract" ? l - r : operator === "Multiply" ? l * r : operator === "Divide" ? l / r : l % r;
-  return numberValue(result);
+  return arithmetic(operator, left, right);
 }
 
-/** Equal within a type; values of different types are never equal, and null equals only null. */
+// -, *, / and % read a text that reads as a number as that number, as JavaScript does; + joins it, as above.
+function arithmetic(operator: Operator, left: Value, right: Value): Value {
+  const read = (v: Value): Value => {
+    const n = operator !== "Add" && v.kind === "text" ? readsAsNumber(v.text) : null;
+    return n === null ? v : numberValue(n);
+  };
+  const [a, b] = [read(left), read(right)];
+  if (a.kind === "number" && b.kind === "number") {
+    const [l, r] = [a.number, b.number];
+    return numberValue(operator === "Add" ? l + r : operator === "Subtract" ? l - r : operator === "Multiply" ? l * r : operator === "Divide" ? l / r : l % r);
+  }
+  if (a.kind === "null" || b.kind === "null") return NULL;
+  return errorValue(`Invalid operator between ${typeName(left)} and ${typeName(right)}`);
+}
+
+// A text of durations: a number and its unit, as often as written, the space between them optional. The short units
+// count case (M a month, m a minute); their names don't.
+const DURATION_TERM = /[ \t\r\n]*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))[ \t\r\n]*([A-Za-z]+)/y;
+
+function durationOf(text: string): Value {
+  let [months, days, milliseconds, at] = [0, 0, 0, 0];
+  for (;;) {
+    DURATION_TERM.lastIndex = at;
+    const term = DURATION_TERM.exec(text);
+    if (term === null) break;
+    const amount = Number(term[1]);
+    const unit = term[2]!.length === 1 ? term[2]! : term[2]!.toLowerCase();
+    switch (unit) {
+      case "y": case "year": case "years": months += amount * 12; break;
+      case "M": case "month": case "months": months += amount; break;
+      case "w": case "week": case "weeks": days += amount * 7; break;
+      case "d": case "day": case "days": days += amount; break;
+      case "h": case "hour": case "hours": milliseconds += amount * 3_600_000; break;
+      case "m": case "minute": case "minutes": milliseconds += amount * 60_000; break;
+      case "s": case "second": case "seconds": milliseconds += amount * 1000; break;
+      default: return invalidDuration(text);
+    }
+    at = DURATION_TERM.lastIndex;
+  }
+  return at > 0 && /^[ \t\r\n]*$/.test(text.slice(at)) ? durationValue(months, days, milliseconds) : invalidDuration(text);
+}
+
+const invalidDuration = (text: string): Value => errorValue(`Invalid duration "${text}"`);
+
+// A moment "yyyy-MM-ddTHH:mm:ss[.fraction]" as milliseconds, read as UTC since a moment has no zone, and the ticks of
+// 100 ns below them, so a fraction of seven digits survives, as .NET keeps it.
+type Instant = { ms: number; ticks: number };
+// Date.UTC reads the years 0 to 99 as 1900 to 1999; setUTCFullYear doesn't.
+function utc(year: number, month: number, day: number): number {
+  const at = new Date(0);
+  at.setUTCFullYear(year, month, day);
+  return at.getTime();
+}
+const MIN_MS = utc(1, 0, 1);
+const MAX_MS = utc(10000, 0, 1) - 1;
+
+function instant(moment: string): Instant {
+  const day = utc(Number(moment.slice(0, 4)), Number(moment.slice(5, 7)) - 1, Number(moment.slice(8, 10)));
+  const time = ((Number(moment.slice(11, 13)) * 60 + Number(moment.slice(14, 16))) * 60 + Number(moment.slice(17, 19))) * 1000;
+  const fraction = moment.slice(20).padEnd(7, "0");
+  return { ms: day + time + Number(fraction.slice(0, 3)), ticks: Number(fraction.slice(3)) };
+}
+
+function momentOf({ ms, ticks }: Instant): string {
+  const at = new Date(ms);
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  const fraction = (pad(at.getUTCMilliseconds(), 3) + pad(ticks, 4)).replace(/0+$/, "");
+  return `${pad(at.getUTCFullYear(), 4)}-${pad(at.getUTCMonth() + 1)}-${pad(at.getUTCDate())}T${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())}:${pad(at.getUTCSeconds())}${fraction.length > 0 ? `.${fraction}` : ""}`;
+}
+
+const millisecondsBetween = (a: string, b: string): number => {
+  const [x, y] = [instant(a), instant(b)];
+  return x.ms - y.ms + (x.ticks - y.ticks) / 10_000;
+};
+
+// Moment's absRound: halves away from zero.
+const absRound = (n: number): number => (n < 0 ? -Math.round(-n) : Math.round(n));
+
+// As Moment adds a duration: its milliseconds, then its days, then its months, which clamp the day (31 January and a
+// month is the end of February); days and months are rounded, halves away from zero. A date without a time gets one
+// only from milliseconds. Outside the years 1 to 9999 there is no date.
+function shifted(date: Value & { kind: "date" }, span: Value & { kind: "duration" }, sign: number): Value {
+  const invalid = errorValue("Invalid date");
+  const inRange = (ms: number) => ms >= MIN_MS && ms <= MAX_MS;
+  const start = instant(date.moment);
+  const total = sign * span.milliseconds;
+  const whole = Math.trunc(total);
+  const ticks = start.ticks + absRound((total - whole) * 10_000);
+  let ms = start.ms + whole + Math.floor(ticks / 10_000);
+  if (!inRange(ms)) return invalid;
+  ms += absRound(sign * span.days) * 86_400_000;
+  if (!inRange(ms)) return invalid;
+  const at = new Date(ms);
+  const month = at.getUTCFullYear() * 12 + at.getUTCMonth() + absRound(sign * span.months);
+  const [year, monthOfYear] = [Math.floor(month / 12), ((month % 12) + 12) % 12];
+  if (!(year >= 1 && year <= 9999)) return invalid;
+  const lastDay = new Date(utc(year, monthOfYear + 1, 0)).getUTCDate();
+  at.setUTCFullYear(year, monthOfYear, Math.min(at.getUTCDate(), lastDay));
+  return { kind: "date", moment: momentOf({ ms: at.getTime(), ticks: ((ticks % 10_000) + 10_000) % 10_000 }), hasTime: date.hasTime || span.milliseconds !== 0 };
+}
+
+// A text reads as a number where JavaScript's Number() reads it, the empty text not.
+function readsAsNumber(text: string): number | null {
+  if (trim(text).length === 0) return null;
+  const n = numberOf(text);
+  return n.kind === "number" ? n.number : null;
+}
+
+// Two values as numbers where one is a number or a duration and the other one too, or a text that reads as one.
+function numbers(a: Value, b: Value): [number, number] | null {
+  const plain = (v: Value): number | null => (v.kind === "number" ? v.number : v.kind === "duration" ? asMilliseconds(v) : null);
+  const read = (v: Value): number | null => plain(v) ?? (v.kind === "text" ? readsAsNumber(v.text) : null);
+  if (plain(a) === null && plain(b) === null) return null;
+  const [x, y] = [read(a), read(b)];
+  return x === null || y === null ? null : [x, y];
+}
+
+// Until probe 2 of the bases spec (decision 12): numbers, and texts that read as one, by their numbers (NaN orders with
+// nothing, so false); texts by code point; dates by moment; anything else, null included, has no order: null.
+function ordered(operator: Operator, left: Value, right: Value): Value {
+  const holds = (order: number) =>
+    operator === "Less" ? order < 0 : operator === "LessOrEqual" ? order <= 0 : operator === "Greater" ? order > 0 : order >= 0;
+  const pair = numbers(left, right);
+  if (pair !== null) {
+    const [x, y] = pair;
+    return booleanValue(!Number.isNaN(x) && !Number.isNaN(y) && holds(x < y ? -1 : x > y ? 1 : 0));
+  }
+  const order = compare(left, right);
+  return order === null ? NULL : booleanValue(holds(order));
+}
+
+/** Equal as Obsidian's == is until probe 2 (bases spec decision 12): a text that reads as a number equals that number, a
+ * duration its milliseconds; otherwise within a type, and null equals only null. */
 export function equal(a: Value, b: Value): boolean {
+  const pair = numbers(a, b);
+  if (pair !== null) return pair[0] === pair[1];
   switch (a.kind) {
     case "null": return b.kind === "null";
-    case "number": return b.kind === "number" && a.number === b.number;
     case "text": return b.kind === "text" && a.text === b.text;
     case "boolean": return b.kind === "boolean" && a.boolean === b.boolean;
     case "date": return b.kind === "date" && a.moment === b.moment;
@@ -593,12 +741,11 @@ export function equal(a: Value, b: Value): boolean {
   }
 }
 
-/** The order of two values of one type; null when they have none, so every comparison with them is false. */
+/** The order of two values of one type, as a sort sees them; null when they have none. */
 export function compare(a: Value, b: Value): number | null {
-  if (a.kind === "number" && b.kind === "number") {
-    if (Number.isNaN(a.number) || Number.isNaN(b.number)) return null;
-    return a.number < b.number ? -1 : a.number > b.number ? 1 : 0;
-  }
+  const byNumber = (x: number, y: number) => (Number.isNaN(x) || Number.isNaN(y) ? null : x < y ? -1 : x > y ? 1 : 0);
+  if (a.kind === "number" && b.kind === "number") return byNumber(a.number, b.number);
+  if (a.kind === "duration" && b.kind === "duration") return byNumber(asMilliseconds(a), asMilliseconds(b));
   if (a.kind === "text" && b.kind === "text") return a.text < b.text ? -1 : a.text > b.text ? 1 : 0;
   // Both written as "yyyy-MM-ddTHH:mm:ss[.fraction]" with the fraction's trailing zeros gone, so ordering the text orders the moments.
   if (a.kind === "date" && b.kind === "date") return a.moment < b.moment ? -1 : a.moment > b.moment ? 1 : 0;
@@ -631,6 +778,7 @@ export function display(v: Value): string {
     case "file":
     case "noteRef": return v.note.path;
     case "regex": return v.regex.toString();
+    case "duration": return formatNumber(asMilliseconds(v));
     case "error": return `error: ${v.message}`;
   }
 }

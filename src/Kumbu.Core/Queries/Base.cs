@@ -203,10 +203,11 @@ public sealed class Base
         private static int Rank(Value v) => v switch
         {
             NumberValue => 0,
-            DateValue => 1,
-            TextValue => 2,
-            BooleanValue => 3,
-            _ => 4,
+            DurationValue => 1,
+            DateValue => 2,
+            TextValue => 3,
+            BooleanValue => 4,
+            _ => 5,
         };
     }
 

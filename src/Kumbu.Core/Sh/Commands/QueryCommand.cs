@@ -78,7 +78,10 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         query renders in Obsidian too. Filters: an expression, or and/or/not with a list; views:
         order (the columns), sort, limit. Columns: file.<field>, formula.<name>, or a property.
 
-        The language (JavaScript's operators: == != < <= > >= + - * / % && || !):
+        The language (JavaScript's operators: == != < <= > >= + - * / % && || !). && || and ! give
+        true or false; a text that reads as a number compares as that number, and - * / % read it
+        as one; a date plus or minus "1d", "2 hours" or "1y 2M" is a date (units y M w d h m s, or
+        their names), a date minus a date a duration, shown in milliseconds:
         {Reference("Functions", Evaluator.FunctionReference)}
         {Reference("Methods", Evaluator.MethodReference)}
         {Reference("Fields", Evaluator.FieldReference)}

@@ -106,6 +106,7 @@ A typed value is written as its type and its normalised text, so a comparison te
 | `number 11`, `number 1.5`, `number Infinity`, `number NaN` | a number, in its shortest form; the infinities and NaN as JavaScript writes them |
 | `boolean true` | a checkbox |
 | `date 1980-11-03`, `date 2026-11-23T14:00:00` | a date, without a time or with one (without a zone, as Obsidian keeps it); one type, as in Obsidian |
+| `duration 86400000` | a duration, in milliseconds: how it shows until probe 3 of the bases spec of 2026-11-25 (decision 13) |
 | `null` | no value |
 | `[text a, text b]` (a YAML list) | a list |
 | a YAML map of values | an object |

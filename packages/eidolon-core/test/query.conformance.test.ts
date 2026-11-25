@@ -12,7 +12,7 @@ import { QueryError, QuerySyntaxError } from "../src/query/errors";
 import { QueryNote } from "../src/query/note";
 import { Properties } from "../src/query/properties";
 import { Query, type QueryParam } from "../src/query/query";
-import { formatNumber, type Value } from "../src/query/value";
+import { asMilliseconds, formatNumber, type Value } from "../src/query/value";
 
 const ME = "ts";
 const folder = resolve(dirname(fileURLToPath(import.meta.url)), "../../../tests/query-conformance");
@@ -76,6 +76,7 @@ function describeValue(value: Value): string {
     case "boolean": return `boolean ${value.boolean}`;
     // A date with a time is told to the second, as the C# runner does.
     case "date": return `date ${value.hasTime ? value.moment.slice(0, 19) : value.moment.slice(0, 10)}`;
+    case "duration": return `duration ${formatNumber(asMilliseconds(value))}`;
     case "list": return `[${value.items.map(describeValue).join(", ")}]`;
     case "object": return `{${describeMap([...value.values].map(([k, v]) => [k, describeValue(v)])).join(", ")}}`;
     case "file": return `file ${value.note.path}`;

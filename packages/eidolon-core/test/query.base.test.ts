@@ -50,7 +50,7 @@ test("a long chain of one operator compiles and evaluates without running out of
   expect(source.length).toBeLessThan(10_000);
   const evaluator = new Evaluator();
   const expr = evaluator.compile(source);
-  expect(evaluator.evaluate(expr, { note, this: null, now: NOW }).kind).toBe("null");
+  expect(evaluator.evaluate(expr, { note, this: null, now: NOW })).toEqual({ kind: "boolean", boolean: false });
 });
 
 // Each step of a chain is a level of the parser's 64, so a long chain is a syntax error whatever the stack, and one
@@ -98,7 +98,7 @@ const ladder = (text: (i: number) => string) => {
 // the walk goes deepest.
 test("formulas at every limit, each a long chain, compile and evaluate", () => {
   const formulas = ladder((i) => `formula.f${i + 1}` + "&&1".repeat(Math.floor((ExpressionParser.MAX_LENGTH - 12) / 3)));
-  expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 1 });
+  expect(run(formulas, "formula.f0")).toEqual({ kind: "boolean", boolean: true });
 });
 
 // Nested as deeply as an expression may be, 64 levels of formulas stack about 4,000 levels: more than the levels a

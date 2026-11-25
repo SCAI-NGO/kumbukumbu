@@ -24,6 +24,12 @@ export type Value =
   | { readonly kind: "noteRef"; readonly note: QueryNote }
   | { readonly kind: "regex"; readonly regex: RegexMatcher }
   /**
+   * A span of time as Moment keeps one, which Obsidian's durations are: calendar months, days and milliseconds, added to
+   * a date in that order from the smallest (bases spec 2026-11-25 decision 13). Until probe 3 it shows and compares as
+   * `asMilliseconds`.
+   */
+  | { readonly kind: "duration"; readonly months: number; readonly days: number; readonly milliseconds: number }
+  /**
    * What an expression gives where it can't give a value for the note: an unknown function or method, a calculation
    * between types that don't fit, and so on; a value in the cell, with Obsidian's message, never an error of the query
    * (bases spec 2026-11-25 decision 9). It taints whatever uses it.
@@ -43,6 +49,10 @@ export const fileValue = (note: QueryNote): Value => ({ kind: "file", note });
 export const noteRefValue = (note: QueryNote): Value => ({ kind: "noteRef", note });
 export const regexValue = (regex: RegexMatcher): Value => ({ kind: "regex", regex });
 export const errorValue = (message: string): Value => ({ kind: "error", message });
+export const durationValue = (months: number, days: number, milliseconds: number): Value => ({ kind: "duration", months, days, milliseconds });
+
+/** The whole span in milliseconds, a month counted as Moment's average one (146,097 days in 4,800 months). */
+export const asMilliseconds = (d: Value & { kind: "duration" }): number => d.milliseconds + (d.days + (d.months * 146097) / 4800) * 86_400_000;
 
 /**
  * A number as .NET writes its round-trip form ("R"), which the cases and the server's output are in: the shortest

@@ -1,0 +1,21 @@
+description: '&&, || and ! give a checkbox on truth as JavaScript counts it: null, false, 0, NaN and "" are false; any other text, an empty list and an object are true.'
+source: spec
+notes:
+  Ann.md: |
+    ---
+    nick: Annie
+    zero: 0
+    empty: ""
+    ---
+cases:
+  - { expression: nick || "none", values: { Ann.md: boolean true } }
+  - { expression: missing || zero, values: { Ann.md: boolean false } }
+  - { expression: nick && "yes", values: { Ann.md: boolean true } }
+  - { expression: empty && true, values: { Ann.md: boolean false } }
+  - { expression: '!empty', values: { Ann.md: boolean true } }
+  - { expression: '!nick', values: { Ann.md: boolean false } }
+  - { expression: '!zero && !missing', values: { Ann.md: boolean true } }
+  - { expression: '"0" && true', values: { Ann.md: boolean true } }
+  - { expression: '[] && true', values: { Ann.md: boolean true } }
+  - { expression: '{} && true', values: { Ann.md: boolean true } }
+  - { expression: 0 / 0 || false, values: { Ann.md: boolean false } }

@@ -194,9 +194,10 @@ const last = (v: Value): number => (v.kind === "null" ? 1 : v.kind === "error" ?
 function rank(v: Value): number {
   switch (v.kind) {
     case "number": return 0;
-    case "date": return 1;
-    case "text": return 2;
-    case "boolean": return 3;
-    default: return 4;
+    case "duration": return 1;
+    case "date": return 2;
+    case "text": return 3;
+    case "boolean": return 4;
+    default: return 5;
   }
 }

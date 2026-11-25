@@ -1,0 +1,32 @@
+description: Until probe 2, text that reads as a number (as JavaScript's Number() reads it, the empty text not) compares with numbers, == between other types is false and != true, and an order between them, or with null, is null; texts order by code point, dates by moment.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    t: " 11 "
+    hex: "0x1F"
+    empty: ""
+    done: true
+    birthday: 1980-11-03
+    ---
+cases:
+  - { expression: t == 11, values: { Ann.md: boolean true } }
+  - { expression: t < 12, values: { Ann.md: boolean true } }
+  - { expression: 10 < t, values: { Ann.md: boolean true } }
+  - { expression: hex == 31, values: { Ann.md: boolean true } }
+  - { expression: empty == 0, values: { Ann.md: boolean false } }
+  - { expression: empty < 1, values: { Ann.md: null } }
+  - { expression: '"11" < "9"', values: { Ann.md: boolean true } }
+  - { expression: '"abc" == 5', values: { Ann.md: boolean false } }
+  - { expression: '"abc" != 5', values: { Ann.md: boolean true } }
+  - { expression: '"abc" < 5', values: { Ann.md: null } }
+  - { expression: done == 1, values: { Ann.md: boolean false } }
+  - { expression: done > 0, values: { Ann.md: null } }
+  - { expression: birthday == "1980-11-03", values: { Ann.md: boolean false } }
+  - { expression: birthday < "2000-01-01", values: { Ann.md: null } }
+  - { expression: birthday < date("1980-11-03T00:00:01"), values: { Ann.md: boolean true } }
+  - { expression: missing == missing, values: { Ann.md: boolean true } }
+  - { expression: missing != 0, values: { Ann.md: boolean true } }
+  - { expression: missing >= missing, values: { Ann.md: null } }
+  - { expression: 0 / 0 == 0 / 0, values: { Ann.md: boolean false } }
+  - { expression: 0 / 0 < 1, values: { Ann.md: boolean false } }

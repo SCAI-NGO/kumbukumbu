@@ -1,6 +1,5 @@
 description: Text that reads as a number compares with numbers ("11" == 11); null is equal only to null, and ordering it gives null.
 source: obsidian 1.15.1
-pending: [cs, ts]
 notes:
   Ann.md: |
     ---

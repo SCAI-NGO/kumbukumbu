@@ -268,6 +268,7 @@ public class ConformanceTests
         NumberValue n => $"number {n.Number.ToString("R", CultureInfo.InvariantCulture)}",
         BooleanValue b => b.Boolean ? "boolean true" : "boolean false",
         DateValue d => d.HasTime ? $"date {d.Moment:yyyy-MM-ddTHH:mm:ss}" : $"date {d.Moment:yyyy-MM-dd}",
+        DurationValue d => $"duration {d.AsMilliseconds.ToString("R", CultureInfo.InvariantCulture)}",
         ListValue l => "[" + string.Join(", ", l.Items.Select(Describe)) + "]",
         ObjectValue o => "{" + string.Join(", ", o.Values.Select(v => $"{v.Key}: {Describe(v.Value)}").Order(StringComparer.Ordinal)) + "}",
         FileValue f => $"file {f.Note.Path}",

@@ -29,6 +29,7 @@ public sealed partial class Evaluator
         new("date", "date(text)", "the date a text writes, with its time if it has one (2026-11-23, 2026-11-23T14:00), else null"),
         new("number", "number(value)", "a number from a number, a checkbox (1 or 0) or a text, read as JavaScript's Number() reads it (12, 1e3, 0x1F, Infinity; the empty text is 0), else an error"),
         new("list", "list(value)", "the value as a list: a list stays one, null is the empty list"),
+        new("duration", "duration(text)", "the duration a text writes, in the units a date takes (1d, 2 hours, 1y 2M); a text that writes none is an error"),
     ];
 
     /// <summary>The methods, by what they are called on, as <c>help query</c> shows them.</summary>
@@ -203,14 +204,17 @@ public sealed partial class Evaluator
             var (op, right) = (spine[i].Operator, spine[i].Right);
             value = op switch
             {
-                Operator.And => Truthy(value) ? Eval(right, scope) : value,
-                Operator.Or => Truthy(value) ? value : Eval(right, scope),
+                Operator.And => Truthy(value) ? Logical(Eval(right, scope)) : new BooleanValue(false),
+                Operator.Or => Truthy(value) ? new BooleanValue(true) : Logical(Eval(right, scope)),
                 _ => Binary(op, value, Eval(right, scope)),
             };
         }
 
         return value;
     }
+
+    // && and || give a checkbox, as Obsidian's do (finding 12), and pass on an error of the side they had to read.
+    private static Value Logical(Value v) => v is ErrorValue ? v : new BooleanValue(Truthy(v));
 
     // The binary expressions down the left side of one, the outermost first.
     private static List<BinaryExpr> LeftSpine(BinaryExpr expr)
@@ -390,6 +394,7 @@ public sealed partial class Evaluator
         ObjectValue => "Object",
         FileValue or NoteRefValue => "File",
         RegexValue => "RegExp",
+        DurationValue => "Duration",
         _ => "Error",
     };
 
@@ -427,6 +432,12 @@ public sealed partial class Evaluator
                 NumberValue n => n,
                 BooleanValue b => new NumberValue(b.Boolean ? 1 : 0),
                 TextValue t => NumberOf(t.Text),
+                _ => NullValue.Instance,
+            },
+            "duration" => first switch
+            {
+                TextValue t => DurationOf(t.Text),
+                DurationValue => first,
                 _ => NullValue.Instance,
             },
             _ /* list */ => first switch
@@ -516,34 +527,135 @@ public sealed partial class Evaluator
         return folder.Length == 0 || path.StartsWith(folder + "/", StringComparison.Ordinal);
     }
 
-    private static Value Binary(Operator op, Value left, Value right) => op switch
+    private static Value Binary(Operator op, Value left, Value right)
     {
-        _ when left is ErrorValue => left,
-        _ when right is ErrorValue => right,
-        Operator.Equal => new BooleanValue(Equal(left, right)),
-        Operator.NotEqual => new BooleanValue(!Equal(left, right)),
-        Operator.Less => new BooleanValue(Compare(left, right) < 0),
-        Operator.LessOrEqual => new BooleanValue(Compare(left, right) <= 0),
-        Operator.Greater => new BooleanValue(Compare(left, right) > 0),
-        Operator.GreaterOrEqual => new BooleanValue(Compare(left, right) >= 0),
-        Operator.Add when left is TextValue || right is TextValue => new TextValue(Display(left) + Display(right)),
-        _ when left is NumberValue l && right is NumberValue r => new NumberValue(op switch
+        if (left is ErrorValue) return left;
+        if (right is ErrorValue) return right;
+        var sign = op == Operator.Subtract ? -1 : 1;
+        return (op, left, right) switch
         {
-            Operator.Add => l.Number + r.Number,
-            Operator.Subtract => l.Number - r.Number,
-            Operator.Multiply => l.Number * r.Number,
-            Operator.Divide => l.Number / r.Number,
-            _ => l.Number % r.Number,
-        }),
-        _ when left is NullValue || right is NullValue => NullValue.Instance,
-        _ => new ErrorValue($"Invalid operator between {TypeName(left)} and {TypeName(right)}"),
+            (Operator.Equal, _, _) => new BooleanValue(Equal(left, right)),
+            (Operator.NotEqual, _, _) => new BooleanValue(!Equal(left, right)),
+            (Operator.Less or Operator.LessOrEqual or Operator.Greater or Operator.GreaterOrEqual, _, _) => Ordered(op, left, right),
+            (Operator.Add or Operator.Subtract, DateValue d, TextValue t) => DurationOf(t.Text) switch { DurationValue span => Shifted(d, span, sign), var error => error },
+            (Operator.Add or Operator.Subtract, DateValue d, DurationValue span) => Shifted(d, span, sign),
+            (Operator.Subtract, DateValue a, DateValue b) => new DurationValue(0, 0, (a.Moment - b.Moment).Ticks / (double)TimeSpan.TicksPerMillisecond),
+            (Operator.Add or Operator.Subtract, DurationValue a, DurationValue b) =>
+                new DurationValue(a.Months + sign * b.Months, a.Days + sign * b.Days, a.Milliseconds + sign * b.Milliseconds),
+            (Operator.Multiply, DurationValue a, NumberValue n) => new DurationValue(a.Months * n.Number, a.Days * n.Number, a.Milliseconds * n.Number),
+            (Operator.Divide, DurationValue a, NumberValue n) => new DurationValue(a.Months / n.Number, a.Days / n.Number, a.Milliseconds / n.Number),
+            (Operator.Add, TextValue, _) or (Operator.Add, _, TextValue) => new TextValue(Display(left) + Display(right)),
+            _ => Arithmetic(op, left, right),
+        };
+    }
+
+    // -, *, / and % read a text that reads as a number as that number, as JavaScript does; + joins it, as above.
+    private static Value Arithmetic(Operator op, Value left, Value right)
+    {
+        Value Read(Value v) => op != Operator.Add && v is TextValue t && ReadsAsNumber(t.Text) is { } n ? new NumberValue(n) : v;
+        return (Read(left), Read(right)) switch
+        {
+            (NumberValue l, NumberValue r) => new NumberValue(op switch
+            {
+                Operator.Add => l.Number + r.Number,
+                Operator.Subtract => l.Number - r.Number,
+                Operator.Multiply => l.Number * r.Number,
+                Operator.Divide => l.Number / r.Number,
+                _ => l.Number % r.Number,
+            }),
+            (NullValue, _) or (_, NullValue) => NullValue.Instance,
+            _ => new ErrorValue($"Invalid operator between {TypeName(left)} and {TypeName(right)}"),
+        };
+    }
+
+    // A text of durations: a number and its unit, as often as written, the space between them optional. The short units
+    // count case (M a month, m a minute); their names don't.
+    private static Value DurationOf(string text)
+    {
+        var (months, days, milliseconds, at) = (0.0, 0.0, 0.0, 0);
+        for (var term = DurationTerm().Match(text); term.Success; term = DurationTerm().Match(text, at))
+        {
+            var amount = double.Parse(term.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture);
+            var unit = term.Groups[2].Value;
+            switch (unit.Length == 1 ? unit : unit.ToLowerInvariant())
+            {
+                case "y" or "year" or "years": months += amount * 12; break;
+                case "M" or "month" or "months": months += amount; break;
+                case "w" or "week" or "weeks": days += amount * 7; break;
+                case "d" or "day" or "days": days += amount; break;
+                case "h" or "hour" or "hours": milliseconds += amount * 3_600_000; break;
+                case "m" or "minute" or "minutes": milliseconds += amount * 60_000; break;
+                case "s" or "second" or "seconds": milliseconds += amount * 1000; break;
+                default: return InvalidDuration(text);
+            }
+
+            at = term.Index + term.Length;
+        }
+
+        return at > 0 && text[at..].All(c => c is ' ' or '\t' or '\r' or '\n') ? new DurationValue(months, days, milliseconds) : InvalidDuration(text);
+    }
+
+    private static ErrorValue InvalidDuration(string text) => new($"Invalid duration \"{text}\"");
+
+    [GeneratedRegex(@"\G[ \t\r\n]*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))[ \t\r\n]*([A-Za-z]+)")]
+    private static partial Regex DurationTerm();
+
+    // As Moment adds a duration: its milliseconds, then its days, then its months, which clamp the day (31 January and a
+    // month is the end of February); days and months are rounded, halves away from zero. A date without a time gets one
+    // only from milliseconds. Outside the years 1 to 9999 there is no date.
+    private static Value Shifted(DateValue date, DurationValue span, int sign)
+    {
+        try
+        {
+            var ms = sign * span.Milliseconds;
+            var whole = Math.Truncate(ms);
+            var moment = date.Moment.AddTicks(checked((long)whole * TimeSpan.TicksPerMillisecond
+                                                        + (long)Math.Round((ms - whole) * TimeSpan.TicksPerMillisecond, MidpointRounding.AwayFromZero)));
+            moment = moment.AddDays(checked((int)Math.Round(sign * span.Days, MidpointRounding.AwayFromZero)));
+            moment = moment.AddMonths(checked((int)Math.Round(sign * span.Months, MidpointRounding.AwayFromZero)));
+            return new DateValue(moment, date.HasTime || span.Milliseconds != 0);
+        }
+        catch (Exception e) when (e is ArgumentOutOfRangeException or OverflowException)
+        {
+            return new ErrorValue("Invalid date");
+        }
+    }
+
+    // A text reads as a number where JavaScript's Number() reads it, the empty text not.
+    private static double? ReadsAsNumber(string text) =>
+        !string.IsNullOrWhiteSpace(text) && NumberOf(text) is NumberValue n ? n.Number : null;
+
+    // Two values as numbers where one is a number or a duration and the other one too, or a text that reads as one.
+    private static (double, double)? Numbers(Value a, Value b)
+    {
+        static double? Plain(Value v) => v switch { NumberValue n => n.Number, DurationValue d => d.AsMilliseconds, _ => null };
+        static double? Read(Value v) => Plain(v) ?? (v is TextValue t ? ReadsAsNumber(t.Text) : null);
+        return (Plain(a) ?? Plain(b)) is not null && Read(a) is { } x && Read(b) is { } y ? (x, y) : null;
+    }
+
+    // Until probe 2 of the bases spec (decision 12): numbers, and texts that read as one, by their numbers (NaN orders
+    // with nothing, so false); texts by code point; dates by moment; anything else, null included, has no order: null.
+    private static Value Ordered(Operator op, Value left, Value right)
+    {
+        if (Numbers(left, right) is var (x, y))
+            return new BooleanValue(!double.IsNaN(x) && !double.IsNaN(y) && Holds(op, x.CompareTo(y)));
+        return Compare(left, right) is { } c ? new BooleanValue(Holds(op, c)) : NullValue.Instance;
+    }
+
+    private static bool Holds(Operator op, int order) => op switch
+    {
+        Operator.Less => order < 0,
+        Operator.LessOrEqual => order <= 0,
+        Operator.Greater => order > 0,
+        _ => order >= 0,
     };
 
-    /// <summary>Equal within a type; values of different types are never equal, and null equals only null.</summary>
+    /// <summary>Equal as Obsidian's == is until probe 2 (bases spec decision 12): a text that reads as a number equals that
+    /// number, a duration its milliseconds; otherwise within a type, and null equals only null.</summary>
     public static bool Equal(Value a, Value b) => (a, b) switch
     {
+        _ when Numbers(a, b) is var (x, y) => x == y,
         (NullValue, NullValue) => true,
-        (NumberValue x, NumberValue y) => x.Number == y.Number,
         (TextValue x, TextValue y) => x.Text == y.Text,
         (BooleanValue x, BooleanValue y) => x.Boolean == y.Boolean,
         (DateValue x, DateValue y) => x.Moment == y.Moment,
@@ -555,11 +667,11 @@ public sealed partial class Evaluator
         _ => false,
     };
 
-    /// <summary>The order of two values of one type; null when they have none,
-    /// so every comparison with them is false.</summary>
+    /// <summary>The order of two values of one type, as a sort sees them; null when they have none.</summary>
     public static int? Compare(Value a, Value b) => (a, b) switch
     {
         (NumberValue x, NumberValue y) when !double.IsNaN(x.Number) && !double.IsNaN(y.Number) => x.Number.CompareTo(y.Number),
+        (DurationValue x, DurationValue y) when !double.IsNaN(x.AsMilliseconds) && !double.IsNaN(y.AsMilliseconds) => x.AsMilliseconds.CompareTo(y.AsMilliseconds),
         (TextValue x, TextValue y) => string.CompareOrdinal(x.Text, y.Text),
         (DateValue x, DateValue y) => x.Moment.CompareTo(y.Moment),
         _ => null,
@@ -589,6 +701,7 @@ public sealed partial class Evaluator
         FileValue f => f.Note.Path,
         NoteRefValue r => r.Note.Path,
         RegexValue r => r.Regex.ToString(),
+        DurationValue d => d.AsMilliseconds.ToString("R", CultureInfo.InvariantCulture),
         ErrorValue e => $"error: {e.Message}",
         _ => "",
     };
