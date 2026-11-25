@@ -256,7 +256,7 @@ test("discreet-0-7-0 similar: hidden, the console's similar over every vault and
     // Five hits, so the screen shows them whole: shown, Swarm would rank second, after Brood frames.
     await command.fill(`similar "${n.hive}" -n 5`);
     await command.press("Enter");
-    await expect(output).toContainText(`similar to ${n.hive}, in every vault:`);
+    await expect(output).toContainText(`similar to ${n.hive}, below every vault:`);
     await expect(output).toHaveAttribute("aria-busy", "false");
     await expect(output).toContainText(titleOf(n.brood));
     expect(homeLines(await output.innerText(), n), "hidden: the console's page shows nothing of Home").toEqual([]);

@@ -412,7 +412,7 @@ test("similar: the default scope is every vault, and the source may lie outside 
   await waitIndexed(aliceApi, [glass, gaffer, furnace]);
 
   const { heading, hits } = await similar(aliceApi.console.bind(aliceApi), `"${glass}" -n 20`);
-  expect(heading).toMatch(new RegExp(`^similar to ${escape(glass)}, (?:in|below) every vault: \\d+ notes$`));
+  expect(heading).toMatch(new RegExp(`^similar to ${escape(glass)}, (?:in|below) every vault: \\d+ notes?$`));
   expect(hits.map((h) => h.path)).not.toContain(glass);
   expect(distances(hits)).toMatchObject({ [gaffer]: "not connected", [furnace]: "other vault" });
   // A scope that doesn't hold the source.
@@ -426,7 +426,7 @@ test("similar: the heading of the default scope says 'below every vault' @synthe
   await write(mcp, glass, "# Glass\n\nThe glassblower gathers molten glass on the end of a blowpipe and blows a bubble into it.\n");
   await waitIndexed(aliceApi, [glass]);
   const { heading } = await similar(mcp.sh.bind(mcp), `"${glass}"`);
-  expect(heading, "M-02: the default scope's heading").toMatch(new RegExp(`^similar to ${escape(glass)}, below every vault: \\d+ notes$`));
+  expect(heading, "M-02: the default scope's heading").toMatch(new RegExp(`^similar to ${escape(glass)}, below every vault: \\d+ notes?$`));
 });
 
 test("semsearch --outside and --without-tag: notes and PDF pages below a path go, tagged notes go and PDF pages stay @synthesis @search", async ({ mcp, folder, aliceApi }) => {
