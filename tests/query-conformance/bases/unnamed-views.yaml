@@ -1,5 +1,6 @@
-description: A view without a name is called View and its place, counted from 1, and runs by that name.
-source: spec
+description: A view without a name makes the whole base an error, its named views too.
+source: obsidian 1.15.1
+pending: [cs]
 notes:
   Ann.md: |
     ---
@@ -18,13 +19,4 @@ base: |
       sort:
         - property: age
 runs:
-  - view: View 2
-    columns: [file.basename, age]
-    rows:
-      - [text Ben, number 30]
-      - [text Ann, number 40]
-  - view: View 1
-    columns: [file.basename]
-    rows:
-      - [text Ann]
-      - [text Ben]
+  - error: base
