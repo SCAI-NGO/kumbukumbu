@@ -350,6 +350,17 @@ describe("search offline", () => {
     await within(sheet()).findByText("1 result", { exact: false });
     expect(asked).toHaveLength(1);
   });
+
+  it("says it searched by words, whatever mode is chosen, and keeps the mode for when the connection is back", async () => {
+    api(() => view([hit("/Work/plan.md")]));
+    act(() => useEditor.setState({ searchMode: "meaning" }));
+    await openSheet();
+    act(() => useOfflineMode.setState({ offline: true }));
+    await userEvent.type(input(), "lions");
+    const heading = await within(sheet()).findByRole("heading", { name: /1 result/ });
+    expect(heading).toHaveTextContent("1 result words");
+    expect(useEditor.getState().searchMode).toBe("meaning");
+  });
 });
 
 describe("search in the archive", () => {
