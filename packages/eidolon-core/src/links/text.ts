@@ -11,9 +11,19 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /** Which lines belong to fenced code blocks (``` or ~~~), the fence lines included. */
 export function codeLines(lines: readonly string[]): boolean[] {
+  return fences(lines).code;
+}
+
+/**
+ * `codeLines`, and for each line the fence of the block open before it (null outside code): a piece of a code block,
+ * without its opening fence, is told as code by it.
+ */
+export function fences(lines: readonly string[]): { code: boolean[]; open: Array<string | null> } {
   const code: boolean[] = [];
+  const open: Array<string | null> = [];
   let fence: string | null = null;
   for (const line of lines) {
+    open.push(fence);
     const f = FENCE.exec(line);
     // A backtick fence's info string holds no backtick (CommonMark): "``` a`b" opens nothing.
     if (f && !(fence === null && f[1]![0] === "`" && f[2]!.includes("`"))) {
@@ -26,7 +36,7 @@ export function codeLines(lines: readonly string[]): boolean[] {
     }
     code.push(fence !== null);
   }
-  return code;
+  return { code, open };
 }
 
 /** The line after YAML frontmatter ("---" on the first line up to the next "---" or "..."), or 0. */

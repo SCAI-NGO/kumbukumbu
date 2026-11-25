@@ -12,6 +12,7 @@ The client-side data layer of Kumbu²: what a client keeps and does with notes, 
 | `src/host/` | One engine per mirrored vault for a host that holds many vaults (a browser session), keyed by vault id |
 | `src/store/` | The sealed store: a browser's offline copy, its key and both wraps, each vault's records as the engine's `LocalFiles` and `StateStore`, contact and purge, the idle lock |
 | `src/links/` | Links as the server finds and resolves them, ported from `Kumbu.Core/Links`: wiki and Markdown links, aliases, Obsidian's resolution rules, the API's `LinkView` |
+| `src/query/` | Queries offline: a note's typed properties, tags, the Bases expression language, bases and query notes with parameters, ported from `Kumbu.Core/Queries` |
 | `src/read/` | Reading the copy offline: a vault's tree from the inventory, notes and attachments, links resolved in the copy, vaults by the name last seen online |
 
 The engine, the client and the hints came from the Obsidian plugin (`kumbu-obsidian`), with their tests. The plugin now vendors them back: `src/engine`, `src/api`, `src/live` and `test/fakes` are copied into it unchanged by its `scripts/vendor-eidolon.mjs`, and its CI checks the copy against the commit its `eidolon-core.json` names. Change them here; the plugin follows when it takes a new commit.
@@ -35,6 +36,13 @@ A copy is one user's mirror in one browser (design §4.7). `MirrorCopies` finds,
 ## Reading offline
 
 `read/tree.ts` answers what `GET /api/vaults/{vault}/tree` and `GET /api/notes` would, from an unlocked `SealedMirror`, with paths in the host's form (`/<vault name>/<path>`); a path the inventory lists whose text or bytes aren't here yet throws `NotOnDeviceError`. `read/links.ts` resolves a note's links in the copy (`MirrorLinks`), building one resolver per vault again only when a path or a version changed. The web app's `OfflineSource` (`web/src/offline/source.ts`) stands them in for the API while the app is offline (design §4.8).
+
+## Queries
+
+`src/query/` runs the same queries as the server (`docs/superpowers/specs/2026-11-24-queries-data-side-design.md`) over the notes of the copy: `Properties.read` types a note's frontmatter, `Query.read` reads a query note or `.base` file, and `run` gives a view's columns and rows. It is a port, not a second design: the cases in `tests/query-conformance` hold it and the C# engine to the same results, and its runner is `test/query.conformance.test.ts`. Two dependencies, both permissive and pure JavaScript:
+
+- `yaml` (ISC) reads frontmatter, bases and `params:` so that each scalar stays its source text and style, which is what the typing rules need (a quoted `"2026-11-03"` stays text); aliases are resolved under a budget, so an anchor bomb is an error, not a hang.
+- `re2js` (MIT) is RE2 in JavaScript: a pattern in a query is anyone's input, and matching must take linear time so that a query note in a shared vault cannot hang a tab ([ADR 0034](../../docs/adr/0034-offline-queries-match-regular-expressions-in-linear-time.md)). The browser's `RegExp` is never used on a query's pattern.
 
 ## Commands
 

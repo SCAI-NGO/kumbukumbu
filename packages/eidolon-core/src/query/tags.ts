@@ -3,14 +3,28 @@
 // and HTML (Kumbu.Core Tags/TagReader).
 import { MAX_FRONTMATTER_LENGTH } from "../links/aliases";
 import { codeLines, codeSpans, frontmatterEnd, isWhiteSpace, splitLines, trim } from "../links/text";
-import { Properties } from "./properties";
+import { CACHE_LIMIT, Properties } from "./properties";
 import { PropertyTypes } from "./propertyTypes";
 
 /** A tag of a note: its text without '#' as written (NFC), and the 0-based line it stands on (for a frontmatter tag,
  * the line of its list item or of the `tags` key). */
 export type TagUse = { readonly tag: string; readonly line: number };
 
-export function tagsOf(content: string): TagUse[] {
+// A note's tags by its content, as the server's TagReader remembers them: a query reads every note's tags once per run, and
+// a run's notes are mostly the ones the last run read. Bounded like the properties' cache (ADR 0027), oldest out first.
+const byContent = new Map<string, readonly TagUse[]>();
+
+/** The tags of a note's text, remembered for as long as the working set holds that text. */
+export function tagsOf(content: string): readonly TagUse[] {
+  const known = byContent.get(content);
+  if (known !== undefined) return known;
+  const tags = readTags(content);
+  byContent.set(content, tags);
+  if (byContent.size > CACHE_LIMIT) byContent.delete(byContent.keys().next().value!);
+  return tags;
+}
+
+function readTags(content: string): TagUse[] {
   const lines = splitLines(content);
   const end = frontmatterEnd(lines);
   const result = end > 0 ? fromFrontmatter(content, lines, end) : [];

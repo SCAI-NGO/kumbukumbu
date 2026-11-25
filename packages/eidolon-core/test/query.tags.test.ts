@@ -103,3 +103,8 @@ test("a note's tags list each tag once, ignoring case, as first written", () => 
   const content = "---\ntags: [Research]\n---\n#research #other #RESEARCH";
   expect(new QueryNote("A.md", content, Properties.read(content, PropertyTypes.none)).tags).toEqual(["Research", "other"]);
 });
+
+test("the tags of one content are read once and remembered", () => {
+  const content = "# Notes #remembered\n";
+  expect(tagsOf(content)).toBe(tagsOf(content));
+});

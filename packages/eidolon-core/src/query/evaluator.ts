@@ -73,6 +73,15 @@ export const FieldReference: readonly LanguageEntry[] = [
   entry("year", "date.year, .month, .day", "a date's parts; a date and time also has .hour, .minute, .second"),
 ];
 
+type BinaryExpr = Extract<Expr, { kind: "binary" }>;
+
+// The binary expressions down the left side of one, the outermost first.
+function leftSpine(expr: BinaryExpr): BinaryExpr[] {
+  const spine = [expr];
+  for (let left = expr.left; left.kind === "binary"; left = left.left) spine.push(left);
+  return spine;
+}
+
 const FUNCTIONS = new Set(FunctionReference.map((f) => f.name));
 const METHODS = new Set(MethodReference.map((m) => m.name));
 
@@ -84,9 +93,16 @@ export class Evaluator {
 
   /** Parses and checks an expression; throws `QuerySyntaxError` or `QueryError`. */
   compile(text: string): Expr {
-    const expr = ExpressionParser.parse(text);
-    this.check(expr, []);
-    return expr;
+    try {
+      const expr = ExpressionParser.parse(text);
+      this.check(expr, []);
+      return expr;
+    } catch (e) {
+      // Chains of members, calls or unary operators nest to the left or right without the parser's depth limit, which
+      // counts brackets only; the stack's end is the limit there, and an error like any other.
+      if (e instanceof RangeError) throw new QueryError("too-deep", "The expression is nested too deeply.", 0);
+      throw e;
+    }
   }
 
   evaluate(expr: Expr, scope: Scope): Value {
@@ -108,15 +124,16 @@ export class Evaluator {
         return operand.kind === "number" ? numberValue(-operand.number) : NULL;
       }
       case "binary": {
-        if (expr.operator === "And") {
-          const left = this.evaluate(expr.left, scope);
-          return !truthy(left) ? left : this.evaluate(expr.right, scope);
+        // The same walk of the left spine as in check: the innermost left first, then each right on the way out.
+        const spine = leftSpine(expr);
+        let value = this.evaluate(spine[spine.length - 1]!.left, scope);
+        for (let i = spine.length - 1; i >= 0; i--) {
+          const { operator, right } = spine[i]!;
+          if (operator === "And") value = !truthy(value) ? value : this.evaluate(right, scope);
+          else if (operator === "Or") value = truthy(value) ? value : this.evaluate(right, scope);
+          else value = binary(operator, value, this.evaluate(right, scope));
         }
-        if (expr.operator === "Or") {
-          const left = this.evaluate(expr.left, scope);
-          return truthy(left) ? left : this.evaluate(expr.right, scope);
-        }
-        return binary(expr.operator, this.evaluate(expr.left, scope), this.evaluate(expr.right, scope));
+        return value;
       }
       case "list": return listValue(expr.items.map((i) => this.evaluate(i, scope)));
       case "object": {
@@ -157,10 +174,13 @@ export class Evaluator {
       case "unary":
         this.check(expr.operand, chain);
         break;
-      case "binary":
-        this.check(expr.left, chain);
-        this.check(expr.right, chain);
+      case "binary": {
+        // A long chain (a && b && c ...) nests to the left: walk its spine, not the stack.
+        const spine = leftSpine(expr);
+        this.check(spine[spine.length - 1]!.left, chain);
+        for (let i = spine.length - 1; i >= 0; i--) this.check(spine[i]!.right, chain);
         break;
+      }
       case "list":
         for (const i of expr.items) this.check(i, chain);
         break;
@@ -364,7 +384,7 @@ function method(target: Value, methodName: string, args: readonly Value[]): Valu
         case "abs": return numberValue(Math.abs(target.number));
         case "floor": return numberValue(Math.floor(target.number));
         case "ceil": return numberValue(Math.ceil(target.number));
-        // JavaScript's Math.round: halves go up, so -2.5 rounds to -2.
+        // Halves go up, as the server's engine rounds (floor(x + 0.5)): -2.5 becomes -2.
         case "round": return numberValue(Math.floor(target.number + 0.5));
         default: return NULL;
       }
