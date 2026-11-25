@@ -1,6 +1,5 @@
 description: A formula used twice is worked out once, so 30 formulas that each use the next twice run at once and give 2 to the 30th.
 source: spec
-pending: [ts]
 formulas:
   f0: formula.f1 + formula.f1
   f1: formula.f2 + formula.f2

@@ -2,8 +2,10 @@
 // What only this engine has inside: the budget of a base's YAML, the nesting of its filters, the depth of an expression.
 import { expect, test } from "vitest";
 import { Base } from "../src/query/base";
+import { QuerySyntaxError } from "../src/query/errors";
 import { Evaluator } from "../src/query/evaluator";
 import { QueryNote } from "../src/query/note";
+import { ExpressionParser } from "../src/query/parser";
 import { Properties } from "../src/query/properties";
 import { PropertyTypes } from "../src/query/propertyTypes";
 
@@ -52,10 +54,14 @@ test("a long chain of one operator compiles and evaluates without running out of
   expect(evaluator.evaluate(expr, { note, this: null, now: NOW }).kind).toBe("null");
 });
 
-// Chains that compile (a text's lower() calls, a list's [0] steps): one stays a value (null: no such property), the other runs the stack out and is the too-deep error, never a RangeError.
+// Each step of a chain is a level of the parser's 64, so a long chain is a syntax error whatever the stack, and one
+// within the limit is a value.
 test.each([
-  ["lower() calls", "title" + ".lower()".repeat(1_200), "null"],
-  ["[0] steps", "tags" + "[0]".repeat(3_300), "too-deep"],
+  ["lower() calls", "title" + ".lower()".repeat(1_200), "syntax"],
+  ["[0] steps", "tags" + "[0]".repeat(3_300), "syntax"],
+  ["members", Array(4_000).fill("a").join("."), "syntax"],
+  ["lower() calls within the limit", "title" + ".lower()".repeat(31), "null"],
+  ["[0] steps within the limit", "tags" + "[0]".repeat(63), "null"],
 ])("a long chain of %s ends as expected", (_, source, expected) => {
   expect(source.length).toBeLessThan(10_000);
   const evaluator = new Evaluator();
@@ -64,7 +70,56 @@ test.each([
     const expr = evaluator.compile(source);
     outcome = evaluator.evaluate(expr, { note, this: null, now: NOW }).kind;
   } catch (e) {
-    outcome = (e as { code?: string }).code ?? String(e);
+    outcome = e instanceof QuerySyntaxError ? "syntax" : ((e as { code?: string }).code ?? String(e));
   }
   expect(outcome).toBe(expected);
+});
+
+const run = (formulas: Map<string, string>, source: string) => {
+  const evaluator = new Evaluator(formulas);
+  return evaluator.evaluate(evaluator.compile(source), { note, this: null, now: NOW });
+};
+
+test("formulas that each use the next twice are worked out once each", () => {
+  const formulas = new Map(Array.from({ length: 30 }, (_, i) => [`f${i}`, `formula.f${i + 1} + formula.f${i + 1}`] as [string, string]));
+  formulas.set("f30", "1");
+  const started = performance.now();
+  expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 2 ** 30 });
+  expect(performance.now() - started).toBeLessThan(1_000);
+});
+
+const ladder = (text: (i: number) => string) => {
+  const formulas = new Map(Array.from({ length: ExpressionParser.MAX_DEPTH - 1 }, (_, i) => [`f${i}`, text(i)] as [string, string]));
+  formulas.set(`f${ExpressionParser.MAX_DEPTH - 1}`, "1");
+  for (const t of formulas.values()) expect(t.length).toBeLessThanOrEqual(ExpressionParser.MAX_LENGTH);
+  return formulas;
+};
+
+// The worst the limits allow: 64 levels of formulas, each as long as an expression may be, with the next formula where
+// the walk goes deepest.
+test("formulas at every limit, each a long chain, compile and evaluate", () => {
+  const formulas = ladder((i) => `formula.f${i + 1}` + "&&1".repeat(Math.floor((ExpressionParser.MAX_LENGTH - 12) / 3)));
+  expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 1 });
+});
+
+// Nested as deeply as an expression may be, 64 levels of formulas stack about 4,000 levels: that compiles on the
+// server's stack, and here it may outrun a cold JavaScript stack, where compile's net makes it too-deep, never a RangeError.
+test("formulas at every limit, each nested as deeply as allowed, give a value or too-deep", () => {
+  const formulas = ladder((i) => "-".repeat(ExpressionParser.MAX_DEPTH - 2) + `formula.f${i + 1}`);
+  const outcome = codeOf(() => expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 1 }));
+  expect(["none", "too-deep"]).toContain(outcome);
+});
+
+test("a formula beyond the depth limit is still too deep when its formulas were checked before", () => {
+  const formulas = new Map(Array.from({ length: 70 }, (_, i) => [`f${i}`, `formula.f${i + 1}`] as [string, string]));
+  formulas.set("f70", "1");
+  const evaluator = new Evaluator(formulas);
+  evaluator.compile("formula.f10");
+  expect(codeOf(() => evaluator.compile("formula.f0"))).toBe("too-deep");
+});
+
+test("a cycle is found when part of it was checked before", () => {
+  const evaluator = new Evaluator(new Map([["a", "formula.b"], ["b", "formula.c"], ["c", "1"], ["d", "formula.b + formula.d"]]));
+  evaluator.compile("formula.a");
+  expect(codeOf(() => evaluator.compile("formula.d"))).toBe("formula-cycle");
 });

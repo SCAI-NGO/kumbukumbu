@@ -92,8 +92,10 @@ class Parser {
     return { kind: "unary", operator, operand, position: start };
   }
 
+  // Each step of a chain (.name, [index], a call) is a level, held until the chain ends: its tree nests one deeper per step.
   private postfix(first: Expr): Expr {
     let expr = first;
+    let steps = 0;
     for (;;) {
       this.skipSpace();
       const start = this.at;
@@ -116,8 +118,11 @@ class Parser {
           expr = { kind: "call", callee: expr, args: this.items(")"), position: start };
           break;
         default:
+          this.depth -= steps;
           return expr;
       }
+      this.enter();
+      steps++;
     }
   }
 

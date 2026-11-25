@@ -88,6 +88,10 @@ const METHODS = new Set(MethodReference.map((m) => m.name));
 export class Evaluator {
   private readonly formulaExprs = new Map<string, Expr>();
   private readonly regexes = new Map<Expr, RE2JS>();
+  private readonly checkedLevels = new Map<string, number>();
+  private deepest = 0;
+  private readonly values = new Map<string, Value>();
+  private valuesFor: Scope | null = null;
 
   constructor(private readonly formulaTexts: ReadonlyMap<string, string> = new Map()) {}
 
@@ -98,8 +102,8 @@ export class Evaluator {
       this.check(expr, []);
       return expr;
     } catch (e) {
-      // The parser's depth limit counts brackets and prefix operators, not the steps of a chain (a.b.c..., x[0][0]...);
-      // there the stack's end is the limit, and an error like any other.
+      // Defence in depth: the parser's limit and the walk of operator chains keep the stack bounded; should it still run
+      // out, that is an error like any other.
       if (e instanceof RangeError) throw new QueryError("too-deep", "The expression is nested too deeply.", 0);
       throw e;
     }
@@ -110,7 +114,7 @@ export class Evaluator {
       case "literal": return expr.value;
       case "name": return name(expr.name, scope);
       case "member":
-        if (expr.target.kind === "name" && expr.target.name === "formula") return this.evaluate(this.formulaExprs.get(expr.name)!, scope);
+        if (expr.target.kind === "name" && expr.target.name === "formula") return this.formulaValue(expr.name, scope);
         return field(this.evaluate(expr.target, scope), expr.name);
       case "index": return index(this.evaluate(expr.target, scope), this.evaluate(expr.index, scope));
       case "call":
@@ -144,6 +148,20 @@ export class Evaluator {
       }
       case "regex": return regexValue(this.regexes.get(expr)!);
     }
+  }
+
+  // A formula's value for a row is worked out once, however often the row's expressions use it.
+  private formulaValue(formulaName: string, scope: Scope): Value {
+    if (scope !== this.valuesFor) {
+      this.values.clear();
+      this.valuesFor = scope;
+    }
+    let value = this.values.get(formulaName);
+    if (value === undefined) {
+      value = this.evaluate(this.formulaExprs.get(formulaName)!, scope);
+      this.values.set(formulaName, value);
+    }
+    return value;
   }
 
   // Formulas are checked where they are used, so one broken formula fails only the expressions that use it.
@@ -202,6 +220,14 @@ export class Evaluator {
     if (chain.length >= ExpressionParser.MAX_DEPTH)
       throw new QueryError("too-deep", `The formulas use each other more than ${ExpressionParser.MAX_DEPTH} levels deep.`, reference.position);
 
+    // A formula is checked once: its check holds wherever it is used again, but for the depth, which depends on where.
+    // So its levels of formulas are kept, and a reference from which they would pass the limit checks it again, to fail where it did.
+    const levels = this.checkedLevels.get(name);
+    if (levels !== undefined && chain.length + levels <= ExpressionParser.MAX_DEPTH) {
+      this.deepest = Math.max(this.deepest, chain.length + levels);
+      return;
+    }
+
     let expr = this.formulaExprs.get(name);
     if (expr === undefined) {
       expr = inExpression(text, () => ExpressionParser.parse(text));
@@ -209,9 +235,13 @@ export class Evaluator {
     }
 
     const parsed = expr;
+    const outer = this.deepest;
     chain.push(name);
+    this.deepest = chain.length;
     inExpression(text, () => this.check(parsed, chain));
     chain.pop();
+    this.checkedLevels.set(name, this.deepest - chain.length);
+    this.deepest = Math.max(outer, this.deepest);
   }
 
   private call(functionName: string, args: readonly Expr[], scope: Scope): Value {
