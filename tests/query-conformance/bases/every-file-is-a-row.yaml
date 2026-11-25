@@ -1,0 +1,27 @@
+description: A base runs over every file of its vault, archived notes, attachments and the base file itself included; a filter on file.ext keeps the notes.
+source: spec
+file: Lists/Files.base
+notes:
+  Ann.md: |
+    # Ann
+  _archive/Old.md: ""
+  Photos/photo.png: png
+base: |
+  views:
+    - type: table
+      name: Every file
+      order: [file.name, file.ext, file.size]
+    - type: table
+      name: Notes
+      filters: file.ext == "md" && !file.inFolder("_archive")
+      order: [file.name]
+runs:
+  - columns: [file.name, file.ext, file.size]
+    rows:
+      - [text Ann, text md, number 6]
+      - [text Files.base, text base, number 203]
+      - [text photo.png, text png, number 3]
+      - [text Old, text md, number 0]
+  - view: Notes
+    columns: [file.name]
+    rows: [[text Ann]]

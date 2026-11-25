@@ -109,7 +109,7 @@ export class Query {
       else values.set(param.name, NULL);
     }
 
-    return new QueryNote(this.note.path, this.note.content, { values, problem: null });
+    return new QueryNote(this.note.path, this.note.content, { values, problem: null }, this.note.size, this.note.created, this.note.modified);
   }
 }
 

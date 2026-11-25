@@ -39,6 +39,7 @@ description: Write a named query for the user, a note that lists notes by their 
 
    - The prose says what the query gives and when to use it: `query inspect` shows it to whoever calls the query, so write it for them.
    - The base block is Obsidian's Bases and nothing else, so the note renders in Obsidian too: a parameter is read as `this.<name>`, never with another syntax.
+   - A base runs over every file of the vault, as in Obsidian: attachments, `.base` files, the query itself and the archive too. Filter `file.ext == "md"` to keep Markdown files only, and `!file.inFolder("_archive")` to leave out the archive.
    - sh `help query` lists the functions, methods and fields. A date has fields (`birthday.month`), not methods. A text is quoted ("People").
 5. Run sh `query check <note>` and fix every error it names; the position counts in the expression it quotes.
 6. Run sh `query execute <note> --param name=value` with a value the user cares about, and look at the rows: are the right notes there, in the right order? Show the user the result and the note's link.

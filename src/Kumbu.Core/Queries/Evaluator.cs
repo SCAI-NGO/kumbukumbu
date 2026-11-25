@@ -48,20 +48,23 @@ public sealed class Evaluator
         new("round", "number.round()", "the number rounded, halves up"),
         new("date", "datetime.date()", "the date of a date and time"),
         new("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it"),
-        new("inFolder", "file.inFolder(folder)", "whether the note lies in the folder or below it"),
+        new("inFolder", "file.inFolder(folder)", "whether the file lies in the folder or below it"),
         new("hasProperty", "file.hasProperty(name)", "whether the note's frontmatter has the property"),
     ];
 
     /// <summary>The fields, by what they are read on.</summary>
     public static readonly IReadOnlyList<LanguageEntry> FieldReference =
     [
-        new("name", "file.name", "the file's name with its extension (Ann.md)"),
-        new("basename", "file.basename", "the file's name without its extension (Ann)"),
+        new("name", "file.name", "the file's name, a note's without .md (Ann, photo.png)"),
+        new("basename", "file.basename", "the file's name without its extension (Ann, photo)"),
         new("path", "file.path", "the path in the vault (People/Ann.md)"),
-        new("folder", "file.folder", "the folder in the vault (People)"),
-        new("ext", "file.ext", "the extension (md)"),
-        new("tags", "file.tags", "the note's tags, frontmatter and text"),
-        new("properties", "file.properties", "the frontmatter as an object"),
+        new("folder", "file.folder", "the folder in the vault (People; / at the root)"),
+        new("ext", "file.ext", "the extension (md, png)"),
+        new("size", "file.size", "the size in bytes"),
+        new("ctime", "file.ctime", "when the file was created, a date and time"),
+        new("mtime", "file.mtime", "when the file was last changed, a date and time"),
+        new("tags", "file.tags", "the note's tags, frontmatter and text; none for other files"),
+        new("properties", "file.properties", "the frontmatter as an object; empty for other files"),
         new("length", "text.length, list.length", "how many characters or items"),
         new("year", "date.year, .month, .day", "a date's parts; a date and time also has .hour, .minute, .second"),
     ];
@@ -251,11 +254,14 @@ public sealed class Evaluator
 
     private static Value Field(Value value, string name) => (value, name) switch
     {
-        (FileValue f, "name") => new TextValue(FileName(f.Note.Path)),
+        (FileValue f, "name") => new TextValue(f.Note.IsNote ? FileName(f.Note.Path)[..^".md".Length] : FileName(f.Note.Path)),
         (FileValue f, "basename") => new TextValue(Path.GetFileNameWithoutExtension(FileName(f.Note.Path))),
         (FileValue f, "path") => new TextValue(f.Note.Path),
         (FileValue f, "folder") => new TextValue(Folder(f.Note.Path)),
         (FileValue f, "ext") => new TextValue(Path.GetExtension(FileName(f.Note.Path)).TrimStart('.')),
+        (FileValue f, "size") => new NumberValue(f.Note.Size),
+        (FileValue f, "ctime") => f.Note.Created is { } created ? new DateTimeValue(created) : NullValue.Instance,
+        (FileValue f, "mtime") => f.Note.Modified is { } modified ? new DateTimeValue(modified) : NullValue.Instance,
         (FileValue f, "tags") => new ListValue(f.Note.Tags.Select(t => (Value)new TextValue(t)).ToList()),
         (FileValue f, "properties") => new ObjectValue(f.Note.Properties.Values),
         (NoteRefValue r, "file") => new FileValue(r.Note),
@@ -278,7 +284,7 @@ public sealed class Evaluator
 
     private static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
 
-    private static string Folder(string path) => path.LastIndexOf('/') is var slash and >= 0 ? path[..slash] : "";
+    private static string Folder(string path) => path.LastIndexOf('/') is var slash and >= 0 ? path[..slash] : "/";
 
     private static Value Index(Value target, Value index) => (target, index) switch
     {

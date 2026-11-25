@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Calendar;
+using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
 using Kumbu.Core.Queries;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Tests.Fakes;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Core.Tests.Sh;
 
@@ -101,11 +105,55 @@ public class QueryCommandTests
     }
 
     [Fact]
-    public async Task Execute_sorts_by_the_view_and_leaves_out_archived_notes()
+    public async Task Execute_holds_the_rows_to_the_view_s_filters()
     {
         var result = await Run("query execute /V/Queries/Birthdays.md --param month=11 --param kind=family");
 
         Assert.Equal("By day: 1 note\n| path | file.basename | birthday |\n| --- | --- | --- |\n| /V/People/Dora.md | Dora | 1985-11-12 |", result.Output);
+    }
+
+    [Fact]
+    public async Task Execute_runs_over_every_file_of_the_vault_archived_ones_too()
+    {
+        _store.AddAttachment("/V/Photos/photo.png");
+        _store.AddTextFile("/V/Empty/.vaultkeep", "");
+
+        Assert.Equal(ShellResult.Ok("""
+            All: 9 notes
+            | path | file.name |
+            | --- | --- |
+            | /V/Lists/All notes.base | All notes.base |
+            | /V/People/Ann.md | Ann |
+            | /V/People/Cleo.md | Cleo |
+            | /V/People/Dora.md | Dora |
+            | /V/Photos/photo.png | photo.png |
+            | /V/Queries/Birthdays.md | Birthdays |
+            | /V/Queries/Draft.md | Draft |
+            | /V/Queries/Loud.md | Loud |
+            | /V/_archive/People/Old.md | Old |
+            """), await Run("query execute 'All notes'"));
+    }
+
+    [Fact]
+    public async Task Execute_gives_each_file_its_size_and_times_in_the_caller_s_zone()
+    {
+        var store = new InMemoryNoteStore();
+        Assert.True(VaultPath.TryParse("/V/Times/Grün.md", out var note));
+        store.Put(new StoredNote(note!, "grün\n", 3, Writers.Seed, new DateTime(2026, 11, 20, 10, 30, 0, DateTimeKind.Utc), [],
+            Ref: WriterRef.Server, CreatedAt: new DateTime(2026, 11, 1, 8, 0, 0, DateTimeKind.Utc)));
+        store.AddAttachment("/V/Times/photo.png");
+        store.AddTextFile("/V/Times.base", "filters: file.inFolder(\"Times\")\nviews:\n  - type: table\n    name: Times\n    order: [file.size, file.ctime, file.mtime]\n");
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(60));
+        var zone = new ServerZone(TimeZoneInfo.CreateCustomTimeZone("Plus two", TimeSpan.FromHours(2), "Plus two", "Plus two"));
+        var sh = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)), zone: zone);
+
+        Assert.Equal(ShellResult.Ok("""
+            Times: 2 notes
+            | path | file.size | file.ctime | file.mtime |
+            | --- | --- | --- | --- |
+            | /V/Times/Grün.md | 6 | 2026-11-01T10:00:00 | 2026-11-20T12:30:00 |
+            | /V/Times/photo.png | 8 | 2026-10-01T14:00:00 | 2026-10-01T14:00:00 |
+            """), await sh.RunAsync("query execute /V/Times.base", CancellationToken.None));
     }
 
     [Fact]

@@ -56,19 +56,22 @@ export const MethodReference: readonly LanguageEntry[] = [
   entry("round", "number.round()", "the number rounded, halves up"),
   entry("date", "datetime.date()", "the date of a date and time"),
   entry("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it"),
-  entry("inFolder", "file.inFolder(folder)", "whether the note lies in the folder or below it"),
+  entry("inFolder", "file.inFolder(folder)", "whether the file lies in the folder or below it"),
   entry("hasProperty", "file.hasProperty(name)", "whether the note's frontmatter has the property"),
 ];
 
 /** The fields, by what they are read on. */
 export const FieldReference: readonly LanguageEntry[] = [
-  entry("name", "file.name", "the file's name with its extension (Ann.md)"),
-  entry("basename", "file.basename", "the file's name without its extension (Ann)"),
+  entry("name", "file.name", "the file's name, a note's without .md (Ann, photo.png)"),
+  entry("basename", "file.basename", "the file's name without its extension (Ann, photo)"),
   entry("path", "file.path", "the path in the vault (People/Ann.md)"),
-  entry("folder", "file.folder", "the folder in the vault (People)"),
-  entry("ext", "file.ext", "the extension (md)"),
-  entry("tags", "file.tags", "the note's tags, frontmatter and text"),
-  entry("properties", "file.properties", "the frontmatter as an object"),
+  entry("folder", "file.folder", "the folder in the vault (People; / at the root)"),
+  entry("ext", "file.ext", "the extension (md, png)"),
+  entry("size", "file.size", "the size in bytes"),
+  entry("ctime", "file.ctime", "when the file was created, a date and time"),
+  entry("mtime", "file.mtime", "when the file was last changed, a date and time"),
+  entry("tags", "file.tags", "the note's tags, frontmatter and text; none for other files"),
+  entry("properties", "file.properties", "the frontmatter as an object; empty for other files"),
   entry("length", "text.length, list.length", "how many characters or items"),
   entry("year", "date.year, .month, .day", "a date's parts; a date and time also has .hour, .minute, .second"),
 ];
@@ -298,7 +301,7 @@ function name(propertyName: string, scope: Scope): Value {
 const property = (note: QueryNote, propertyName: string): Value => note.properties.values.get(propertyName) ?? NULL;
 
 const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
-const folderOf = (path: string) => (path.lastIndexOf("/") >= 0 ? path.slice(0, path.lastIndexOf("/")) : "");
+const folderOf = (path: string) => (path.lastIndexOf("/") >= 0 ? path.slice(0, path.lastIndexOf("/")) : "/");
 
 // .NET's Path.GetFileNameWithoutExtension and GetExtension: the last dot starts the extension, unless it ends the name.
 const baseName = (file: string) => (file.lastIndexOf(".") >= 0 ? file.slice(0, file.lastIndexOf(".")) : file);
@@ -308,11 +311,14 @@ function field(value: Value, fieldName: string): Value {
   switch (value.kind) {
     case "file":
       switch (fieldName) {
-        case "name": return textValue(fileName(value.note.path));
+        case "name": return textValue(value.note.isNote ? fileName(value.note.path).slice(0, -".md".length) : fileName(value.note.path));
         case "basename": return textValue(baseName(fileName(value.note.path)));
         case "path": return textValue(value.note.path);
         case "folder": return textValue(folderOf(value.note.path));
         case "ext": return textValue(extension(fileName(value.note.path)));
+        case "size": return numberValue(value.note.size);
+        case "ctime": return value.note.created === null ? NULL : dateTimeValue(value.note.created);
+        case "mtime": return value.note.modified === null ? NULL : dateTimeValue(value.note.modified);
         case "tags": return listValue(value.note.tags.map(textValue));
         case "properties": return objectValue(value.note.properties.values);
         default: return NULL;

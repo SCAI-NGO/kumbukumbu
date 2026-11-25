@@ -10,9 +10,9 @@ using Kumbu.Core.Sections;
 namespace Kumbu.Core.Sh.Commands;
 
 /// <summary><c>query</c> (queries spec §7): the named queries, one surface for every one of them, so an agent finds and
-/// calls them as it finds notes. A query runs over the notes of its own vault, archived notes left out, with the vault's
-/// declared property types.</summary>
-public sealed class QueryCommand(INoteReader notes, Func<DateTime> now, ICallerZone zone) : ICommand
+/// calls them as it finds notes. A query runs over every file of its own vault, as Obsidian's Bases do (bases spec
+/// 2026-11-25 §1): its notes, archived ones too, with the vault's declared property types, and its other files.</summary>
+public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZone zone) : ICommand
 {
     private const string TypesFile = ".obsidian/types.json";
 
@@ -32,10 +32,11 @@ public sealed class QueryCommand(INoteReader notes, Func<DateTime> now, ICallerZ
           The query note as its author explains it, its parameters (type, required or default, the
           values it is held to, what it means), its views, and how to run it.
         query execute <query> [--view <view>] [--param <name>=<value>]...
-          Runs the query's first view, or the one named, over the notes of its vault (archived notes
-          left out): the view, how many notes, then a table led by each note's path. Each --param
-          gives a parameter; a list parameter takes one --param per item. A value is only ever a
-          value, never an expression.
+          Runs the query's first view, or the one named, over every file of its vault, archived
+          notes, attachments and .base files too (file.ext == "md" keeps the notes,
+          !file.inFolder("_archive") leaves out the archive): the view, how many notes, then a
+          table led by each file's path. Each --param gives a parameter; a list parameter takes
+          one --param per item. A value is only ever a value, never an expression.
         query check <query>
           Compiles every view without running it and needing no arguments: ok, or each error with
           its code, the expression it is in and the position there.
@@ -167,6 +168,8 @@ public sealed class QueryCommand(INoteReader notes, Func<DateTime> now, ICallerZ
         if (found is null) return error!;
         var (path, note) = found.Value;
         var vault = await VaultAsync(path, ct);
+        // The query note as this, with its size and times as its row has them.
+        if (vault.Keys.FirstOrDefault(n => n.Path == note.Path) is { } row) note = new QueryNote(note.Path, note.Content, note.Properties, row.Size, row.Created, row.Modified);
         QueryResult result;
         try
         {
@@ -325,24 +328,46 @@ public sealed class QueryCommand(INoteReader notes, Func<DateTime> now, ICallerZ
     {
         if (await StoreAttachments.GetAsync(notes, path, ct) is not { Current: var state } || state.MediaType != AttachmentFormat.TextMediaType) return null;
         return await StoreAttachments.ReadBytesAsync(notes, path, state, ct) is { } bytes
-            ? new QueryNote(InVault(path), StoreAttachments.Text(bytes), new NoteProperties(new Dictionary<string, Value>(), null))
+            ? new QueryNote(InVault(path), StoreAttachments.Text(bytes), NoProperties)
             : null;
     }
 
     private async Task<QueryNote> QueryNoteAsync(VaultPath path, string content, CancellationToken ct) =>
         new(InVault(path), content, Properties.Read(content, await TypesAsync(path.Segments[0], ct)));
 
-    // The notes a query of this vault runs over, each with its path in the store.
+    // The files a query of this vault runs over, each with its path in the store; times in the caller's zone, as now() is.
     private async Task<Dictionary<QueryNote, VaultPath>> VaultAsync(VaultPath query, CancellationToken ct)
     {
-        var vault = query.Segments[0];
-        var types = await TypesAsync(vault, ct);
-        var below = await notes.ReadNotesUnderAsync(VaultPath.Root.Child(vault), ct);
+        var vault = VaultPath.Root.Child(query.Segments[0]);
+        var types = await TypesAsync(query.Segments[0], ct);
+        var local = await zone.ZoneAsync(ct);
+        DateTime Local(DateTime utc) => TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), local);
+
         var all = new Dictionary<QueryNote, VaultPath>(ReferenceEqualityComparer.Instance);
-        foreach (var note in below.Where(n => !ArchiveFolder.Contains(n.Path)))
-            all[new QueryNote(InVault(note.Path), note.Content, Properties.Read(note.Content, types))] = note.Path;
+        foreach (var note in await notes.ReadNotesUnderAsync(vault, ct))
+        {
+            if (!InObsidian(note.Path)) continue;
+            var stored = await notes.GetAsync(note.Path, ct);
+            all[new QueryNote(InVault(note.Path), note.Content, Properties.Read(note.Content, types), null,
+                stored is null ? null : Local(NoteCreation.Of(stored).At), stored is null ? null : Local(stored.LastWriteAt))] = note.Path;
+        }
+
+        // An attachment's oldest state known is when it came into being; the store keeps no other record of that.
+        foreach (var file in await StoreAttachments.UnderAsync(notes, vault, ct))
+        {
+            if (!InObsidian(file.Path)) continue;
+            var created = file.History.Count > 0 ? file.History[^1].WrittenAt : file.LastWriteAt;
+            all[new QueryNote(InVault(file.Path), "", NoProperties, file.Current.Size, Local(created), Local(file.LastWriteAt))] = file.Path;
+        }
+
         return all;
     }
+
+    private static readonly NoteProperties NoProperties = new(new Dictionary<string, Value>(), null);
+
+    // Obsidian's vault leaves out every name that starts with a dot and what lies below it: its own .obsidian/, and so the
+    // folder markers (.vaultkeep) too.
+    private static bool InObsidian(VaultPath path) => !path.Segments.Skip(1).Any(s => s.StartsWith('.'));
 
     private async Task<IReadOnlyDictionary<string, PropertyType>> TypesAsync(string vault, CancellationToken ct)
     {

@@ -131,8 +131,21 @@ const codeOf = (e: unknown): string =>
 
 type Types = ReturnType<typeof PropertyTypes.read>;
 
-const queryNotes = (root: Case, types: Types) => new Map(Object.entries(map(root.notes)).map(([path, content]) =>
-  [path, new QueryNote(path, text(content), Properties.read(text(content), types))]));
+// The files of a case: a .md file is a note; any other is a file with that text, without properties. A base case with
+// "file" has its base as one of the files; times are null unless the case gives them.
+function queryNotes(root: Case, types: Types): Map<string, QueryNote> {
+  const times = root.times === undefined ? {} : map(root.times);
+  const file = (path: string, content: string) => {
+    const properties = QueryNote.isNotePath(path) ? Properties.read(content, types) : { values: new Map(), problem: null };
+    const given = times[path];
+    return given === undefined
+      ? new QueryNote(path, content, properties)
+      : new QueryNote(path, content, properties, null, text(map(given).ctime), text(map(given).mtime));
+  };
+  const notes = new Map(Object.entries(map(root.notes)).map(([path, content]) => [path, file(path, text(content))]));
+  if (root.file !== undefined) notes.set(text(root.file), file(text(root.file), text(root.base)));
+  return notes;
+}
 
 function expressions(root: Case, types: Types): void {
   const notes = queryNotes(root, types);

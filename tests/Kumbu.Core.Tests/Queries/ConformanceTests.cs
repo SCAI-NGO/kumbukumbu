@@ -73,10 +73,27 @@ public class ConformanceTests
     // Default clock of a case without "now": any fixed moment, so no case depends on the day it runs.
     private static readonly DateTime DefaultNow = new(2026, 1, 1, 12, 0, 0);
 
+    // The files of a case: a .md file is a note; any other is a file with that text, without properties. A base case
+    // with "file" has its base as one of the files; times are null unless the case gives them.
+    private static Dictionary<string, QueryNote> QueryNotes(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types)
+    {
+        var times = root.Children.TryGetValue("times", out var t) ? (YamlMappingNode)t : new YamlMappingNode();
+        QueryNote File(string path, string content)
+        {
+            var properties = QueryNote.IsNotePath(path) ? Properties.Read(content, types) : new NoteProperties(new Dictionary<string, Value>(), null);
+            if (!times.Children.TryGetValue(path, out var given)) return new QueryNote(path, content, properties);
+            DateTime Time(string key) => DateTime.ParseExact(Text(((YamlMappingNode)given)[key]), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
+            return new QueryNote(path, content, properties, created: Time("ctime"), modified: Time("mtime"));
+        }
+
+        var notes = ((YamlMappingNode)root["notes"]).Children.ToDictionary(n => Text(n.Key), n => File(Text(n.Key), Text(n.Value)));
+        if (root.Children.TryGetValue("file", out var file)) notes[Text(file)] = File(Text(file), Text(root["base"]));
+        return notes;
+    }
+
     private static void Expressions(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types, YamlSequenceNode cases)
     {
-        var notes = ((YamlMappingNode)root["notes"]).Children
-            .ToDictionary(n => Text(n.Key), n => new QueryNote(Text(n.Key), Text(n.Value), Properties.Read(Text(n.Value), types)));
+        var notes = QueryNotes(root, types);
         var formulas = root.Children.TryGetValue("formulas", out var f)
             ? ((YamlMappingNode)f).Children.ToDictionary(e => Text(e.Key), e => Text(e.Value))
             : [];
@@ -114,8 +131,7 @@ public class ConformanceTests
 
     private static void Bases(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types, YamlSequenceNode runs)
     {
-        var notes = ((YamlMappingNode)root["notes"]).Children
-            .ToDictionary(n => Text(n.Key), n => new QueryNote(Text(n.Key), Text(n.Value), Properties.Read(Text(n.Value), types)));
+        var notes = QueryNotes(root, types);
         var self = root.Children.TryGetValue("this", out var t) ? notes[Text(t)] : null;
         var now = root.Children.TryGetValue("now", out var n)
             ? DateTime.ParseExact(Text(n), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
@@ -148,8 +164,7 @@ public class ConformanceTests
 
     private static void Queries(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types)
     {
-        var notes = ((YamlMappingNode)root["notes"]).Children
-            .ToDictionary(n => Text(n.Key), n => new QueryNote(Text(n.Key), Text(n.Value), Properties.Read(Text(n.Value), types)));
+        var notes = QueryNotes(root, types);
         var now = root.Children.TryGetValue("now", out var n)
             ? DateTime.ParseExact(Text(n), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
             : DefaultNow;

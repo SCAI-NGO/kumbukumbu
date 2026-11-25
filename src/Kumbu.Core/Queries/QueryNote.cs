@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Core.Tags;
 
 namespace Kumbu.Core.Queries;
 
-/// <summary>A note as a query reads it: its path in the vault, its text and its typed properties.</summary>
-public sealed class QueryNote(string path, string content, NoteProperties properties)
+/// <summary>A file as a query reads it: its path in the vault, its text, its typed properties, its size in bytes and its
+/// times (null where they aren't known). A note is a <c>.md</c> file; any other file (a <c>.base</c> file, an attachment)
+/// is a row too, with no properties and no tags.</summary>
+/// <param name="size">The size in bytes; left out, the UTF-8 length of the text, as a note's is.</param>
+public sealed class QueryNote(string path, string content, NoteProperties properties, long? size = null, DateTime? created = null, DateTime? modified = null)
 {
     public string Path { get; } = path;
 
@@ -12,10 +16,20 @@ public sealed class QueryNote(string path, string content, NoteProperties proper
 
     public NoteProperties Properties { get; } = properties;
 
-    /// <summary>Its tags as Obsidian reads them, frontmatter first, each once (ignoring case), as first written.</summary>
-    public IReadOnlyList<string> Tags => tags ??= TagReader.Of(Content).Select(t => t.Tag).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    public bool IsNote => IsNotePath(Path);
+
+    public long Size { get; } = size ?? Encoding.UTF8.GetByteCount(content);
+
+    public DateTime? Created { get; } = created;
+
+    public DateTime? Modified { get; } = modified;
+
+    /// <summary>Its tags as Obsidian reads them, frontmatter first, each once (ignoring case), as first written; none for a file that isn't a note.</summary>
+    public IReadOnlyList<string> Tags => tags ??= IsNote ? TagReader.Of(Content).Select(t => t.Tag).Distinct(StringComparer.OrdinalIgnoreCase).ToList() : [];
 
     private IReadOnlyList<string>? tags;
+
+    public static bool IsNotePath(string path) => path.EndsWith(".md", StringComparison.Ordinal);
 }
 
 /// <summary>A note's file, as <c>file</c> and <c>this.file</c> give it: two are equal when their paths are.</summary>

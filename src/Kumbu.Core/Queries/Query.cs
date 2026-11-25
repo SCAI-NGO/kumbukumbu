@@ -105,7 +105,7 @@ public sealed partial class Query
             else values[param.Name] = NullValue.Instance;
         }
 
-        return new QueryNote(note.Path, note.Content, new NoteProperties(values, null));
+        return new QueryNote(note.Path, note.Content, new NoteProperties(values, null), note.Size, note.Created, note.Modified);
     }
 
     private static Value Argument(QueryParam param, IReadOnlyList<string> given)

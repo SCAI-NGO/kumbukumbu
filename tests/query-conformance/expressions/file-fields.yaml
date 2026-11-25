@@ -1,6 +1,5 @@
 description: A note's name drops ".md" (other files keep their extension), as its basename does; its folder is "/" at the vault's root.
 source: obsidian 1.15.1
-pending: [cs, ts]
 notes:
   People/Friends/Ann.md: ""
   Brita.md: ""

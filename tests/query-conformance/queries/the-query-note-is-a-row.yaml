@@ -1,0 +1,22 @@
+description: The query note is a row of its own base where its filters let it be; with no status anywhere, null equals null.
+source: obsidian 1.15.1
+query: Queries/Same status.md
+notes:
+  Queries/Same status.md: |
+    ---
+    type: query
+    ---
+    ```base
+    filters: status == this.status
+    views:
+      - type: table
+        name: Same
+        order: [file.name]
+    ```
+  Ann.md: |
+    # Ann
+runs:
+  - columns: [file.name]
+    rows:
+      - [text Ann]
+      - [text Same status]

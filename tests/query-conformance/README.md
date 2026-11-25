@@ -27,6 +27,13 @@ expect:
 pending: [ts]         # optional: implementations that don't pass it yet (cs, ts); each runner skips it visibly, never silently
 ```
 
+A file in `notes` is a note when its path ends in `.md`. Any other path is another file of the vault, a `.base` file or an attachment (`photo.png`), with that text as its content and no properties or tags; its `file.size` is the text's UTF-8 length, as a note's is. A query runs over every file, as Obsidian's Bases do. `file.ctime` and `file.mtime` are null unless the case gives a file its times:
+
+```yaml
+times:                # optional: path: when the file was created and last changed
+  People/Ann.md: { ctime: 2026-11-20T09:15:00, mtime: 2026-11-24T18:00:00 }
+```
+
 A case about expressions (in `expressions/`) gives a list of `cases` instead of `expect`, each an expression with its value for every note, or the error the expression is:
 
 ```yaml
@@ -48,9 +55,10 @@ cases:
     error: unknown-function   # or syntax, unknown-method, unknown-formula, formula-cycle, regex, too-deep
 ```
 
-A case about bases (in `bases/`) gives the base and a list of `runs`, each a view (the first when left out) with its columns and rows in order, or the error it is:
+A case about bases (in `bases/`) gives the base and a list of `runs`, each a view (the first when left out) with its columns and rows in order, or the error it is. Without `file`, the base is a block outside the vault and not a row; with it, the base is that file of the vault, a row where its filters let it be:
 
 ```yaml
+file: case.base       # optional: the base file's own path
 base: |
   filters: file.inFolder("People")
   views:

@@ -19,7 +19,7 @@ base: |
 runs:
   - view: Fine
     columns: [file.name]
-    rows: [[text a.md]]
+    rows: [[text a]]
   - view: Missing
     error: unknown-view
   - view: Uses broken
