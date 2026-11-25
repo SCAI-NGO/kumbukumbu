@@ -101,12 +101,43 @@ test("formulas at every limit, each a long chain, compile and evaluate", () => {
   expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 1 });
 });
 
-// Nested as deeply as an expression may be, 64 levels of formulas stack about 4,000 levels: that compiles on the
-// server's stack, and here it may outrun a cold JavaScript stack, where compile's net makes it too-deep, never a RangeError.
-test("formulas at every limit, each nested as deeply as allowed, give a value or too-deep", () => {
+// Nested as deeply as an expression may be, 64 levels of formulas stack about 4,000 levels: more than the levels a
+// thread's stack of the server holds, so too deep on both engines.
+test("formulas at every limit, each nested as deeply as allowed, are too deep", () => {
   const formulas = ladder((i) => "-".repeat(ExpressionParser.MAX_DEPTH - 2) + `formula.f${i + 1}`);
-  const outcome = codeOf(() => expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 1 }));
-  expect(["none", "too-deep"]).toContain(outcome);
+  expect(codeOf(() => run(formulas, "formula.f0"))).toBe("too-deep");
+});
+
+const chain = (nesting: number) => ladder((i) => "-".repeat(nesting) + `formula.f${i + 1}`);
+
+test("64 formulas nested 30 deep each are too deep", () => {
+  expect(codeOf(() => run(chain(30), "formula.f0"))).toBe("too-deep");
+});
+
+test("formulas within the levels evaluate", () => {
+  // Each formula is its negations and the reference: nesting + 1 levels, and the expression's own one.
+  const nesting = Math.floor((Evaluator.MAX_LEVELS - 1) / ExpressionParser.MAX_DEPTH) - 2;
+  expect(run(chain(nesting), "formula.f0")).toEqual({ kind: "number", number: nesting % 2 === 0 ? 1 : -1 });
+});
+
+// A cycle cuts each stage's check short, so the levels the check keeps undercount the path an evaluation takes through
+// the stages: S1 → … → S63, where S63 also uses the previous stage's entry, and S64, the next stage's entry, uses S1.
+test.each([0, 30])("formulas that go deeper through cycles than their check sees are too deep (nesting %i)", (nesting) => {
+  const stages = 10;
+  const k = 64;
+  const wrap = (text: string) => `${"-".repeat(nesting)}(${text})`;
+  const formulas = new Map([["A1", "1"]]);
+  let entry = "A1";
+  for (let s = 0; s < stages; s++) {
+    for (let i = 1; i <= k; i++)
+      formulas.set(`S${s}_${i}`, wrap(i < k - 1 ? `formula.S${s}_${i + 1}` : i === k - 1 ? `formula.${entry} + formula.S${s}_${k}` : `formula.S${s}_1`));
+    entry = `S${s}_${k}`;
+  }
+  const evaluator = new Evaluator(formulas);
+  expect(codeOf(() => {
+    for (let s = 0; s < stages; s++) evaluator.compile(`formula.S${s}_1`);
+    return evaluator.evaluate(evaluator.compile(`formula.${entry}`), { note, this: null, now: NOW });
+  })).toBe("too-deep");
 });
 
 test("a formula beyond the depth limit is still too deep when its formulas were checked before", () => {

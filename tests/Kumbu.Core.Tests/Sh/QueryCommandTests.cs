@@ -240,9 +240,22 @@ public class QueryCommandTests
     [Fact]
     public async Task Execute_tells_no_errors_when_no_cell_holds_one()
     {
-        var result = await Run("query execute /V/Queries/Birthdays.md --param month=11");
+        _store.AddTextFile("/V/Ages.base", """
+            filters: file.inFolder("People") && file.name == "Ann"
+            formulas:
+              double: age * 2
+            views:
+              - type: table
+                name: Ages
+                order: [file.name, formula.double]
+            """);
 
-        Assert.DoesNotContain("error", result.Output);
+        Assert.Equal(ShellResult.Ok("""
+            Ages: 1 row
+            | path | file.name | formula.double |
+            | --- | --- | --- |
+            | /V/People/Ann.md | Ann | 92 |
+            """), await Run("query execute /V/Ages.base"));
     }
 
     [Fact]

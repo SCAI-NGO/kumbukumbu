@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 
 namespace Kumbu.Core.Queries;
@@ -88,6 +89,14 @@ public sealed partial class Evaluator
 
     private static readonly ErrorValue Cycle = new("Infinite loop detected in formula");
 
+    /// <summary>How many levels down compiling or evaluating an expression may go, its own and those of the formulas it
+    /// uses added up along the way: eight for each of 64 formulas. Measured on a thread pool's stack of 1.5 MB, the
+    /// costliest levels (if, number(), objects) run out at 1,420 in a debug build and 1,723 in a release one; 512 leaves
+    /// the larger part of the stack to the caller and the parser.</summary>
+    public const int MaxLevels = 512;
+
+    private int level;
+
     public Evaluator(IReadOnlyDictionary<string, string>? formulas = null) =>
         formulaTexts = formulas ?? new Dictionary<string, string>();
 
@@ -96,46 +105,72 @@ public sealed partial class Evaluator
     {
         var expr = ExpressionParser.Parse(text);
         checking = text;
+        level = 0;
         Check(expr, []);
         return expr;
+    }
+
+    // Both walks go down the formulas an expression uses, so both count their levels against one budget; the stack's own
+    // check is the net under it, for a thread whose stack is smaller than the budget assumes.
+    private void Down(Expr expr)
+    {
+        if (++level > MaxLevels || !RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new QueryError("too-deep", $"The expression and the formulas it uses go more than {MaxLevels} levels deep.", expr.Position);
     }
 
     /// <summary>What the expressions compiled so far name that doesn't exist, each once, in the order found.</summary>
     public IReadOnlyList<QueryWarning> Warnings => warnings;
 
-    public Value Evaluate(Expr expr, Scope scope) => expr switch
+    /// <summary>Evaluates a compiled expression for a row; throws <see cref="QueryError"/> <c>too-deep</c> when it and the
+    /// formulas it uses go more than <see cref="MaxLevels"/> levels down.</summary>
+    public Value Evaluate(Expr expr, Scope scope)
     {
-        LiteralExpr l => l.Value,
-        NameExpr n => Name(n.Name, scope),
-        MemberExpr { Target: NameExpr { Name: "formula" } } m => FormulaValue(m.Name, scope),
-        MemberExpr m => Field(Evaluate(m.Target, scope), m.Name),
-        IndexExpr i => Index(Evaluate(i.Target, scope), Evaluate(i.Index, scope)),
-        CallExpr { Callee: NameExpr f } c => Function(f.Name, c.Arguments, scope),
-        CallExpr { Callee: MemberExpr m } c => Method(Evaluate(m.Target, scope), m.Name, c.Arguments.Select(a => Evaluate(a, scope)).ToList()),
-        CallExpr => new ErrorValue("Only a function or a method can be called"),
-        UnaryExpr u => Evaluate(u.Operand, scope) switch
+        level = 0;
+        evaluating.Clear();
+        return Eval(expr, scope);
+    }
+
+    // Counted here, not only in the check: a check cut short by a cycle, or by a formula checked before, can't see how deep
+    // the formulas really go along this path.
+    private Value Eval(Expr expr, Scope scope)
+    {
+        Down(expr);
+        var value = expr switch
         {
-            ErrorValue e => e,
-            var v when u.Operator == Operator.Not => new BooleanValue(!Truthy(v)),
-            NumberValue n => new NumberValue(-n.Number),
+            LiteralExpr l => l.Value,
+            NameExpr n => Name(n.Name, scope),
+            MemberExpr { Target: NameExpr { Name: "formula" } } m => FormulaValue(m.Name, scope),
+            MemberExpr m => Field(Eval(m.Target, scope), m.Name),
+            IndexExpr i => Index(Eval(i.Target, scope), Eval(i.Index, scope)),
+            CallExpr { Callee: NameExpr f } c => Function(f.Name, c.Arguments, scope),
+            CallExpr { Callee: MemberExpr m } c => Method(Eval(m.Target, scope), m.Name, c.Arguments.Select(a => Eval(a, scope)).ToList()),
+            CallExpr => new ErrorValue("Only a function or a method can be called"),
+            UnaryExpr u => Eval(u.Operand, scope) switch
+            {
+                ErrorValue e => e,
+                var v when u.Operator == Operator.Not => new BooleanValue(!Truthy(v)),
+                NumberValue n => new NumberValue(-n.Number),
+                _ => NullValue.Instance,
+            },
+            BinaryExpr b => Binary(b, scope),
+            ListExpr l => ListOf(l, scope),
+            ObjectExpr o => ObjectOf(o, scope),
+            RegexExpr r => new RegexValue(regexes[r]),
             _ => NullValue.Instance,
-        },
-        BinaryExpr b => Binary(b, scope),
-        ListExpr l => ListOf(l, scope),
-        ObjectExpr o => ObjectOf(o, scope),
-        RegexExpr r => new RegexValue(regexes[r]),
-        _ => NullValue.Instance,
-    };
+        };
+        level--;
+        return value;
+    }
 
     private Value ListOf(ListExpr l, Scope scope)
     {
-        var items = l.Items.Select(i => Evaluate(i, scope)).ToList();
+        var items = l.Items.Select(i => Eval(i, scope)).ToList();
         return items.OfType<ErrorValue>().FirstOrDefault() ?? (Value)new ListValue(items);
     }
 
     private Value ObjectOf(ObjectExpr o, Scope scope)
     {
-        var entries = o.Entries.GroupBy(e => e.Key).ToDictionary(g => g.Key, g => Evaluate(g.Last().Value, scope));
+        var entries = o.Entries.GroupBy(e => e.Key).ToDictionary(g => g.Key, g => Eval(g.Last().Value, scope));
         return entries.Values.OfType<ErrorValue>().FirstOrDefault() ?? (Value)new ObjectValue(entries);
     }
 
@@ -152,7 +187,7 @@ public sealed partial class Evaluator
 
         if (values.TryGetValue(name, out var value)) return value;
         if (!evaluating.Add(name)) return Cycle;
-        values[name] = value = Evaluate(expr, scope);
+        values[name] = value = Eval(expr, scope);
         evaluating.Remove(name);
         return value;
     }
@@ -161,16 +196,16 @@ public sealed partial class Evaluator
     private Value Binary(BinaryExpr expr, Scope scope)
     {
         var spine = LeftSpine(expr);
-        var value = Evaluate(spine[^1].Left, scope);
+        var value = Eval(spine[^1].Left, scope);
         for (var i = spine.Count - 1; i >= 0; i--)
         {
             if (value is ErrorValue) return value;
             var (op, right) = (spine[i].Operator, spine[i].Right);
             value = op switch
             {
-                Operator.And => Truthy(value) ? Evaluate(right, scope) : value,
-                Operator.Or => Truthy(value) ? value : Evaluate(right, scope),
-                _ => Binary(op, value, Evaluate(right, scope)),
+                Operator.And => Truthy(value) ? Eval(right, scope) : value,
+                Operator.Or => Truthy(value) ? value : Eval(right, scope),
+                _ => Binary(op, value, Eval(right, scope)),
             };
         }
 
@@ -188,6 +223,7 @@ public sealed partial class Evaluator
     // Formulas are checked where they are used, so one broken formula fails only the expressions that use it.
     private void Check(Expr expr, List<string> chain)
     {
+        Down(expr);
         switch (expr)
         {
             case CallExpr { Callee: NameExpr f } c:
@@ -233,6 +269,8 @@ public sealed partial class Evaluator
                 regexes[r] = Compile(r);
                 break;
         }
+
+        level--;
     }
 
     private void Warn(string code, string message, int position)
@@ -371,7 +409,7 @@ public sealed partial class Evaluator
 
     private Value Function(string name, IReadOnlyList<Expr> arguments, Scope scope)
     {
-        Value Argument(int i) => i < arguments.Count ? Evaluate(arguments[i], scope) : NullValue.Instance;
+        Value Argument(int i) => i < arguments.Count ? Eval(arguments[i], scope) : NullValue.Instance;
 
         if (!Functions.Contains(name)) return new ErrorValue($"Cannot find function \"{name}\"");
         if (name == "now") return new DateValue(scope.Now, true);

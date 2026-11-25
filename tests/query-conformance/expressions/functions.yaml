@@ -14,6 +14,7 @@ cases:
   - { expression: number(done), values: { Ann.md: number 1 } }
   - { expression: number("soon"), values: { Ann.md: error Unable to parse "soon" as a number. } }
   - { expression: number(" 12 "), values: { Ann.md: number 12 } }
+  - { expression: "number(\"\uFEFF12\")", values: { Ann.md: error Unable to parse } }
   - { expression: number("1e3"), values: { Ann.md: number 1000 } }
   - { expression: number("0x1F"), values: { Ann.md: number 31 } }
   - { expression: number("-Infinity"), values: { Ann.md: number -Infinity } }

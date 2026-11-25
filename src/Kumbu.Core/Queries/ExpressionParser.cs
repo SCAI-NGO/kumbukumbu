@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace Kumbu.Core.Queries;
@@ -41,6 +42,8 @@ public sealed class ExpressionParser
     private void Enter()
     {
         if (++depth > MaxDepth) throw new QuerySyntaxError($"The expression is nested too deeply: at most {MaxDepth} levels.", at);
+        // A formula is parsed where the check of the expressions that use it has gone down to; the stack may end first.
+        if (!RuntimeHelpers.TryEnsureSufficientExecutionStack()) throw new QueryError("too-deep", "The expression and the formulas it uses are nested too deeply.", at);
     }
 
     private Expr Or() => LeftToRight(And, ("||", Operator.Or));

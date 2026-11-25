@@ -104,6 +104,7 @@ export class Evaluator {
   private checking = "";
   private readonly values = new Map<string, Value>();
   private readonly evaluating = new Set<string>();
+  private level = 0;
   private valuesFor: Scope | null = null;
 
   constructor(private readonly formulaTexts: ReadonlyMap<string, string> = new Map()) {}
@@ -113,6 +114,7 @@ export class Evaluator {
     try {
       const expr = ExpressionParser.parse(text);
       this.checking = text;
+      this.level = 0;
       this.check(expr, []);
       return expr;
     } catch (e) {
@@ -128,21 +130,54 @@ export class Evaluator {
     return this.found;
   }
 
+  /** How many levels down compiling or evaluating an expression may go, its own and those of the formulas it uses added
+   * up along the way: the same as the server's, whose thread stack of 1.5 MB must hold them. */
+  static readonly MAX_LEVELS = 512;
+
+  /** Evaluates a compiled expression for a row; throws `QueryError` `too-deep` when it and the formulas it uses go more
+   * than `MAX_LEVELS` levels down. */
   evaluate(expr: Expr, scope: Scope): Value {
+    this.level = 0;
+    this.evaluating.clear();
+    try {
+      return this.eval(expr, scope);
+    } catch (e) {
+      // Defence in depth, as in compile: a stack that runs out first is the same error.
+      if (e instanceof RangeError) throw new QueryError("too-deep", "The expression and the formulas it uses are nested too deeply.", 0);
+      throw e;
+    }
+  }
+
+  // Both walks go down the formulas an expression uses, so both count their levels against one budget.
+  private down(expr: Expr): void {
+    if (++this.level > Evaluator.MAX_LEVELS)
+      throw new QueryError("too-deep", `The expression and the formulas it uses go more than ${Evaluator.MAX_LEVELS} levels deep.`, expr.position);
+  }
+
+  // Counted here, not only in the check: a check cut short by a cycle, or by a formula checked before, can't see how deep
+  // the formulas really go along this path.
+  private eval(expr: Expr, scope: Scope): Value {
+    this.down(expr);
+    const value = this.valueOf(expr, scope);
+    this.level--;
+    return value;
+  }
+
+  private valueOf(expr: Expr, scope: Scope): Value {
     switch (expr.kind) {
       case "literal": return expr.value;
       case "name": return name(expr.name, scope);
       case "member":
         if (expr.target.kind === "name" && expr.target.name === "formula") return this.formulaValue(expr.name, scope);
-        return field(this.evaluate(expr.target, scope), expr.name);
-      case "index": return index(this.evaluate(expr.target, scope), this.evaluate(expr.index, scope));
+        return field(this.eval(expr.target, scope), expr.name);
+      case "index": return index(this.eval(expr.target, scope), this.eval(expr.index, scope));
       case "call":
         if (expr.callee.kind === "name") return this.call(expr.callee.name, expr.args, scope);
         if (expr.callee.kind === "member")
-          return method(this.evaluate(expr.callee.target, scope), expr.callee.name, expr.args.map((a) => this.evaluate(a, scope)));
+          return method(this.eval(expr.callee.target, scope), expr.callee.name, expr.args.map((a) => this.eval(a, scope)));
         return errorValue("Only a function or a method can be called");
       case "unary": {
-        const operand = this.evaluate(expr.operand, scope);
+        const operand = this.eval(expr.operand, scope);
         if (operand.kind === "error") return operand;
         if (expr.operator === "Not") return booleanValue(!truthy(operand));
         return operand.kind === "number" ? numberValue(-operand.number) : NULL;
@@ -150,25 +185,25 @@ export class Evaluator {
       case "binary": {
         // The same walk of the left spine as in check: the innermost left first, then each right on the way out.
         const spine = leftSpine(expr);
-        let value = this.evaluate(spine[spine.length - 1]!.left, scope);
+        let value = this.eval(spine[spine.length - 1]!.left, scope);
         for (let i = spine.length - 1; i >= 0; i--) {
           if (value.kind === "error") return value;
           const { operator, right } = spine[i]!;
-          if (operator === "And") value = !truthy(value) ? value : this.evaluate(right, scope);
-          else if (operator === "Or") value = truthy(value) ? value : this.evaluate(right, scope);
-          else value = binary(operator, value, this.evaluate(right, scope));
+          if (operator === "And") value = !truthy(value) ? value : this.eval(right, scope);
+          else if (operator === "Or") value = truthy(value) ? value : this.eval(right, scope);
+          else value = binary(operator, value, this.eval(right, scope));
         }
         return value;
       }
       case "list": {
-        const items = expr.items.map((i) => this.evaluate(i, scope));
+        const items = expr.items.map((i) => this.eval(i, scope));
         return firstError(items) ?? listValue(items);
       }
       case "object": {
         // A key written twice keeps its first place and its last value.
         const last = new Map<string, Expr>();
         for (const [key, value] of expr.entries) last.set(key, value);
-        const values = new Map([...last].map(([key, value]) => [key, this.evaluate(value, scope)]));
+        const values = new Map([...last].map(([key, value]) => [key, this.eval(value, scope)]));
         return firstError([...values.values()]) ?? objectValue(values);
       }
       case "regex": return regexValue(this.regexes.get(expr)!);
@@ -188,7 +223,7 @@ export class Evaluator {
     if (value !== undefined) return value;
     if (this.evaluating.has(formulaName)) return CYCLE;
     this.evaluating.add(formulaName);
-    value = this.evaluate(expr, scope);
+    value = this.eval(expr, scope);
     this.evaluating.delete(formulaName);
     this.values.set(formulaName, value);
     return value;
@@ -201,6 +236,7 @@ export class Evaluator {
 
   // Formulas are checked where they are used, so one broken formula fails only the expressions that use it.
   private check(expr: Expr, chain: string[]): void {
+    this.down(expr);
     switch (expr.kind) {
       case "call":
         if (expr.callee.kind === "name") {
@@ -242,6 +278,7 @@ export class Evaluator {
         this.regexes.set(expr, compileRegex(expr.pattern, expr.flags, expr.position));
         break;
     }
+    this.level--;
   }
 
   // A formula that doesn't exist, or uses itself, is a warning here and an error value in the cells; the depth limit
@@ -287,7 +324,7 @@ export class Evaluator {
   }
 
   private call(functionName: string, args: readonly Expr[], scope: Scope): Value {
-    const argument = (i: number): Value => (i < args.length ? this.evaluate(args[i]!, scope) : NULL);
+    const argument = (i: number): Value => (i < args.length ? this.eval(args[i]!, scope) : NULL);
     if (!FUNCTIONS.has(functionName)) return errorValue(`Cannot find function "${functionName}"`);
     if (functionName === "now") return dateValue(scope.now);
     if (functionName === "today") return dateValue(scope.now.slice(0, 10));
@@ -322,9 +359,10 @@ function compileRegex(pattern: string, flags: string, position: number): RE2JS {
 }
 
 // A text as JavaScript's Number() reads it: decimal with an exponent, Infinity, 0x, 0o and 0b; the empty text is 0. Trimmed
-// as the server trims, so both engines read the same texts.
+// as the server trims, so both engines read the same texts: what Number() would trim beyond that (U+FEFF) is no number.
 function numberOf(text: string): Value {
-  const n = Number(trim(text));
+  const trimmed = trim(text);
+  const n = /^\s|\s$/.test(trimmed) ? NaN : Number(trimmed);
   return Number.isNaN(n) ? errorValue(`Unable to parse "${text}" as a number.`) : numberValue(n);
 }
 
