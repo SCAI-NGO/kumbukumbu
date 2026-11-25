@@ -26,7 +26,7 @@ This changes the queries spec of 2026-11-24 in §2 decision 6 (one rule for fail
 
 11. **`&&`, `||` and `!` give booleans** (finding 12), on truthiness as JavaScript counts it.
 12. **Comparisons coerce** as Obsidian does. Text that reads as a number equals and orders with that number (`"11" == 11`, `"11" > 10`), and an order against null is null, so a filter on it drops the row (finding 3). The rest of the matrix (booleans, dates against text, lists, null in arithmetic) is **probe 2**. Until then, `==` between other types is false and an order between them is null.
-13. **Date arithmetic** follows the reference. `date ± "1d"` takes the units `y M w d h m s`, with their long names, chained left to right. `duration(text)` makes a duration, and `date - date` is a duration. A duration times a number keeps the duration on the left. How a duration displays and compares is **probe 3**. Until then it displays in milliseconds and compares as a number of milliseconds.
+13. **Date arithmetic** follows the reference. `date ± "1d"` takes the units `y M w d h m s`, with their long names; the parts of one text are added as Moment adds a duration, milliseconds, then days, then months (`date("2024-01-30") + "1M 1d"` is 29 February), while the operators chain left to right (`+ "1M" + "1d"` is 1 March). *Why:* Obsidian computes date arithmetic with Moment. `duration(text)` makes a duration, and `date - date` is a duration. A duration times a number keeps the duration on the left. How a duration displays and compares is **probe 3**. Until then it displays in milliseconds and compares as a number of milliseconds.
 
 ## 4. The language
 

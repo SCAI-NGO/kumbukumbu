@@ -27,6 +27,8 @@ cases:
   - { expression: leap + "1M", values: { Ann.md: date 2024-02-29 } }
   - { expression: date("2023-01-31") + "1M", values: { Ann.md: date 2023-02-28 } }
   - { expression: leap + "1y", values: { Ann.md: date 2025-01-31 } }
+  - { expression: 'date("2024-01-30") + "1M 1d"', values: { Ann.md: date 2024-02-29 } }
+  - { expression: 'date("2024-01-30") + "1M" + "1d"', values: { Ann.md: date 2024-03-01 } }
   - { expression: birthday + "3 days", values: { Ann.md: date 1980-11-06 } }
   - { expression: birthday + "2 Weeks", values: { Ann.md: date 1980-11-17 } }
   - { expression: birthday + "1 year", values: { Ann.md: date 1981-11-03 } }

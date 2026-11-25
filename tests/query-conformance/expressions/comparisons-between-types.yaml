@@ -1,4 +1,4 @@
-description: Until probe 2, text that reads as a number (as JavaScript's Number() reads it, the empty text not) compares with numbers, == between other types is false and != true, and an order between them, or with null, is null; texts order by code point, dates by moment.
+description: Until probe 2, text that reads as a number (as JavaScript's Number() reads it, the empty text not) compares with numbers, == between other types is false and != true, and an order between them, or with null, is null; texts order by code point, dates by moment; list.contains() follows ==.
 source: spec
 notes:
   Ann.md: |
@@ -30,3 +30,4 @@ cases:
   - { expression: missing >= missing, values: { Ann.md: null } }
   - { expression: 0 / 0 == 0 / 0, values: { Ann.md: boolean false } }
   - { expression: 0 / 0 < 1, values: { Ann.md: boolean false } }
+  - { expression: '[1].contains("1")', values: { Ann.md: boolean true } }
