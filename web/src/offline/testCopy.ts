@@ -31,5 +31,5 @@ export async function offlineCopy() {
     written: (vault, path) => written.push([vault, path]),
   });
   on();
-  return { vaults, written, on };
+  return { mirror, vaults, written, on };
 }

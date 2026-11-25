@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useOfflineMode } from "../offline/mode";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
@@ -323,6 +324,31 @@ describe("search in earlier versions", () => {
     const compare = await screen.findByRole("dialog", { name: "plan.md" });
     expect(within(compare).getByRole("button", { name: "Against now" })).toHaveAttribute("aria-pressed", "true");
     expect(within(compare).getByText("This version")).toBeInTheDocument();
+  });
+});
+
+describe("search offline", () => {
+  afterEach(() => useOfflineMode.setState({ offline: false }));
+
+  it("dims the earlier versions switch, keeping it on for when the connection is back, and asks nothing", async () => {
+    const asked: string[] = [];
+    api(() => view([hit("/Work/plan.md")]), [], { "GET /api/search/earlier": (r) => (asked.push(r.url), json(200, [])) });
+    await openSheet();
+    await userEvent.type(input(), "zebras");
+    const earlier = within(sheet()).getByRole("switch", { name: "Include earlier versions" });
+    await userEvent.click(earlier);
+    await within(sheet()).findByText("No earlier versions found.");
+    expect(asked).toHaveLength(1);
+
+    act(() => useOfflineMode.setState({ offline: true }));
+    expect(earlier).toBeDisabled();
+    expect(earlier).toHaveAttribute("title", "Needs a connection");
+    expect(earlier).toHaveAttribute("aria-checked", "true");
+    expect(within(sheet()).queryByRole("heading", { name: "Earlier versions" })).not.toBeInTheDocument();
+    await userEvent.clear(input());
+    await userEvent.type(input(), "lions");
+    await within(sheet()).findByText("1 result", { exact: false });
+    expect(asked).toHaveLength(1);
   });
 });
 

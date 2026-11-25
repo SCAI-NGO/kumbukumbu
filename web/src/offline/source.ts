@@ -4,10 +4,15 @@
 // from the copy in the shapes the API gives them, so the screens that work offline need no second path of their own.
 import type { SealedMirror } from "eidolon-core/store/mirror";
 import { MirrorLinks } from "eidolon-core/read/links";
+import { MirrorSearch, NoSuchTagError } from "eidolon-core/read/search";
 import { locate, NotOnDeviceError, readFile, readNote, treeOf, vaultByName } from "eidolon-core/read/tree";
 import { HttpError } from "../api/client";
 import type { NoteView, TreeView } from "../api/notes";
 import type { LinkView } from "../note/wikiLinks";
+import type { SearchView } from "../search/useSearch";
+
+/** The search sheet's notice line offline (design §3a), where the server says when meaning isn't available. */
+export const OFFLINE_SEARCH = "You're offline: search finds words only. Search by meaning is back when you are.";
 
 /** Listed in the copy, but its text or bytes haven't come yet: no 404 (it exists), no retry (it won't come offline). */
 export const NOT_ON_DEVICE = "not-on-device";
@@ -21,9 +26,11 @@ function rethrown(err: unknown): never {
 
 export class OfflineSource {
   private readonly links: MirrorLinks;
+  private readonly words: MirrorSearch;
 
   constructor(readonly mirror: SealedMirror) {
     this.links = new MirrorLinks(mirror);
+    this.words = new MirrorSearch(mirror);
   }
 
   /** The vault of a path (`/Work/plan.md`) and the path within it, for the copy's writers too (work package 7). */
@@ -47,6 +54,18 @@ export class OfflineSource {
 
   linksOf(path: string, content: string): Promise<LinkView[]> {
     return this.links.of(path, content);
+  }
+
+  /** `GET /api/search` by words, whatever the mode: meaning is the server's (§3a). Words only, so no score. */
+  async search(q: string, max: number, tag: string | null, archive: boolean): Promise<SearchView> {
+    try {
+      const hits = await this.words.find(q, { max, tag, archive });
+      return { results: hits.map((h) => ({ ...h, score: null })), notIndexed: 0, notice: OFFLINE_SEARCH };
+    } catch (err) {
+      // As the server's 404, so a misspelt tag says so instead of finding nothing.
+      if (err instanceof NoSuchTagError) throw new HttpError(404, err.message);
+      throw err;
+    }
   }
 
   /** Whether the copy holds the path's text or bytes; null for a path it doesn't list. */

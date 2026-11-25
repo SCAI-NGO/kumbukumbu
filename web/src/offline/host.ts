@@ -12,7 +12,7 @@ import { nameVaults, OfflineSource, setOfflineSource } from "./source";
 import { flushOfflineEditors, onOfflineWrite, setOfflineWrites } from "./writing";
 
 /** What reads through the offline source: asked again on every switch, so what is shown comes from the right side. */
-const READ_AGAIN = ["vaults", "tree", "note", "links", "backlinks", "version"];
+const READ_AGAIN = ["vaults", "tree", "note", "links", "backlinks", "version", "search"];
 
 let reading: SealedMirror | null = null;
 

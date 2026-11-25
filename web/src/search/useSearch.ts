@@ -2,6 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, call } from "../api/client";
+import { offlineSource } from "../offline/source";
 import type { components } from "../api/schema";
 import type { SearchMode } from "../state/editor";
 
@@ -16,7 +17,8 @@ const RESULTS = 20;
  * Searches all of the user's vaults (no `path`) once the query has rested for 200 ms. The result belongs to the key
  * (query, mode): a newer query never shows an older one's answer, and TanStack Query aborts the request of the
  * key it left through `signal`. With `tag`, only the notes that carry it (or a tag nested below it) are searched; with
- * `archive`, the archive's notes too, which the server leaves out otherwise.
+ * `archive`, the archive's notes too, which the server leaves out otherwise. Offline, the copy answers, by words
+ * whatever the mode (offline mode design §3a).
  */
 export function useSearch(query: string, mode: SearchMode, tag: string | null = null, archive = false) {
   const trimmed = query.trim();
@@ -30,6 +32,7 @@ export function useSearch(query: string, mode: SearchMode, tag: string | null = 
   const result = useQuery({
     queryKey: ["search", settled, mode, tag, archive],
     queryFn: ({ signal }) =>
+      offlineSource()?.search(settled, RESULTS, tag, archive) ??
       call(api.GET("/api/search", { params: { query: { q: settled, mode, n: RESULTS, ...(tag ? { tag: [tag] } : {}), ...(archive ? { archive: true } : {}) } }, signal })),
     enabled: settled !== "",
   });

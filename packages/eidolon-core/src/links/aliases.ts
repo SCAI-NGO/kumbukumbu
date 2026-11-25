@@ -19,22 +19,7 @@ const FORBIDDEN = /[/#|[\]^\n\r]/;
 /** A note's aliases, each trimmed and NFC; empty values and those that can't be a link's name are skipped,
  * duplicates (ignoring case) count once. */
 export function aliasesOf(content: string): string[] {
-  if (!content.startsWith("---")) return [];
-  const lines = splitLines(content);
-  const end = frontmatterEnd(lines);
-  // Most notes have no aliases; skip reading their front matter.
-  if (end === 0 || !lines.slice(0, end).some((l) => l.includes("aliases"))) return [];
-  if (lines.slice(0, end).reduce((sum, l) => sum + l.length + 1, 0) > MAX_FRONTMATTER_LENGTH) return [];
-
-  let value: Yaml;
-  try {
-    value = topLevel(lines.slice(1, end - 1), "aliases");
-  } catch (e) {
-    if (e instanceof Unreadable) return [];
-    throw e;
-  }
-
-  const texts = typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  const texts = frontmatterTexts(content, "aliases");
   const seen = new Set<string>();
   const aliases: string[] = [];
   for (const text of texts) {
@@ -47,6 +32,28 @@ export function aliasesOf(content: string): string[] {
     if (aliases.length === MAX_PER_NOTE) break;
   }
   return aliases;
+}
+
+/**
+ * The texts of a top-level key of the front matter, as aliases and tags are read: a list's texts, or a single text.
+ * None for front matter longer than MAX_FRONTMATTER_LENGTH or that this can't read.
+ */
+export function frontmatterTexts(content: string, key: string): string[] {
+  if (!content.startsWith("---")) return [];
+  const lines = splitLines(content);
+  const end = frontmatterEnd(lines);
+  // Most notes don't have the key; skip reading their front matter.
+  if (end === 0 || !lines.slice(0, end).some((l) => l.includes(key))) return [];
+  if (lines.slice(0, end).reduce((sum, l) => sum + l.length + 1, 0) > MAX_FRONTMATTER_LENGTH) return [];
+
+  let value: Yaml;
+  try {
+    value = topLevel(lines.slice(1, end - 1), key);
+  } catch (e) {
+    if (e instanceof Unreadable) return [];
+    throw e;
+  }
+  return typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
 /** A YAML value as far as aliases need it: a text, null, a list, or a map (whose content no alias is in). */
