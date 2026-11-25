@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
-using System.Text.Json;
 using Kumbu.Core.Queries;
 using YamlDotNet.RepresentationModel;
 
@@ -34,23 +33,22 @@ public class ConformanceTests
         if (root.Children.TryGetValue("pending", out var pending) && ((YamlSequenceNode)pending).Children.Select(Text).Contains(Me))
             Assert.Skip("Pending for the C# engine.");
 
-        var types = PropertyTypes.Read(TypesJson(root));
-        var notes = ((YamlMappingNode)root["notes"]).Children.ToDictionary(n => Text(n.Key), n => Properties.Read(Text(n.Value), types));
+        var notes = ((YamlMappingNode)root["notes"]).Children.ToDictionary(n => Text(n.Key), n => Properties.Read(Text(n.Value)));
         if (root.Children.TryGetValue("query", out _) || root.Children.TryGetValue("runs", out var r) && ((YamlSequenceNode)r).Children.Any(c => ((YamlMappingNode)c).Children.ContainsKey("query")))
         {
-            Queries(root, types);
+            Queries(root);
             return;
         }
 
         if (root.Children.TryGetValue("runs", out var runs))
         {
-            Bases(root, types, (YamlSequenceNode)runs);
+            Bases(root, (YamlSequenceNode)runs);
             return;
         }
 
         if (root.Children.TryGetValue("cases", out var cases))
         {
-            Expressions(root, types, (YamlSequenceNode)cases);
+            Expressions(root, (YamlSequenceNode)cases);
             return;
         }
 
@@ -75,12 +73,12 @@ public class ConformanceTests
 
     // The files of a case: a .md file is a note; any other is a file with that text, without properties. A base case
     // with "file" has its base as one of the files; times are null unless the case gives them.
-    private static Dictionary<string, QueryNote> QueryNotes(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types)
+    private static Dictionary<string, QueryNote> QueryNotes(YamlMappingNode root)
     {
         var times = root.Children.TryGetValue("times", out var t) ? (YamlMappingNode)t : new YamlMappingNode();
         QueryNote File(string path, string content)
         {
-            var properties = QueryNote.IsNotePath(path) ? Properties.Read(content, types) : new NoteProperties(new Dictionary<string, Value>(), null);
+            var properties = QueryNote.IsNotePath(path) ? Properties.Read(content) : new NoteProperties(new Dictionary<string, Value>(), null);
             if (!times.Children.TryGetValue(path, out var given)) return new QueryNote(path, content, properties);
             DateTime Time(string key) => DateTime.ParseExact(Text(((YamlMappingNode)given)[key]), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
             return new QueryNote(path, content, properties, created: Time("ctime"), modified: Time("mtime"));
@@ -91,9 +89,9 @@ public class ConformanceTests
         return notes;
     }
 
-    private static void Expressions(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types, YamlSequenceNode cases)
+    private static void Expressions(YamlMappingNode root, YamlSequenceNode cases)
     {
-        var notes = QueryNotes(root, types);
+        var notes = QueryNotes(root);
         var formulas = root.Children.TryGetValue("formulas", out var f)
             ? ((YamlMappingNode)f).Children.ToDictionary(e => Text(e.Key), e => Text(e.Value))
             : [];
@@ -129,9 +127,9 @@ public class ConformanceTests
         }
     }
 
-    private static void Bases(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types, YamlSequenceNode runs)
+    private static void Bases(YamlMappingNode root, YamlSequenceNode runs)
     {
-        var notes = QueryNotes(root, types);
+        var notes = QueryNotes(root);
         var self = root.Children.TryGetValue("this", out var t) ? notes[Text(t)] : null;
         var now = root.Children.TryGetValue("now", out var n)
             ? DateTime.ParseExact(Text(n), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
@@ -162,9 +160,9 @@ public class ConformanceTests
         }
     }
 
-    private static void Queries(YamlMappingNode root, IReadOnlyDictionary<string, PropertyType> types)
+    private static void Queries(YamlMappingNode root)
     {
-        var notes = QueryNotes(root, types);
+        var notes = QueryNotes(root);
         var now = root.Children.TryGetValue("now", out var n)
             ? DateTime.ParseExact(Text(n), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
             : DefaultNow;
@@ -227,14 +225,6 @@ public class ConformanceTests
         return (YamlMappingNode)stream.Documents.Single().RootNode;
     }
 
-    private static string TypesJson(YamlMappingNode root)
-    {
-        var types = root.Children.TryGetValue("types", out var node)
-            ? ((YamlMappingNode)node).Children.ToDictionary(t => Text(t.Key), t => Text(t.Value))
-            : [];
-        return JsonSerializer.Serialize(new { types });
-    }
-
     private static string Text(YamlNode node) => ((YamlScalarNode)node).Value ?? "";
 
     // Both sides as one line per property, so a failure shows which property differs and how.
@@ -257,8 +247,7 @@ public class ConformanceTests
         TextValue t => t.Text.Length == 0 ? "text" : $"text {t.Text}",
         NumberValue n => $"number {n.Number.ToString("R", CultureInfo.InvariantCulture)}",
         BooleanValue b => b.Boolean ? "boolean true" : "boolean false",
-        DateValue d => $"date {d.Date:yyyy-MM-dd}",
-        DateTimeValue d => $"datetime {d.DateTime:yyyy-MM-ddTHH:mm:ss}",
+        DateValue d => d.HasTime ? $"date {d.Moment:yyyy-MM-ddTHH:mm:ss}" : $"date {d.Moment:yyyy-MM-dd}",
         ListValue l => "[" + string.Join(", ", l.Items.Select(Describe)) + "]",
         ObjectValue o => "{" + string.Join(", ", o.Values.Select(v => $"{v.Key}: {Describe(v.Value)}").Order(StringComparer.Ordinal)) + "}",
         FileValue f => $"file {f.Note.Path}",

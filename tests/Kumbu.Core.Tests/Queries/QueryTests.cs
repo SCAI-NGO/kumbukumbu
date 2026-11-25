@@ -70,5 +70,5 @@ public class QueryTests
             problems.Select(p => $"{p.View} {p.Error.Code} '{p.Error.Expression}' {p.Error.Position}"));
     }
 
-    private static QueryNote Note(string path, string content) => new(path, content, Properties.Read(content, PropertyTypes.None));
+    private static QueryNote Note(string path, string content) => new(path, content, Properties.Read(content));
 }

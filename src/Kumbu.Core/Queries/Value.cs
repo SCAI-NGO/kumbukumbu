@@ -15,10 +15,16 @@ public sealed record NumberValue(double Number) : Value;
 
 public sealed record BooleanValue(bool Boolean) : Value;
 
-public sealed record DateValue(DateOnly Date) : Value;
+/// <summary>A date, with a time or without one, and no zone, as Obsidian keeps it: one type, as in Obsidian. A date
+/// without a time is its midnight, so it equals only midnight.</summary>
+public sealed record DateValue(DateTime Moment, bool HasTime) : Value
+{
+    public DateValue(DateOnly date) : this(date.ToDateTime(TimeOnly.MinValue), false)
+    {
+    }
 
-/// <summary>A date with a time and no zone, as Obsidian keeps a datetime property.</summary>
-public sealed record DateTimeValue(DateTime DateTime) : Value;
+    public DateOnly Date => DateOnly.FromDateTime(Moment);
+}
 
 public sealed record ListValue(IReadOnlyList<Value> Items) : Value;
 

@@ -16,5 +16,5 @@ cases:
   - { expression: list(related), values: { Ann.md: [text Brita] } }
   - { expression: list(missing), values: { Ann.md: [] } }
   - { expression: date("2026-11-23"), values: { Ann.md: date 2026-11-23 } }
-  - { expression: date("2026-11-23 10:00"), values: { Ann.md: datetime 2026-11-23T10:00:00 } }
+  - { expression: date("2026-11-23 10:00"), values: { Ann.md: date 2026-11-23T10:00:00 } }
   - { expression: date("soon"), values: { Ann.md: null } }

@@ -185,7 +185,7 @@ public sealed class Base
         private static int Rank(Value v) => v switch
         {
             NumberValue => 0,
-            DateValue or DateTimeValue => 1,
+            DateValue => 1,
             TextValue => 2,
             BooleanValue => 3,
             _ => 4,

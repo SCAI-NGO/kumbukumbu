@@ -10,10 +10,12 @@ export type Value =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "number"; readonly number: number }
   | { readonly kind: "boolean"; readonly boolean: boolean }
-  /** "yyyy-MM-dd": a day, never a moment, so no zone can move it. */
-  | { readonly kind: "date"; readonly date: string }
-  /** "yyyy-MM-ddTHH:mm:ss", then up to 7 fractional digits when not zero; no zone, as Obsidian keeps a datetime. */
-  | { readonly kind: "datetime"; readonly dateTime: string }
+  /**
+   * A date, with a time or without one, and no zone, as Obsidian keeps it: one type, as in Obsidian. The moment is
+   * "yyyy-MM-ddTHH:mm:ss", then up to 7 fractional digits when not zero; a date without a time is its midnight, so it
+   * equals only midnight. A text, not a JavaScript Date, so no zone can move it.
+   */
+  | { readonly kind: "date"; readonly moment: string; readonly hasTime: boolean }
   | { readonly kind: "list"; readonly items: readonly Value[] }
   | { readonly kind: "object"; readonly values: ReadonlyMap<string, Value> }
   /** A note's file, as `file` and `this.file` give it: two are equal when their paths are. */
@@ -26,8 +28,9 @@ export const NULL: Value = { kind: "null" };
 export const textValue = (text: string): Value => ({ kind: "text", text });
 export const numberValue = (number: number): Value => ({ kind: "number", number });
 export const booleanValue = (boolean: boolean): Value => ({ kind: "boolean", boolean });
-export const dateValue = (date: string): Value => ({ kind: "date", date });
-export const dateTimeValue = (dateTime: string): Value => ({ kind: "datetime", dateTime });
+/** A date from "yyyy-MM-dd", without a time, or from a moment "yyyy-MM-ddTHH:mm:ss…", with one. */
+export const dateValue = (text: string): Value =>
+  text.length === 10 ? { kind: "date", moment: `${text}T00:00:00`, hasTime: false } : { kind: "date", moment: text, hasTime: true };
 export const listValue = (items: readonly Value[]): Value => ({ kind: "list", items });
 export const objectValue = (values: ReadonlyMap<string, Value>): Value => ({ kind: "object", values });
 export const fileValue = (note: QueryNote): Value => ({ kind: "file", note });

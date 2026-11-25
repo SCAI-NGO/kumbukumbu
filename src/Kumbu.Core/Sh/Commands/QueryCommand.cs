@@ -11,7 +11,7 @@ namespace Kumbu.Core.Sh.Commands;
 
 /// <summary><c>query</c> (queries spec §7): the named queries, one surface for every one of them, so an agent finds and
 /// calls them as it finds notes. A query runs over every file of its own vault, as Obsidian's Bases do (bases spec
-/// 2026-11-25 §1): its notes, archived ones too, with the vault's declared property types, and its other files.</summary>
+/// 2026-11-25 §1): its notes, archived ones too, typed by their YAML alone (§2), and its other files.</summary>
 public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZone zone) : ICommand
 {
     private const string TypesFile = ".obsidian/types.json";
@@ -41,9 +41,9 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           Compiles every view without running it and needing no arguments: ok, or each error with
           its code, the expression it is in and the position there.
         query properties [path]
-          The properties of the notes below a path (default: every vault): each with its type,
-          declared in the vault's {TypesFile} or as its values are written, and how many notes
-          have it.
+          The properties of the notes below a path (default: every vault): each with the types of
+          its values, as they are written, the type declared in the vault's {TypesFile} before them
+          (a declaration doesn't change a value), and how many notes have it.
 
         A query is a path, or the name of exactly one listed query (its file name, ignoring case).
 
@@ -227,7 +227,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         {
             var vault = note.Path.Segments[0];
             if (!types.TryGetValue(vault, out var declared)) types[vault] = declared = await TypesAsync(vault, ct);
-            foreach (var (name, value) in Properties.Read(note.Content, declared).Values)
+            foreach (var (name, value) in Properties.Read(note.Content).Values)
             {
                 if (!found.TryGetValue(name, out var entry))
                     entry = (declared.TryGetValue(name, out var t), t, new Dictionary<string, int>(StringComparer.Ordinal), 0);
@@ -241,14 +241,14 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             .OrderByDescending(f => f.Value.Notes).ThenBy(f => f.Key, TextOrder.Default)
             .Select(f =>
             {
-                var type = f.Value.Declared
-                    ? $"{Query.Name(f.Value.Type)} (declared)"
-                    : f.Value.Kinds.Count switch
-                    {
-                        0 => "empty",
-                        1 => f.Value.Kinds.Keys.Single(),
-                        _ => string.Join(", ", f.Value.Kinds.OrderByDescending(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key} {k.Value}")),
-                    };
+                var kinds = f.Value.Kinds.Count switch
+                {
+                    0 => "empty",
+                    1 => f.Value.Kinds.Keys.Single(),
+                    _ => string.Join(", ", f.Value.Kinds.OrderByDescending(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key} {k.Value}")),
+                };
+                // A declared type doesn't change the values (Obsidian's Bases ignore it), so both are told.
+                var type = f.Value.Declared ? $"{Query.Name(f.Value.Type)} (declared), {kinds}" : kinds;
                 return $"{f.Key}: {type}, {(f.Value.Notes == 1 ? "1 note" : $"{f.Value.Notes:N0} notes")}";
             })));
     }
@@ -259,7 +259,6 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         NumberValue => "number",
         BooleanValue => "checkbox",
         DateValue => "date",
-        DateTimeValue => "datetime",
         ListValue => "list",
         _ => "object",
     };
@@ -280,7 +279,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
 
         foreach (var (path, content) in candidates.OrderBy(c => c.Path.Value, TextOrder.Default))
         {
-            var note = content is null ? await BaseFileAsync(path, ct) : await QueryNoteAsync(path, content, ct);
+            var note = content is null ? await BaseFileAsync(path, ct) : NoteOf(path, content);
             if (note is null || !Query.IsQuery(note)) continue;
             // A query that doesn't read is still listed: check says what is wrong with it.
             IReadOnlyList<QueryParam> parameters;
@@ -313,7 +312,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             }
 
             var read = await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
-            return read.IsError ? (null, read) : ((path, await QueryNoteAsync(path, read.Output, ct)), null);
+            return read.IsError ? (null, read) : ((path, NoteOf(path, read.Output)), null);
         }
 
         var named = (await ListedAsync(VaultPath.Root, ct))
@@ -335,15 +334,13 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             : null;
     }
 
-    private async Task<QueryNote> QueryNoteAsync(VaultPath path, string content, CancellationToken ct) =>
-        new(InVault(path), content, Properties.Read(content, await TypesAsync(path.Segments[0], ct)));
+    private static QueryNote NoteOf(VaultPath path, string content) => new(InVault(path), content, Properties.Read(content));
 
     // The files a query of this vault runs over, each with its path in the store; times in the caller's zone, as now() is.
     // A note's times take a read of each note, so only a query that may ask for them pays it; an attachment's come with its listing.
     private async Task<Dictionary<QueryNote, VaultPath>> VaultAsync(VaultPath query, bool noteTimes, CancellationToken ct)
     {
         var vault = VaultPath.Root.Child(query.Segments[0]);
-        var types = await TypesAsync(query.Segments[0], ct);
         var local = await zone.ZoneAsync(ct);
         DateTime Local(DateTime utc) => TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), local);
 
@@ -352,7 +349,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         {
             if (!InObsidian(note.Path)) continue;
             var stored = noteTimes ? await notes.GetAsync(note.Path, ct) : null;
-            all[new QueryNote(InVault(note.Path), note.Content, Properties.Read(note.Content, types), null,
+            all[new QueryNote(InVault(note.Path), note.Content, Properties.Read(note.Content), null,
                 stored is null ? null : Local(NoteCreation.Of(stored).At), stored is null ? null : Local(stored.LastWriteAt))] = note.Path;
         }
 

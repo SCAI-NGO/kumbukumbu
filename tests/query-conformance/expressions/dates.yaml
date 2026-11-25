@@ -1,8 +1,6 @@
-description: A date has year, month (1 to 12) and day; today() and now() follow the case's clock.
+description: A date has year, month (1 to 12) and day, and a time or not; today() is midnight and now() has the time of the case's clock; equal dates are the same moment.
 source: spec
 now: 2026-11-23T14:30:00
-types:
-  birthday: date
 notes:
   Ann.md: |
     ---
@@ -11,22 +9,35 @@ notes:
     ---
   Brita.md: |
     ---
-    birthday: soon
+    birthday: 1995-06-01
+    met: 2026-11-23T00:00
     ---
 cases:
   - expression: birthday.month
-    values: { Ann.md: number 11, Brita.md: null }
+    values: { Ann.md: number 11, Brita.md: number 6 }
   - expression: birthday.year
-    values: { Ann.md: number 1980, Brita.md: null }
+    values: { Ann.md: number 1980, Brita.md: number 1995 }
   - expression: met.hour * 60 + met.minute
-    values: { Ann.md: number 555, Brita.md: null }
+    values: { Ann.md: number 555, Brita.md: number 0 }
+  - expression: birthday.hour
+    values: { Ann.md: number 0, Brita.md: number 0 }
   - expression: birthday.month == today().month
     values: { Ann.md: boolean true, Brita.md: boolean false }
   - expression: today()
     values: { Ann.md: date 2026-11-23, Brita.md: date 2026-11-23 }
   - expression: now()
-    values: { Ann.md: datetime 2026-11-23T14:30:00, Brita.md: datetime 2026-11-23T14:30:00 }
+    values: { Ann.md: date 2026-11-23T14:30:00, Brita.md: date 2026-11-23T14:30:00 }
+  - expression: met
+    values: { Ann.md: date 2026-11-23T09:15:00, Brita.md: date 2026-11-23T00:00:00 }
   - expression: birthday < date("1990-01-01")
     values: { Ann.md: boolean true, Brita.md: boolean false }
+  - expression: met.date()
+    values: { Ann.md: date 2026-11-23, Brita.md: date 2026-11-23 }
   - expression: met.date() == today()
+    values: { Ann.md: boolean true, Brita.md: boolean true }
+  - expression: met == today()
+    values: { Ann.md: boolean false, Brita.md: boolean true }
+  - expression: now() == today()
+    values: { Ann.md: boolean false, Brita.md: boolean false }
+  - expression: met < now() && today() < met
     values: { Ann.md: boolean true, Brita.md: boolean false }

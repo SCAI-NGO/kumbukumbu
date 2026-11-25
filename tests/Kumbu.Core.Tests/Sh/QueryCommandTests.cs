@@ -226,7 +226,7 @@ public class QueryCommandTests
     public async Task Properties_lists_each_with_its_type_and_how_many_notes_have_it()
     {
         Assert.Equal(ShellResult.Ok("""
-            birthday: date (declared), 3 notes
+            birthday: date (declared), date, 3 notes
             kind: text, 3 notes
             age: number 1, text 1, 2 notes
             """), await Run("query properties /V/People"));

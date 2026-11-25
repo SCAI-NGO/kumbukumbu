@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// A note's properties, typed (Kumbu.Core Queries/Properties). A declared type wins over how a value is written; without
-// one, a plain scalar reads as what it looks like and a quoted one stays text; a value that doesn't fit its type stays
-// the text it is. The cases are in tests/query-conformance/properties.
+// A note's properties, typed as Obsidian's Bases type them, by the YAML alone (Kumbu.Core Queries/Properties): a plain
+// scalar reads as what it looks like (YAML 1.2's core schema, and dates) and a quoted one stays text. A declared type
+// changes nothing, a single value is not made a list, and the tags property gives its tags with their '#'. The cases are
+// in tests/query-conformance/properties.
 import { isAlias, isMap, isScalar, isSeq, parseAllDocuments, type Node, type Scalar } from "yaml";
-import { foldCase, frontmatterEnd, splitLines } from "../links/text";
-import type { PropertyType, PropertyTypeMap } from "./propertyTypes";
+import { frontmatterEnd, splitLines } from "../links/text";
+import type { PropertyType } from "./propertyTypes";
 import {
-  NULL, booleanValue, dateTimeValue, dateValue, listValue, numberValue, objectValue, textValue, type Value,
+  NULL, booleanValue, dateValue, listValue, numberValue, objectValue, textValue, type Value,
 } from "./value";
 
 /** A note's properties, typed; `problem` is set (and `values` empty) when the frontmatter does not parse. */
@@ -19,13 +20,6 @@ export const TOO_LARGE_PROBLEM = "The frontmatter is too large or nested too dee
 
 const NO_VALUES: ReadonlyMap<string, Value> = new Map();
 
-// Lists of text in every vault, declared or not.
-const BUILT_IN: PropertyTypeMap = new Map<string, PropertyType>([
-  ["TAGS", "multitext"],
-  ["ALIASES", "multitext"],
-  ["CSSCLASSES", "multitext"],
-]);
-
 /** The most notes whose properties are remembered. */
 export const CACHE_LIMIT = 20_000;
 
@@ -33,27 +27,23 @@ export const CACHE_LIMIT = 20_000;
 // the working set holds it unchanged, so each is parsed once, not once per query. The server keys a ConditionalWeakTable
 // by the string, which goes with the string; a string can't be a WeakMap key, so this is a Map by content, bounded, the
 // oldest entry out first.
-const byContent = new Map<string, { types: PropertyTypeMap; properties: NoteProperties }>();
+const byContent = new Map<string, NoteProperties>();
 
-function read(content: string, types: PropertyTypeMap): NoteProperties {
+function read(content: string): NoteProperties {
   const known = byContent.get(content);
-  if (known !== undefined && sameTypes(known.types, types)) return known.properties;
-  const properties = parse(content, types);
-  byContent.delete(content);
-  byContent.set(content, { types, properties });
+  if (known !== undefined) return known;
+  const properties = parse(content, false);
+  byContent.set(content, properties);
   if (byContent.size > CACHE_LIMIT) byContent.delete(byContent.keys().next().value!);
   return properties;
 }
 
-// The vault's types.json is read for each query, so the same declarations come as another map.
-function sameTypes(a: PropertyTypeMap, b: PropertyTypeMap): boolean {
-  if (a === b) return true;
-  if (a.size !== b.size) return false;
-  for (const [name, type] of a) if (b.get(name) !== type) return false;
-  return true;
+/** The frontmatter with every value as the text it is written as, as the server's Frontmatter.Read gives it: for the tags. */
+function asWritten(content: string): NoteProperties {
+  return parse(content, true);
 }
 
-function parse(content: string, types: PropertyTypeMap): NoteProperties {
+function parse(content: string, written: boolean): NoteProperties {
   const lines = splitLines(content);
   const end = frontmatterEnd(lines);
   if (end === 0) return { values: NO_VALUES, problem: null };
@@ -66,7 +56,7 @@ function parse(content: string, types: PropertyTypeMap): NoteProperties {
     if (root === null || root === undefined) return { values: NO_VALUES, problem: null };
     if (isScalar(root) && isPlain(root) && isEmptyOrTilde(root)) return { values: NO_VALUES, problem: null };
     if (!isMap(root)) return { values: NO_VALUES, problem: "The frontmatter is not a map of keys and values." };
-    return { values: new Budget().top(root, types), problem: null };
+    return { values: new Budget(written).top(root), problem: null };
   } catch (e) {
     if (e instanceof TooLarge || e instanceof RangeError) return { values: NO_VALUES, problem: TOO_LARGE_PROBLEM };
     if (e instanceof KeyTwice) return { values: NO_VALUES, problem: `The frontmatter has the key '${e.key}' twice.` };
@@ -92,11 +82,14 @@ class Budget {
   // Anchors as the walk meets them, in document order, which is where an alias may refer back to.
   private anchors = new Map<string, Node>();
 
-  top(map: Node, types: PropertyTypeMap): Map<string, Value> {
-    return this.map(map, 0, (key) => {
-      const folded = foldCase(key);
-      return types.get(folded) ?? BUILT_IN.get(folded) ?? null;
-    });
+  constructor(private readonly written: boolean) {}
+
+  top(map: Node): Map<string, Value> {
+    const values = this.map(map, 0);
+    // Obsidian gives the tags property's tags with their '#', as file.tags has them (finding 6).
+    const tags = values.get("tags");
+    if (tags !== undefined && !this.written) values.set("tags", tagged(tags));
+    return values;
   }
 
   private resolve(node: Node | null | undefined): Node | null {
@@ -106,7 +99,7 @@ class Budget {
     return node;
   }
 
-  private map(node: Node, depth: number, typeOf: (key: string) => PropertyType | null): Map<string, Value> {
+  private map(node: Node, depth: number): Map<string, Value> {
     const result = new Map<string, Value>();
     if (!isMap(node)) return result;
     for (const pair of node.items) {
@@ -114,63 +107,61 @@ class Budget {
       // A key that is a list or a map reads as its type's name, so two of them read alike.
       const name = key === null ? "" : isScalar(key) ? rawOf(key) : isMap(key) ? "Mapping" : "Sequence";
       if (result.has(name)) throw new KeyTwice(name);
-      result.set(name, this.convert(pair.value as Node | null, typeOf(name), depth + 1));
+      result.set(name, this.convert(pair.value as Node | null, depth + 1));
     }
     return result;
   }
 
-  private convert(source: Node | null, type: PropertyType | null, depth: number): Value {
+  private convert(source: Node | null, depth: number): Value {
     if (++this.values > MAX_VALUES || depth > MAX_DEPTH) throw new TooLarge();
     const node = this.resolve(source);
-    if (node === null) return scalar("", true, type);
-    if (isMap(node)) return objectValue(this.map(node, depth, () => null));
-    if (isSeq(node))
-      return listValue(node.items.map((item) => this.convert(item as Node | null, type === "multitext" ? "text" : null, depth + 1)));
-    if (isScalar(node)) return scalar(rawOf(node), isPlain(node), type);
+    if (node === null) return this.scalar("", true);
+    if (isMap(node)) return objectValue(this.map(node, depth));
+    if (isSeq(node)) return listValue(node.items.map((item) => this.convert(item as Node | null, depth + 1)));
+    if (isScalar(node)) return this.scalar(rawOf(node), isPlain(node));
     return NULL;
+  }
+
+  private scalar(raw: string, plain: boolean): Value {
+    if (plain && isNull(raw)) return NULL;
+    return plain && !this.written ? inferred(raw) : textValue(raw);
   }
 }
 
-function scalar(raw: string, plain: boolean, type: PropertyType | null): Value {
-  if (plain && isNull(raw)) return NULL;
+function tagged(value: Value): Value {
+  if (value.kind === "text" && value.text.length > 0) return value.text.startsWith("#") ? value : textValue(`#${value.text}`);
+  if (value.kind === "list") return listValue(value.items.map((item) => (item.kind === "text" ? tagged(item) : item)));
+  return value;
+}
+
+/** A text as a value of `type`, as a parameter of that type reads it; null when it doesn't fit. */
+function typed(raw: string, type: PropertyType): Value | null {
   switch (type) {
-    case null: return plain ? inferred(raw) : textValue(raw);
-    case "multitext": return listValue([textValue(raw)]);
-    case "number": return number(raw) ?? textValue(raw);
-    case "checkbox": return boolean(raw) ?? textValue(raw);
+    case "number": return number(raw);
+    case "checkbox": return boolean(raw);
     case "date": {
-      const day = date(raw);
-      if (day !== null) return day;
       const moment = dateTime(raw);
-      return moment !== null && moment.kind === "datetime" ? dateValue(moment.dateTime.slice(0, 10)) : textValue(raw);
+      return date(raw) ?? (moment !== null && moment.kind === "date" ? dateValue(moment.moment.slice(0, 10)) : null);
     }
     case "datetime": {
-      const moment = dateTime(raw);
-      if (moment !== null) return moment;
       const day = date(raw);
-      return day !== null && day.kind === "date" ? dateTimeValue(`${day.date}T00:00:00`) : textValue(raw);
+      return dateTime(raw) ?? (day !== null && day.kind === "date" ? { kind: "date", moment: day.moment, hasTime: true } : null);
     }
     default: return textValue(raw);
   }
 }
 
-/** A text as a value of `type`, as a declared property reads it; null when it doesn't fit. */
-function typed(raw: string, type: PropertyType): Value | null {
-  const value = scalar(raw, false, type);
-  return value.kind === "text" && type !== "text" ? null : value;
-}
-
-/** What a plain scalar looks like: a checkbox, a number, a date, a datetime, or else text. */
+/** What a plain scalar looks like: a checkbox, a number, a date with or without a time, or else text. */
 function inferred(raw: string): Value {
   return boolean(raw) ?? number(raw) ?? date(raw) ?? dateTime(raw) ?? textValue(raw);
 }
 
-// YAML 1.2's core schema, which Obsidian's parser follows; hex, octal and infinities are left as text, as a person meant them.
+// YAML 1.2's core schema, which Obsidian's parser follows (finding 11).
 const isNull = (raw: string) => raw === "" || raw === "~" || raw === "null" || raw === "Null" || raw === "NULL";
 
 function boolean(raw: string): Value | null {
-  if (raw === "true" || raw === "True" || raw === "TRUE") return { kind: "boolean", boolean: true };
-  if (raw === "false" || raw === "False" || raw === "FALSE") return { kind: "boolean", boolean: false };
+  if (raw === "true" || raw === "True" || raw === "TRUE") return booleanValue(true);
+  if (raw === "false" || raw === "False" || raw === "FALSE") return booleanValue(false);
   return null;
 }
 
@@ -179,9 +170,17 @@ const NUMBER = /^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?\n?$/;
 // A date keeps its plain $: .NET's pattern matches before a final line break, but the exact parse of the text then fails.
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DATE_TIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(:(\d{2})(\.(\d{1,7}))?)?\n?$/;
+const HEX = /^0x[0-9a-fA-F]+$/;
+const OCTAL = /^0o[0-7]+$/;
+const INFINITY = /^[-+]?\.(inf|Inf|INF)$/;
+const NAN = /^\.(nan|NaN|NAN)$/;
 
 function number(raw: string): Value | null {
-  return NUMBER.test(raw) ? numberValue(Number(raw)) : null;
+  if (INFINITY.test(raw)) return numberValue(raw.startsWith("-") ? -Infinity : Infinity);
+  if (NAN.test(raw)) return numberValue(NaN);
+  // JavaScript's Number reads 0x and 0o as YAML writes them.
+  if (HEX.test(raw) || OCTAL.test(raw) || NUMBER.test(raw)) return numberValue(Number(raw));
+  return null;
 }
 
 function validDay(year: number, month: number, day: number): boolean {
@@ -203,7 +202,7 @@ function dateTime(raw: string): Value | null {
   if (Number(m[2]) > 23 || Number(m[3]) > 59 || Number(m[5] ?? 0) > 59) return null;
   // The same moment written once: seconds always, the fraction only when it isn't zero.
   const fraction = (m[7] ?? "").replace(/0+$/, "");
-  return dateTimeValue(`${day}T${m[2]}:${m[3]}:${m[5] ?? "00"}${fraction.length > 0 ? `.${fraction}` : ""}`);
+  return dateValue(`${day}T${m[2]}:${m[3]}:${m[5] ?? "00"}${fraction.length > 0 ? `.${fraction}` : ""}`);
 }
 
-export const Properties = { read, typed, inferred };
+export const Properties = { read, asWritten, typed, inferred };

@@ -2,7 +2,7 @@
 // A file as a query reads it (Kumbu.Core Queries/QueryNote): its path in the vault, its text, its typed properties, its
 // size in bytes and its times (null where they aren't known). A note is a .md file; any other file (a .base file, an
 // attachment) is a row too, with no properties and no tags.
-import { foldCase } from "../links/text";
+import { foldCase, frontmatterEnd, splitLines } from "../links/text";
 import type { NoteProperties } from "./properties";
 import { tagsOf } from "./tags";
 
@@ -33,11 +33,19 @@ export class QueryNote {
     return QueryNote.isNotePath(this.path);
   }
 
-  /** Its tags as Obsidian reads them, frontmatter first, each once (ignoring case), as first written; none for a file that isn't a note. */
+  /**
+   * Its tags as Obsidian's file.tags gives them: with their '#', the text's before the frontmatter's (finding 6), each
+   * once (ignoring case), as first written; none for a file that isn't a note.
+   */
   get tags(): readonly string[] {
     if (this.tagList === undefined) {
       const first = new Map<string, string>();
-      if (this.isNote) for (const { tag } of tagsOf(this.content)) if (!first.has(foldCase(tag))) first.set(foldCase(tag), tag);
+      if (this.isNote) {
+        const end = frontmatterEnd(splitLines(this.content));
+        const uses = tagsOf(this.content);
+        for (const { tag } of [...uses.filter((u) => u.line >= end), ...uses.filter((u) => u.line < end)])
+          if (!first.has(foldCase(tag))) first.set(foldCase(tag), `#${tag}`);
+      }
       this.tagList = [...first.values()];
     }
     return this.tagList;

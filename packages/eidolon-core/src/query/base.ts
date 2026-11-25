@@ -175,8 +175,7 @@ function keyOrder(x: readonly Value[], y: readonly Value[], descending: readonly
 function rank(v: Value): number {
   switch (v.kind) {
     case "number": return 0;
-    case "date":
-    case "datetime": return 1;
+    case "date": return 1;
     case "text": return 2;
     case "boolean": return 3;
     default: return 4;

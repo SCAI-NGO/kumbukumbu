@@ -74,16 +74,15 @@ public class QueryCostMeasurement
         var store = Vault(size);
         var sh = TestShell.Of(store);
         var root = VaultPath.Root.Child("V");
-        var types = PropertyTypes.Read("""{"types": {"birthday": "date", "due": "date"}}""");
         var now = new DateTime(2026, 11, 24, 12, 0, 0);
         var ct = CancellationToken.None;
 
         var read = Time(() => store.ReadNotesUnderAsync(root, ct).GetAwaiter().GetResult());
         var notes = await store.ReadNotesUnderAsync(root, ct);
         // Copies are contents not seen before, as after an unlock or a write; the store's own are parsed already.
-        var parse = Time(() => notes.Select(n => Properties.Read(new string(n.Content), types)).ToList());
-        var parsedOnce = Time(() => notes.Select(n => Properties.Read(n.Content, types)).ToList());
-        var parsed = notes.Select(n => new QueryNote(string.Join('/', n.Path.Segments.Skip(1)), n.Content, Properties.Read(n.Content, types))).ToList();
+        var parse = Time(() => notes.Select(n => Properties.Read(new string(n.Content))).ToList());
+        var parsedOnce = Time(() => notes.Select(n => Properties.Read(n.Content)).ToList());
+        var parsed = notes.Select(n => new QueryNote(string.Join('/', n.Path.Segments.Skip(1)), n.Content, Properties.Read(n.Content))).ToList();
         var bytes = notes.Sum(n => (long)Encoding.UTF8.GetByteCount(n.Content));
 
         output.WriteLine($"{size:N0} notes, {bytes / 1024 / 1024.0:F1} MiB");
@@ -96,7 +95,7 @@ public class QueryCostMeasurement
                      ("Open tasks", OpenTasks, new Dictionary<string, IReadOnlyList<string>>()),
                  })
         {
-            var query = Query.Read(new QueryNote("Queries/q.md", text, Properties.Read(text, types)));
+            var query = Query.Read(new QueryNote("Queries/q.md", text, Properties.Read(text)));
             var rows = query.Run(null, args, parsed, now).Rows.Count;
             output.WriteLine($"  evaluate {name,-19} {Time(() => query.Run(null, args, parsed, now))}  ({rows:N0} rows)");
         }

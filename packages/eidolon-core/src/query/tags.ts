@@ -4,7 +4,6 @@
 import { MAX_FRONTMATTER_LENGTH } from "../links/aliases";
 import { codeLines, codeSpans, frontmatterEnd, isWhiteSpace, splitLines, trim } from "../links/text";
 import { CACHE_LIMIT, Properties } from "./properties";
-import { PropertyTypes } from "./propertyTypes";
 
 /** A tag of a note: its text without '#' as written (NFC), and the 0-based line it stands on (for a frontmatter tag,
  * the line of its list item or of the `tags` key). */
@@ -67,11 +66,12 @@ function fromFrontmatter(content: string, lines: readonly string[], end: number)
   }
   // Frontmatter longer than aliases are read from has no tags either.
   if (key < 0 || lines.slice(0, end).reduce((sum, l) => sum + l.length + 1, 0) > MAX_FRONTMATTER_LENGTH) return [];
-  // tags is a list of text in every vault, so a single value reads as a list of one and a number or date stays as written.
-  const read = Properties.read(content, PropertyTypes.none);
+  // Every value as written, as the server's Frontmatter.Read gives it: a single value stands for a list of one, and a
+  // number or a date is the text it is written as.
+  const read = Properties.asWritten(content);
   if (read.problem !== null) return [];
   const tags = read.values.get("tags");
-  const values = tags?.kind === "list" ? tags.items.flatMap((v) => (v.kind === "text" ? [v.text] : [])) : [];
+  const values = tags?.kind === "text" ? [tags.text] : tags?.kind === "list" ? tags.items.flatMap((v) => (v.kind === "text" ? [v.text] : [])) : [];
 
   const result: TagUse[] = [];
   let next = key + 1;

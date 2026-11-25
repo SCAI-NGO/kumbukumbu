@@ -5,9 +5,8 @@ import { Evaluator } from "../src/query/evaluator";
 import { QueryError } from "../src/query/errors";
 import { QueryNote } from "../src/query/note";
 import { Properties } from "../src/query/properties";
-import { PropertyTypes } from "../src/query/propertyTypes";
 
-const note = new QueryNote("Ann.md", "", Properties.read("", PropertyTypes.none));
+const note = new QueryNote("Ann.md", "", Properties.read(""));
 const matches = (text: string, regex: string) => {
   const evaluator = new Evaluator();
   const expr = evaluator.compile(`${JSON.stringify(text)}.matches(${regex})`);

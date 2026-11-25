@@ -7,9 +7,8 @@ import { Evaluator } from "../src/query/evaluator";
 import { QueryNote } from "../src/query/note";
 import { ExpressionParser } from "../src/query/parser";
 import { Properties } from "../src/query/properties";
-import { PropertyTypes } from "../src/query/propertyTypes";
 
-const note = new QueryNote("a.md", "", Properties.read("", PropertyTypes.none));
+const note = new QueryNote("a.md", "", Properties.read(""));
 const NOW = "2026-01-01T12:00:00";
 
 const codeOf = (go: () => unknown): string => {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Board;
@@ -13,40 +14,21 @@ namespace Kumbu.Core.Queries;
 /// <summary>A note's properties, typed; <see cref="Problem"/> is set (and <see cref="Values"/> empty) when the frontmatter does not parse.</summary>
 public sealed record NoteProperties(IReadOnlyDictionary<string, Value> Values, string? Problem);
 
-/// <summary>Types a note's frontmatter. A declared type wins over how a value is written; without one, a plain scalar
-/// reads as what it looks like and a quoted one stays text; a value that doesn't fit its type stays the text it is.
-/// The cases are in <c>tests/query-conformance/properties</c>.</summary>
+/// <summary>Types a note's frontmatter as Obsidian's Bases do, by the YAML alone: a plain scalar reads as what it looks
+/// like (YAML 1.2's core schema, and dates) and a quoted one stays text. A declared type changes nothing, a single value
+/// is not made a list, and the tags property gives its tags with their '#'. The cases are in
+/// <c>tests/query-conformance/properties</c>.</summary>
 public static partial class Properties
 {
     private static readonly IReadOnlyDictionary<string, Value> NoValues = new Dictionary<string, Value>();
 
-    // Lists of text in every vault, declared or not.
-    private static readonly Dictionary<string, PropertyType> BuiltIn = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["tags"] = PropertyType.Multitext,
-        ["aliases"] = PropertyType.Multitext,
-        ["cssclasses"] = PropertyType.Multitext,
-    };
-
     // Parsed properties by the content they were parsed from (ADR 0027): a note's content is the same string for as long
     // as the working set holds it unchanged, so each is parsed once, not once per query; the entry goes with the string.
-    private static readonly ConditionalWeakTable<string, Parsed> ByContent = [];
+    private static readonly ConditionalWeakTable<string, NoteProperties> ByContent = [];
 
-    private sealed record Parsed(IReadOnlyDictionary<string, PropertyType> Types, NoteProperties Properties);
+    public static NoteProperties Read(string content) => ByContent.GetValue(content, Parse);
 
-    public static NoteProperties Read(string content, IReadOnlyDictionary<string, PropertyType> types)
-    {
-        if (ByContent.TryGetValue(content, out var known) && SameTypes(known.Types, types)) return known.Properties;
-        var properties = Parse(content, types);
-        ByContent.AddOrUpdate(content, new Parsed(types, properties));
-        return properties;
-    }
-
-    // The vault's types.json is read for each query, so the same declarations come as another dictionary.
-    private static bool SameTypes(IReadOnlyDictionary<string, PropertyType> a, IReadOnlyDictionary<string, PropertyType> b) =>
-        ReferenceEquals(a, b) || (a.Count == b.Count && a.All(t => b.TryGetValue(t.Key, out var other) && other == t.Value));
-
-    private static NoteProperties Parse(string content, IReadOnlyDictionary<string, PropertyType> types)
+    private static NoteProperties Parse(string content)
     {
         var lines = Lines.Split(content);
         var end = Outline.FrontmatterEnd(lines);
@@ -60,7 +42,7 @@ public static partial class Properties
             {
                 null => new NoteProperties(NoValues, null),
                 YamlScalarNode { Value: "" or "~" or null, Style: ScalarStyle.Plain } => new NoteProperties(NoValues, null),
-                YamlMappingNode map => new NoteProperties(new Budget().Top(map, types), null),
+                YamlMappingNode map => new NoteProperties(new Budget().Top(map), null),
                 _ => new NoteProperties(NoValues, "The frontmatter is not a map of keys and values."),
             };
         }
@@ -90,63 +72,63 @@ public static partial class Properties
     {
         private int values;
 
-        public Dictionary<string, Value> Top(YamlMappingNode map, IReadOnlyDictionary<string, PropertyType> types) =>
-            Map(map, 0, key => types.TryGetValue(key, out var declared) || BuiltIn.TryGetValue(key, out declared) ? declared : null);
+        public Dictionary<string, Value> Top(YamlMappingNode map)
+        {
+            var values = Map(map, 0);
+            // Obsidian gives the tags property's tags with their '#', as file.tags has them (finding 6).
+            if (values.TryGetValue("tags", out var tags)) values["tags"] = Tagged(tags);
+            return values;
+        }
 
-        private Dictionary<string, Value> Map(YamlMappingNode map, int depth, Func<string, PropertyType?> typeOf)
+        private Dictionary<string, Value> Map(YamlMappingNode map, int depth)
         {
             var result = new Dictionary<string, Value>();
             foreach (var (key, value) in map.Children)
             {
                 var name = key is YamlScalarNode scalar ? scalar.Value ?? "" : key.NodeType.ToString();
-                if (!result.TryAdd(name, Convert(value, typeOf(name), depth + 1))) throw new KeyTwice(name);
+                if (!result.TryAdd(name, Convert(value, depth + 1))) throw new KeyTwice(name);
             }
 
             return result;
         }
 
-        private Value Convert(YamlNode node, PropertyType? type, int depth)
+        private Value Convert(YamlNode node, int depth)
         {
             if (++values > Frontmatter.MaxValues || depth > Frontmatter.MaxDepth) throw new TooLarge();
             return node switch
             {
-                YamlMappingNode map => new ObjectValue(Map(map, depth, _ => null)),
-                YamlSequenceNode list => new ListValue(list.Children
-                    .Select(item => Convert(item, type == PropertyType.Multitext ? PropertyType.Text : null, depth + 1)).ToList()),
-                YamlScalarNode scalar => Scalar(scalar.Value ?? "", scalar.Style is ScalarStyle.Plain or ScalarStyle.Any, type),
+                YamlMappingNode map => new ObjectValue(Map(map, depth)),
+                YamlSequenceNode list => new ListValue(list.Children.Select(item => Convert(item, depth + 1)).ToList()),
+                YamlScalarNode scalar => Scalar(scalar.Value ?? "", scalar.Style is ScalarStyle.Plain or ScalarStyle.Any),
                 _ => NullValue.Instance,
             };
         }
+
+        private static Value Tagged(Value value) => value switch
+        {
+            TextValue { Text.Length: > 0 } t => t.Text.StartsWith('#') ? t : new TextValue("#" + t.Text),
+            ListValue l => new ListValue(l.Items.Select(i => i is TextValue ? Tagged(i) : i).ToList()),
+            _ => value,
+        };
     }
 
-    private static Value Scalar(string raw, bool plain, PropertyType? type)
+    private static Value Scalar(string raw, bool plain) =>
+        !plain ? new TextValue(raw) : IsNull(raw) ? NullValue.Instance : Inferred(raw);
+
+    /// <summary>A text as a value of <paramref name="type"/>, as a parameter of that type reads it; null when it doesn't fit.</summary>
+    internal static Value? Typed(string raw, PropertyType type) => type switch
     {
-        if (plain && IsNull(raw)) return NullValue.Instance;
-        return type switch
-        {
-            null => plain ? Inferred(raw) : new TextValue(raw),
-            PropertyType.Text => new TextValue(raw),
-            PropertyType.Multitext => new ListValue([new TextValue(raw)]),
-            PropertyType.Number => Number(raw) ?? new TextValue(raw),
-            PropertyType.Checkbox => Boolean(raw) ?? new TextValue(raw),
-            PropertyType.Date => Date(raw) ?? (DateTime(raw) is DateTimeValue t ? new DateValue(DateOnly.FromDateTime(t.DateTime)) : new TextValue(raw)),
-            PropertyType.Datetime => DateTime(raw) ?? (Date(raw) is DateValue d ? new DateTimeValue(d.Date.ToDateTime(TimeOnly.MinValue)) : new TextValue(raw)),
-            _ => new TextValue(raw),
-        };
-    }
+        PropertyType.Number => Number(raw),
+        PropertyType.Checkbox => Boolean(raw),
+        PropertyType.Date => Date(raw) ?? (DateTime(raw) is DateValue t ? new DateValue(t.Date) : null),
+        PropertyType.Datetime => DateTime(raw) ?? (Date(raw) is DateValue d ? d with { HasTime = true } : null),
+        _ => new TextValue(raw),
+    };
 
-    /// <summary>A text as a value of <paramref name="type"/>, as a declared property reads it; null when it doesn't fit.</summary>
-    internal static Value? Typed(string raw, PropertyType type) =>
-        Scalar(raw, plain: false, type) switch
-        {
-            TextValue when type is not PropertyType.Text => null,
-            var value => value,
-        };
-
-    /// <summary>What a plain scalar looks like: a checkbox, a number, a date, a datetime, or else text.</summary>
+    /// <summary>What a plain scalar looks like: a checkbox, a number, a date with or without a time, or else text.</summary>
     internal static Value Inferred(string raw) => Boolean(raw) ?? Number(raw) ?? Date(raw) ?? DateTime(raw) ?? new TextValue(raw);
 
-    // YAML 1.2's core schema, which Obsidian's parser follows; hex, octal and infinities are left as text, as a person meant them.
+    // YAML 1.2's core schema, which Obsidian's parser follows (finding 11).
     private static bool IsNull(string raw) => raw is "" or "~" or "null" or "Null" or "NULL";
 
     private static Value? Boolean(string raw) => raw switch
@@ -156,8 +138,16 @@ public static partial class Properties
         _ => null,
     };
 
-    private static Value? Number(string raw) =>
-        NumberPattern().IsMatch(raw) && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var n) ? new NumberValue(n) : null;
+    private static Value? Number(string raw) => raw switch
+    {
+        ".inf" or ".Inf" or ".INF" or "+.inf" or "+.Inf" or "+.INF" => new NumberValue(double.PositiveInfinity),
+        "-.inf" or "-.Inf" or "-.INF" => new NumberValue(double.NegativeInfinity),
+        ".nan" or ".NaN" or ".NAN" => new NumberValue(double.NaN),
+        _ when HexPattern().IsMatch(raw) => new NumberValue((double)BigInteger.Parse("0" + raw[2..], NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture)),
+        _ when OctalPattern().IsMatch(raw) => new NumberValue(raw[2..].Aggregate(0d, (value, digit) => value * 8 + (digit - '0'))),
+        _ when NumberPattern().IsMatch(raw) && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var n) => new NumberValue(n),
+        _ => null,
+    };
 
     private static Value? Date(string raw) =>
         DatePattern().IsMatch(raw) && DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? new DateValue(d) : null;
@@ -168,12 +158,18 @@ public static partial class Properties
         if (!match.Success) return null;
         var text = $"{match.Groups["date"].Value}T{match.Groups["time"].Value}" + (match.Groups["seconds"].Success ? "" : ":00");
         return System.DateTime.TryParseExact(text, ["yyyy-MM-ddTHH:mm:ss", "yyyy-MM-ddTHH:mm:ss.FFFFFFF"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var t)
-            ? new DateTimeValue(t)
+            ? new DateValue(t, true)
             : null;
     }
 
     [GeneratedRegex(@"^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$")]
     private static partial Regex NumberPattern();
+
+    [GeneratedRegex(@"^0x[0-9a-fA-F]+\z")]
+    private static partial Regex HexPattern();
+
+    [GeneratedRegex(@"^0o[0-7]+\z")]
+    private static partial Regex OctalPattern();
 
     [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}$")]
     private static partial Regex DatePattern();

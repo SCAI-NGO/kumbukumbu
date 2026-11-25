@@ -11,13 +11,13 @@ import { ExpressionParser, isWhiteSpace } from "./parser";
 import type { QueryNote } from "./note";
 import { Properties } from "./properties";
 import {
-  NULL, booleanValue, dateTimeValue, dateValue, fileValue, formatNumber, listValue, noteRefValue, numberValue, objectValue,
+  NULL, booleanValue, dateValue, fileValue, formatNumber, listValue, noteRefValue, numberValue, objectValue,
   regexValue, textValue, type Value,
 } from "./value";
 
 /**
  * What an expression is evaluated for: the note of the row, the note the query is shown in (`this`, if any) and the clock
- * of the run, fixed so every row sees the same `now()`: a datetime without a zone, "yyyy-MM-ddTHH:mm:ss" with up to 7
+ * of the run, fixed so every row sees the same `now()`: a date and time without a zone, "yyyy-MM-ddTHH:mm:ss" with up to 7
  * fractional digits.
  */
 export type Scope = { readonly note: QueryNote; readonly this: QueryNote | null; readonly now: string };
@@ -30,9 +30,9 @@ const entry = (name: string, written: string, gives: string): LanguageEntry => (
 /** The functions, as `help query` shows them: the help and what compiles are one list, so they can't drift. */
 export const FunctionReference: readonly LanguageEntry[] = [
   entry("if", "if(condition, then, else)", "then when the condition holds, else else; only the branch taken is evaluated"),
-  entry("now", "now()", "the date and time of the run, in your time zone"),
-  entry("today", "today()", "the date of the run"),
-  entry("date", "date(text)", "the date or date and time a text writes (2026-11-23, 2026-11-23T14:00), else null"),
+  entry("now", "now()", "the date of the run with its time, in your time zone"),
+  entry("today", "today()", "the date of the run, without a time"),
+  entry("date", "date(text)", "the date a text writes, with its time if it has one (2026-11-23, 2026-11-23T14:00), else null"),
   entry("number", "number(value)", "a number from a number, a checkbox (1 or 0) or a text that writes one, else null"),
   entry("list", "list(value)", "the value as a list: a list stays one, null is the empty list"),
 ];
@@ -54,8 +54,8 @@ export const MethodReference: readonly LanguageEntry[] = [
   entry("floor", "number.floor()", "the number rounded down"),
   entry("ceil", "number.ceil()", "the number rounded up"),
   entry("round", "number.round()", "the number rounded, halves up"),
-  entry("date", "datetime.date()", "the date of a date and time"),
-  entry("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it"),
+  entry("date", "date.date()", "the date without its time"),
+  entry("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it, ignoring case and a leading #"),
   entry("inFolder", "file.inFolder(folder)", "whether the file lies in the folder or below it"),
   entry("hasProperty", "file.hasProperty(name)", "whether the note's frontmatter has the property"),
 ];
@@ -68,12 +68,12 @@ export const FieldReference: readonly LanguageEntry[] = [
   entry("folder", "file.folder", "the folder in the vault (People; / at the root)"),
   entry("ext", "file.ext", "the extension (md, png)"),
   entry("size", "file.size", "the size in bytes"),
-  entry("ctime", "file.ctime", "when the file was created, a date and time"),
-  entry("mtime", "file.mtime", "when the file was last changed, a date and time"),
-  entry("tags", "file.tags", "the note's tags, frontmatter and text; none for other files"),
+  entry("ctime", "file.ctime", "when the file was created, a date with its time"),
+  entry("mtime", "file.mtime", "when the file was last changed, a date with its time"),
+  entry("tags", "file.tags", "the note's tags with their #, text and frontmatter; none for other files"),
   entry("properties", "file.properties", "the frontmatter as an object; empty for other files"),
   entry("length", "text.length, list.length", "how many characters or items"),
-  entry("year", "date.year, .month, .day", "a date's parts; a date and time also has .hour, .minute, .second"),
+  entry("year", "date.year, .month, .day", "a date's parts, and .hour, .minute, .second (0 for a date without a time)"),
 ];
 
 type BinaryExpr = Extract<Expr, { kind: "binary" }>;
@@ -252,7 +252,7 @@ export class Evaluator {
     switch (functionName) {
       // Only the branch taken is evaluated, as in JavaScript.
       case "if": return truthy(argument(0)) ? argument(1) : argument(2);
-      case "now": return dateTimeValue(scope.now);
+      case "now": return dateValue(scope.now);
       case "today": return dateValue(scope.now.slice(0, 10));
       case "date": return dateOf(argument(0));
       case "number": {
@@ -317,8 +317,8 @@ function field(value: Value, fieldName: string): Value {
         case "folder": return textValue(folderOf(value.note.path));
         case "ext": return textValue(extension(fileName(value.note.path)));
         case "size": return numberValue(value.note.size);
-        case "ctime": return value.note.created === null ? NULL : dateTimeValue(value.note.created);
-        case "mtime": return value.note.modified === null ? NULL : dateTimeValue(value.note.modified);
+        case "ctime": return value.note.created === null ? NULL : dateValue(value.note.created);
+        case "mtime": return value.note.modified === null ? NULL : dateValue(value.note.modified);
         case "tags": return listValue(value.note.tags.map(textValue));
         case "properties": return objectValue(value.note.properties.values);
         default: return NULL;
@@ -330,21 +330,20 @@ function field(value: Value, fieldName: string): Value {
     case "object": return value.values.get(fieldName) ?? NULL;
     case "text": return fieldName === "length" ? numberValue(value.text.length) : NULL;
     case "list": return fieldName === "length" ? numberValue(value.items.length) : NULL;
-    case "date": return part(value.date, fieldName, false);
-    case "datetime": return part(value.dateTime, fieldName, true);
+    case "date": return part(value.moment, fieldName);
     default: return NULL;
   }
 }
 
-// The parts of "yyyy-MM-dd[THH:mm:ss…]"; only a datetime has a time.
-function part(iso: string, partName: string, withTime: boolean): Value {
+// The parts of "yyyy-MM-ddTHH:mm:ss…"; a date without a time is its midnight.
+function part(moment: string, partName: string): Value {
   switch (partName) {
-    case "year": return numberValue(Number(iso.slice(0, 4)));
-    case "month": return numberValue(Number(iso.slice(5, 7)));
-    case "day": return numberValue(Number(iso.slice(8, 10)));
-    case "hour": return withTime ? numberValue(Number(iso.slice(11, 13))) : NULL;
-    case "minute": return withTime ? numberValue(Number(iso.slice(14, 16))) : NULL;
-    case "second": return withTime ? numberValue(Number(iso.slice(17, 19))) : NULL;
+    case "year": return numberValue(Number(moment.slice(0, 4)));
+    case "month": return numberValue(Number(moment.slice(5, 7)));
+    case "day": return numberValue(Number(moment.slice(8, 10)));
+    case "hour": return numberValue(Number(moment.slice(11, 13)));
+    case "minute": return numberValue(Number(moment.slice(14, 16)));
+    case "second": return numberValue(Number(moment.slice(17, 19)));
     default: return NULL;
   }
 }
@@ -360,9 +359,9 @@ function index(target: Value, at: Value): Value {
 function dateOf(v: Value): Value {
   if (v.kind === "text") {
     const read = Properties.inferred(trim(v.text));
-    return read.kind === "date" || read.kind === "datetime" ? read : NULL;
+    return read.kind === "date" ? read : NULL;
   }
-  return v.kind === "date" || v.kind === "datetime" ? v : NULL;
+  return v.kind === "date" ? v : NULL;
 }
 
 // .NET's string.Trim(): the characters char.IsWhiteSpace names, which are not quite JavaScript's.
@@ -424,8 +423,7 @@ function method(target: Value, methodName: string, args: readonly Value[]): Valu
         case "round": return numberValue(Math.floor(target.number + 0.5));
         default: return NULL;
       }
-    case "date": return methodName === "date" ? target : NULL;
-    case "datetime": return methodName === "date" ? dateValue(target.dateTime.slice(0, 10)) : NULL;
+    case "date": return methodName === "date" ? dateValue(target.moment.slice(0, 10)) : NULL;
     case "file":
       switch (methodName) {
         case "hasTag": return booleanValue(args.some((a) => a.kind === "text" && hasTag(target.note, a.text)));
@@ -439,7 +437,7 @@ function method(target: Value, methodName: string, args: readonly Value[]): Valu
 
 // A tag holds its nested tags: "project" finds #project/kumbu, not #projects.
 function hasTag(note: QueryNote, tag: string): boolean {
-  const wanted = foldCase(tag.replace(/^#+/, ""));
+  const wanted = foldCase(`#${tag.replace(/^#+/, "")}`);
   return note.tags.some((t) => {
     const folded = foldCase(t);
     return folded === wanted || folded.startsWith(`${wanted}/`);
@@ -465,7 +463,7 @@ function binary(operator: Operator, left: Value, right: Value): Value {
   const l = left.number;
   const r = right.number;
   const result = operator === "Add" ? l + r : operator === "Subtract" ? l - r : operator === "Multiply" ? l * r : operator === "Divide" ? l / r : l % r;
-  return Number.isFinite(result) ? numberValue(result) : NULL;
+  return numberValue(result);
 }
 
 /** Equal within a type; values of different types are never equal, and null equals only null. */
@@ -475,8 +473,7 @@ export function equal(a: Value, b: Value): boolean {
     case "number": return b.kind === "number" && a.number === b.number;
     case "text": return b.kind === "text" && a.text === b.text;
     case "boolean": return b.kind === "boolean" && a.boolean === b.boolean;
-    case "date": return b.kind === "date" && a.date === b.date;
-    case "datetime": return b.kind === "datetime" && a.dateTime === b.dateTime;
+    case "date": return b.kind === "date" && a.moment === b.moment;
     case "file": return b.kind === "file" && a.note.path === b.note.path;
     case "noteRef": return b.kind === "noteRef" && a.note.path === b.note.path;
     case "list": return b.kind === "list" && a.items.length === b.items.length && a.items.every((item, i) => equal(item, b.items[i]!));
@@ -487,26 +484,17 @@ export function equal(a: Value, b: Value): boolean {
   }
 }
 
-/**
- * The order of two values of one type (a date and a datetime count as one); null when they have none, so every
- * comparison with them is false.
- */
+/** The order of two values of one type; null when they have none, so every comparison with them is false. */
 export function compare(a: Value, b: Value): number | null {
   if (a.kind === "number" && b.kind === "number") {
     if (Number.isNaN(a.number) || Number.isNaN(b.number)) return null;
     return a.number < b.number ? -1 : a.number > b.number ? 1 : 0;
   }
   if (a.kind === "text" && b.kind === "text") return a.text < b.text ? -1 : a.text > b.text ? 1 : 0;
-  if ((a.kind === "date" || a.kind === "datetime") && (b.kind === "date" || b.kind === "datetime")) {
-    const x = moment(a);
-    const y = moment(b);
-    return x < y ? -1 : x > y ? 1 : 0;
-  }
+  // Both written as "yyyy-MM-ddTHH:mm:ss[.fraction]" with the fraction's trailing zeros gone, so ordering the text orders the moments.
+  if (a.kind === "date" && b.kind === "date") return a.moment < b.moment ? -1 : a.moment > b.moment ? 1 : 0;
   return null;
 }
-
-// Both written as "yyyy-MM-ddTHH:mm:ss[.fraction]" with the fraction's trailing zeros gone, so ordering the text orders the moments.
-const moment = (v: Value): string => (v.kind === "date" ? `${v.date}T00:00:00` : v.kind === "datetime" ? v.dateTime : "");
 
 /** As JavaScript counts truth: null, false, 0 and "" are false, everything else is true. */
 export function truthy(v: Value): boolean {
@@ -526,8 +514,7 @@ export function display(v: Value): string {
     case "text": return v.text;
     case "number": return formatNumber(v.number);
     case "boolean": return v.boolean ? "true" : "false";
-    case "date": return v.date;
-    case "datetime": return v.dateTime.slice(0, 19);
+    case "date": return v.hasTime ? v.moment.slice(0, 19) : v.moment.slice(0, 10);
     case "list": return v.items.map(display).join(", ");
     case "object": return `{${[...v.values].map(([key, value]) => `${key}: ${display(value)}`).join(", ")}}`;
     case "file":

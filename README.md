@@ -313,7 +313,7 @@ views:
 ```
 ````
 
-- **Typed as Obsidian types.** A property's type comes from the vault's `.obsidian/types.json` where it declares one, else from how it is written (`11` a number, `"11"` text); `tags` and `aliases` are lists.
+- **Typed as Obsidian's Bases type.** A property's type comes from how it is written, as YAML reads it (`11` and `0x1F` numbers, `"11"` text, `2026-11-23` a date, `2026-11-23T14:30` a date with its time); a type declared in `.obsidian/types.json` doesn't change it, and `query properties` shows both. A single value stays one, and `tags` gives its tags with their `#`.
 - **Parameters through `this`.** A call's arguments are bound into `this`, over the query note's own properties, as Obsidian gives a base the note it is shown in. An argument is always a value, never an expression.
 - **In memory, over the unlocked vault.** Nothing about properties is stored in the clear: a query reads the notes as the shell does, scoped to what the caller may read, over every file of the vault as Obsidian's Bases do (archived notes, attachments and `.base` files too); each note's properties are parsed once while it stays unchanged, so a query over 5,000 notes takes milliseconds (ADR 0027).
 - **One rule for failures.** A function that doesn't exist, a broken formula or a missing argument is an error with a code before any note is read; a value of the wrong type in a note gives null.

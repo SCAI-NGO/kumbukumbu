@@ -21,9 +21,9 @@ public sealed class Evaluator
     public static readonly IReadOnlyList<LanguageEntry> FunctionReference =
     [
         new("if", "if(condition, then, else)", "then when the condition holds, else else; only the branch taken is evaluated"),
-        new("now", "now()", "the date and time of the run, in your time zone"),
-        new("today", "today()", "the date of the run"),
-        new("date", "date(text)", "the date or date and time a text writes (2026-11-23, 2026-11-23T14:00), else null"),
+        new("now", "now()", "the date of the run with its time, in your time zone"),
+        new("today", "today()", "the date of the run, without a time"),
+        new("date", "date(text)", "the date a text writes, with its time if it has one (2026-11-23, 2026-11-23T14:00), else null"),
         new("number", "number(value)", "a number from a number, a checkbox (1 or 0) or a text that writes one, else null"),
         new("list", "list(value)", "the value as a list: a list stays one, null is the empty list"),
     ];
@@ -46,8 +46,8 @@ public sealed class Evaluator
         new("floor", "number.floor()", "the number rounded down"),
         new("ceil", "number.ceil()", "the number rounded up"),
         new("round", "number.round()", "the number rounded, halves up"),
-        new("date", "datetime.date()", "the date of a date and time"),
-        new("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it"),
+        new("date", "date.date()", "the date without its time"),
+        new("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it, ignoring case and a leading #"),
         new("inFolder", "file.inFolder(folder)", "whether the file lies in the folder or below it"),
         new("hasProperty", "file.hasProperty(name)", "whether the note's frontmatter has the property"),
     ];
@@ -61,12 +61,12 @@ public sealed class Evaluator
         new("folder", "file.folder", "the folder in the vault (People; / at the root)"),
         new("ext", "file.ext", "the extension (md, png)"),
         new("size", "file.size", "the size in bytes"),
-        new("ctime", "file.ctime", "when the file was created, a date and time"),
-        new("mtime", "file.mtime", "when the file was last changed, a date and time"),
-        new("tags", "file.tags", "the note's tags, frontmatter and text; none for other files"),
+        new("ctime", "file.ctime", "when the file was created, a date with its time"),
+        new("mtime", "file.mtime", "when the file was last changed, a date with its time"),
+        new("tags", "file.tags", "the note's tags with their #, text and frontmatter; none for other files"),
         new("properties", "file.properties", "the frontmatter as an object; empty for other files"),
         new("length", "text.length, list.length", "how many characters or items"),
-        new("year", "date.year, .month, .day", "a date's parts; a date and time also has .hour, .minute, .second"),
+        new("year", "date.year, .month, .day", "a date's parts, and .hour, .minute, .second (0 for a date without a time)"),
     ];
 
     private static readonly HashSet<string> Functions = [.. FunctionReference.Select(f => f.Name)];
@@ -260,8 +260,8 @@ public sealed class Evaluator
         (FileValue f, "folder") => new TextValue(Folder(f.Note.Path)),
         (FileValue f, "ext") => new TextValue(Path.GetExtension(FileName(f.Note.Path)).TrimStart('.')),
         (FileValue f, "size") => new NumberValue(f.Note.Size),
-        (FileValue f, "ctime") => f.Note.Created is { } created ? new DateTimeValue(created) : NullValue.Instance,
-        (FileValue f, "mtime") => f.Note.Modified is { } modified ? new DateTimeValue(modified) : NullValue.Instance,
+        (FileValue f, "ctime") => f.Note.Created is { } created ? new DateValue(created, true) : NullValue.Instance,
+        (FileValue f, "mtime") => f.Note.Modified is { } modified ? new DateValue(modified, true) : NullValue.Instance,
         (FileValue f, "tags") => new ListValue(f.Note.Tags.Select(t => (Value)new TextValue(t)).ToList()),
         (FileValue f, "properties") => new ObjectValue(f.Note.Properties.Values),
         (NoteRefValue r, "file") => new FileValue(r.Note),
@@ -270,15 +270,12 @@ public sealed class Evaluator
         (ObjectValue o, _) => o.Values.GetValueOrDefault(name) ?? NullValue.Instance,
         (TextValue t, "length") => new NumberValue(t.Text.Length),
         (ListValue l, "length") => new NumberValue(l.Items.Count),
-        (DateValue d, "year") => new NumberValue(d.Date.Year),
-        (DateValue d, "month") => new NumberValue(d.Date.Month),
-        (DateValue d, "day") => new NumberValue(d.Date.Day),
-        (DateTimeValue d, "year") => new NumberValue(d.DateTime.Year),
-        (DateTimeValue d, "month") => new NumberValue(d.DateTime.Month),
-        (DateTimeValue d, "day") => new NumberValue(d.DateTime.Day),
-        (DateTimeValue d, "hour") => new NumberValue(d.DateTime.Hour),
-        (DateTimeValue d, "minute") => new NumberValue(d.DateTime.Minute),
-        (DateTimeValue d, "second") => new NumberValue(d.DateTime.Second),
+        (DateValue d, "year") => new NumberValue(d.Moment.Year),
+        (DateValue d, "month") => new NumberValue(d.Moment.Month),
+        (DateValue d, "day") => new NumberValue(d.Moment.Day),
+        (DateValue d, "hour") => new NumberValue(d.Moment.Hour),
+        (DateValue d, "minute") => new NumberValue(d.Moment.Minute),
+        (DateValue d, "second") => new NumberValue(d.Moment.Second),
         _ => NullValue.Instance,
     };
 
@@ -302,7 +299,7 @@ public sealed class Evaluator
         {
             // Only the branch taken is evaluated, as in JavaScript.
             "if" => Truthy(Argument(0)) ? Argument(1) : Argument(2),
-            "now" => new DateTimeValue(scope.Now),
+            "now" => new DateValue(scope.Now, true),
             "today" => new DateValue(DateOnly.FromDateTime(scope.Now)),
             "date" => DateOf(Argument(0)),
             "number" => Argument(0) switch
@@ -324,8 +321,8 @@ public sealed class Evaluator
 
     private static Value DateOf(Value v) => v switch
     {
-        TextValue t when Properties.Inferred(t.Text.Trim()) is DateValue or DateTimeValue => Properties.Inferred(t.Text.Trim()),
-        DateValue or DateTimeValue => v,
+        TextValue t when Properties.Inferred(t.Text.Trim()) is DateValue d => d,
+        DateValue => v,
         _ => NullValue.Instance,
     };
 
@@ -360,8 +357,7 @@ public sealed class Evaluator
             (NumberValue n, "ceil") => new NumberValue(Math.Ceiling(n.Number)),
             // JavaScript's Math.round: halves go up, so -2.5 rounds to -2.
             (NumberValue n, "round") => new NumberValue(Math.Floor(n.Number + 0.5)),
-            (DateValue d, "date") => d,
-            (DateTimeValue d, "date") => new DateValue(DateOnly.FromDateTime(d.DateTime)),
+            (DateValue d, "date") => new DateValue(d.Date),
             (FileValue f, "hasTag") => new BooleanValue(arguments.OfType<TextValue>().Any(a => HasTag(f.Note, a.Text))),
             (FileValue f, "inFolder") => TextArgument(0) is { } folder ? new BooleanValue(InFolder(f.Note.Path, folder)) : NullValue.Instance,
             (FileValue f, "hasProperty") => TextArgument(0) is { } p ? new BooleanValue(f.Note.Properties.Values.ContainsKey(p)) : NullValue.Instance,
@@ -372,7 +368,7 @@ public sealed class Evaluator
     // A tag holds its nested tags: "project" finds #project/kumbu, not #projects.
     private static bool HasTag(QueryNote note, string tag)
     {
-        tag = tag.TrimStart('#');
+        tag = "#" + tag.TrimStart('#');
         return note.Tags.Any(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase)
                                   || t.StartsWith(tag + "/", StringComparison.OrdinalIgnoreCase));
     }
@@ -392,7 +388,7 @@ public sealed class Evaluator
         Operator.Greater => new BooleanValue(Compare(left, right) > 0),
         Operator.GreaterOrEqual => new BooleanValue(Compare(left, right) >= 0),
         Operator.Add when left is TextValue || right is TextValue => new TextValue(Display(left) + Display(right)),
-        _ when left is NumberValue l && right is NumberValue r => Finite(op switch
+        _ when left is NumberValue l && right is NumberValue r => new NumberValue(op switch
         {
             Operator.Add => l.Number + r.Number,
             Operator.Subtract => l.Number - r.Number,
@@ -403,8 +399,6 @@ public sealed class Evaluator
         _ => NullValue.Instance,
     };
 
-    private static Value Finite(double n) => double.IsFinite(n) ? new NumberValue(n) : NullValue.Instance;
-
     /// <summary>Equal within a type; values of different types are never equal, and null equals only null.</summary>
     public static bool Equal(Value a, Value b) => (a, b) switch
     {
@@ -412,8 +406,7 @@ public sealed class Evaluator
         (NumberValue x, NumberValue y) => x.Number == y.Number,
         (TextValue x, TextValue y) => x.Text == y.Text,
         (BooleanValue x, BooleanValue y) => x.Boolean == y.Boolean,
-        (DateValue x, DateValue y) => x.Date == y.Date,
-        (DateTimeValue x, DateTimeValue y) => x.DateTime == y.DateTime,
+        (DateValue x, DateValue y) => x.Moment == y.Moment,
         (FileValue x, FileValue y) => x.Note.Path == y.Note.Path,
         (NoteRefValue x, NoteRefValue y) => x.Note.Path == y.Note.Path,
         (ListValue x, ListValue y) => x.Items.Count == y.Items.Count && x.Items.Zip(y.Items).All(p => Equal(p.First, p.Second)),
@@ -422,17 +415,15 @@ public sealed class Evaluator
         _ => false,
     };
 
-    /// <summary>The order of two values of one type (a date and a datetime count as one); null when they have none,
+    /// <summary>The order of two values of one type; null when they have none,
     /// so every comparison with them is false.</summary>
     public static int? Compare(Value a, Value b) => (a, b) switch
     {
         (NumberValue x, NumberValue y) when !double.IsNaN(x.Number) && !double.IsNaN(y.Number) => x.Number.CompareTo(y.Number),
         (TextValue x, TextValue y) => string.CompareOrdinal(x.Text, y.Text),
-        (DateValue or DateTimeValue, DateValue or DateTimeValue) => Moment(a).CompareTo(Moment(b)),
+        (DateValue x, DateValue y) => x.Moment.CompareTo(y.Moment),
         _ => null,
     };
-
-    private static DateTime Moment(Value v) => v is DateValue d ? d.Date.ToDateTime(TimeOnly.MinValue) : ((DateTimeValue)v).DateTime;
 
     /// <summary>As JavaScript counts truth: null, false, 0 and "" are false, everything else is true.</summary>
     public static bool Truthy(Value v) => v switch
@@ -451,8 +442,7 @@ public sealed class Evaluator
         TextValue t => t.Text,
         NumberValue n => n.Number.ToString("R", CultureInfo.InvariantCulture),
         BooleanValue b => b.Boolean ? "true" : "false",
-        DateValue d => d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-        DateTimeValue d => d.DateTime.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture),
+        DateValue d => d.Moment.ToString(d.HasTime ? "yyyy-MM-ddTHH:mm:ss" : "yyyy-MM-dd", CultureInfo.InvariantCulture),
         ListValue l => string.Join(", ", l.Items.Select(Display)),
         ObjectValue o => "{" + string.Join(", ", o.Values.Select(e => $"{e.Key}: {Display(e.Value)}")) + "}",
         FileValue f => f.Note.Path,

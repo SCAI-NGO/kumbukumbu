@@ -1,4 +1,4 @@
-description: Without a declared type, a plain scalar reads as what it looks like; a quoted one stays text.
+description: A plain scalar reads as what it looks like, a date with or without a time; a quoted one stays text.
 source: spec
 notes:
   Ann.md: |
@@ -23,7 +23,7 @@ expect:
       quoted: text 46
       done: boolean true
       birthday: date 1980-11-03
-      met: datetime 2026-11-23T14:30:00
+      met: date 2026-11-23T14:30:00
       city: text Vienna
       zip: number 1010
       nothing: null

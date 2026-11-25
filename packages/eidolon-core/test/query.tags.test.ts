@@ -5,7 +5,6 @@ import { expect, test } from "vitest";
 import { MAX_FRONTMATTER_LENGTH } from "../src/links/aliases";
 import { QueryNote } from "../src/query/note";
 import { Properties } from "../src/query/properties";
-import { PropertyTypes } from "../src/query/propertyTypes";
 import { tagsOf } from "../src/query/tags";
 
 const tags = (content: string) => tagsOf(content).map((t) => t.tag).join(" ");
@@ -99,9 +98,9 @@ test("a decomposed tag reads as composed", () => {
   expect(tagsOf("#Grüße")[0]!.tag).toBe("Grüße");
 });
 
-test("a note's tags list each tag once, ignoring case, as first written", () => {
-  const content = "---\ntags: [Research]\n---\n#research #other #RESEARCH";
-  expect(new QueryNote("A.md", content, Properties.read(content, PropertyTypes.none)).tags).toEqual(["Research", "other"]);
+test("a note's tags list each tag once with its '#', ignoring case, the text's first, as first written", () => {
+  const content = "---\ntags: [Research, Front]\n---\n#research #other #RESEARCH";
+  expect(new QueryNote("A.md", content, Properties.read(content)).tags).toEqual(["#research", "#other", "#Front"]);
 });
 
 test("the tags of one content are read once and remembered", () => {

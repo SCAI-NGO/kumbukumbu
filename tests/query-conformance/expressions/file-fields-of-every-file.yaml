@@ -27,9 +27,9 @@ cases:
   - expression: file.size
     values: { People/Ann.md: number 30, Lists/All.base: number 37, photo.png: number 11 }
   - expression: file.ctime
-    values: { People/Ann.md: datetime 2026-11-20T09:15:00, Lists/All.base: null, photo.png: datetime 2026-11-21T08:00:00 }
+    values: { People/Ann.md: date 2026-11-20T09:15:00, Lists/All.base: null, photo.png: date 2026-11-21T08:00:00 }
   - expression: file.mtime
-    values: { People/Ann.md: datetime 2026-11-24T18:00:00, Lists/All.base: null, photo.png: datetime 2026-11-21T08:00:00 }
+    values: { People/Ann.md: date 2026-11-24T18:00:00, Lists/All.base: null, photo.png: date 2026-11-21T08:00:00 }
   - expression: file.properties
     values: { People/Ann.md: { status: text grün }, Lists/All.base: {}, photo.png: {} }
   - expression: file.hasProperty("status")

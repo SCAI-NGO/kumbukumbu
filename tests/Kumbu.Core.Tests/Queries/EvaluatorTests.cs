@@ -7,7 +7,7 @@ namespace Kumbu.Core.Tests.Queries;
 // The evaluator's limits on formulas, which are anyone's input; what an expression gives is in the conformance cases.
 public class EvaluatorTests
 {
-    private static readonly QueryNote Note = new("a.md", "", Properties.Read("", new Dictionary<string, PropertyType>()));
+    private static readonly QueryNote Note = new("a.md", "", Properties.Read(""));
 
     private static Value Run(Dictionary<string, string> formulas, string expression)
     {

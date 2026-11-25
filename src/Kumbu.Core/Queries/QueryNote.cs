@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using Kumbu.Core.Sections;
+using Kumbu.Core.Sh;
 using Kumbu.Core.Tags;
 
 namespace Kumbu.Core.Queries;
@@ -24,12 +26,19 @@ public sealed class QueryNote(string path, string content, NoteProperties proper
 
     public DateTime? Modified { get; } = modified;
 
-    /// <summary>Its tags as Obsidian reads them, frontmatter first, each once (ignoring case), as first written; none for a file that isn't a note.</summary>
-    public IReadOnlyList<string> Tags => tags ??= IsNote ? TagReader.Of(Content).Select(t => t.Tag).Distinct(StringComparer.OrdinalIgnoreCase).ToList() : [];
+    /// <summary>Its tags as Obsidian's file.tags gives them: with their '#', the text's before the frontmatter's (finding 6),
+    /// each once (ignoring case), as first written; none for a file that isn't a note.</summary>
+    public IReadOnlyList<string> Tags => tags ??= IsNote ? OfNote(Content) : [];
 
     private IReadOnlyList<string>? tags;
 
     public static bool IsNotePath(string path) => path.EndsWith(".md", StringComparison.Ordinal);
+
+    private static List<string> OfNote(string content)
+    {
+        var end = Outline.FrontmatterEnd(Lines.Split(content));
+        return TagReader.Of(content).OrderBy(t => t.Line < end ? 1 : 0).Select(t => "#" + t.Tag).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
 }
 
 /// <summary>A note's file, as <c>file</c> and <c>this.file</c> give it: two are equal when their paths are.</summary>

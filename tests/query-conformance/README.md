@@ -11,7 +11,7 @@ One YAML file per case, named for what it shows.
 ```yaml
 description: One sentence on what the case shows.
 source: spec          # or "obsidian 1.10": checked in real Obsidian, with that version
-types:                # optional: the "types" of the vault's .obsidian/types.json
+types:                # optional: the "types" of the vault's .obsidian/types.json, which change no value
   birthday: date
 notes:                # path: the note's full text
   People/Ann.md: |
@@ -99,10 +99,9 @@ A typed value is written as its type and its normalised text, so a comparison te
 | Written | Meaning |
 |---|---|
 | `text Ann`, `text` | text (`text` alone: the empty text) |
-| `number 11`, `number 1.5` | a number, in its shortest form |
+| `number 11`, `number 1.5`, `number Infinity`, `number NaN` | a number, in its shortest form; the infinities and NaN as JavaScript writes them |
 | `boolean true` | a checkbox |
-| `date 1980-11-03` | a date |
-| `datetime 2026-11-23T14:00:00` | a date with a time, without a zone, as Obsidian keeps it |
+| `date 1980-11-03`, `date 2026-11-23T14:00:00` | a date, without a time or with one (without a zone, as Obsidian keeps it); one type, as in Obsidian |
 | `null` | no value |
 | `[text a, text b]` (a YAML list) | a list |
 | a YAML map of values | an object |

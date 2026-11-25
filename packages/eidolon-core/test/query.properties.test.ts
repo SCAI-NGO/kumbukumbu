@@ -3,68 +3,61 @@
 // written twice, and its cache. Which values a note's properties are is in tests/query-conformance/properties.
 import { expect, test } from "vitest";
 import { CACHE_LIMIT, MAX_DEPTH, MAX_VALUES, Properties, TOO_LARGE_PROBLEM } from "../src/query/properties";
-import { PropertyTypes } from "../src/query/propertyTypes";
 import { formatNumber } from "../src/query/value";
 
-const none = PropertyTypes.none;
 const note = (yaml: string) => `---\n${yaml}\n---\n`;
 
 test("anchors expanding tenfold per level are too large, not a hang", () => {
   const levels = ["a: &a [x, x, x, x, x, x, x, x, x, x]"];
   for (let i = 0; i < 6; i++) levels.push(`${String.fromCharCode(98 + i)}: &${String.fromCharCode(98 + i)} [${Array(10).fill(`*${String.fromCharCode(97 + i)}`).join(", ")}]`);
-  const read = Properties.read(note(levels.join("\n")), none);
+  const read = Properties.read(note(levels.join("\n")));
   expect(read.problem).toBe(TOO_LARGE_PROBLEM);
   expect(read.values.size).toBe(0);
 });
 
 test("an anchor that holds itself runs into the depth limit", () => {
-  expect(Properties.read(note("a: &a [*a]"), none).problem).toBe(TOO_LARGE_PROBLEM);
+  expect(Properties.read(note("a: &a [*a]")).problem).toBe(TOO_LARGE_PROBLEM);
 });
 
 test("aliases read as the value they stand for", () => {
-  const read = Properties.read(note("a: &a [x, 1]\nb: *a"), none);
+  const read = Properties.read(note("a: &a [x, 1]\nb: *a"));
   expect(read.problem).toBeNull();
   expect(read.values.get("b")).toEqual(read.values.get("a"));
 });
 
 test("values and depth are limited", () => {
   const items = (n: number) => `a: [${Array(n).fill("x").join(", ")}]`;
-  expect(Properties.read(note(items(MAX_VALUES - 1)), none).problem).toBeNull();
-  expect(Properties.read(note(items(MAX_VALUES)), none).problem).toBe(TOO_LARGE_PROBLEM);
+  expect(Properties.read(note(items(MAX_VALUES - 1))).problem).toBeNull();
+  expect(Properties.read(note(items(MAX_VALUES))).problem).toBe(TOO_LARGE_PROBLEM);
 
   const nested = (levels: number) => `a: ${"[".repeat(levels)}${"]".repeat(levels)}`;
-  expect(Properties.read(note(nested(MAX_DEPTH)), none).problem).toBeNull();
-  expect(Properties.read(note(nested(MAX_DEPTH + 1)), none).problem).toBe(TOO_LARGE_PROBLEM);
+  expect(Properties.read(note(nested(MAX_DEPTH))).problem).toBeNull();
+  expect(Properties.read(note(nested(MAX_DEPTH + 1))).problem).toBe(TOO_LARGE_PROBLEM);
 });
 
 test("a key written twice names the key", () => {
-  expect(Properties.read(note("rating: 5\nrating: 6"), none).problem).toBe("The frontmatter has the key 'rating' twice.");
+  expect(Properties.read(note("rating: 5\nrating: 6")).problem).toBe("The frontmatter has the key 'rating' twice.");
 });
 
 test("a frontmatter that is no map is a problem, an empty one is not", () => {
-  expect(Properties.read(note("- a\n- b"), none).problem).toBe("The frontmatter is not a map of keys and values.");
-  expect(Properties.read(note("just text"), none).problem).toBe("The frontmatter is not a map of keys and values.");
-  expect(Properties.read(note("~"), none).problem).toBeNull();
-  expect(Properties.read("---\n---\n", none).problem).toBeNull();
+  expect(Properties.read(note("- a\n- b")).problem).toBe("The frontmatter is not a map of keys and values.");
+  expect(Properties.read(note("just text")).problem).toBe("The frontmatter is not a map of keys and values.");
+  expect(Properties.read(note("~")).problem).toBeNull();
+  expect(Properties.read("---\n---\n").problem).toBeNull();
 });
 
 test("a note is parsed once while its content stays unchanged", () => {
   const content = note(`unique: ${Math.random()}`);
-  const first = Properties.read(content, none);
-  expect(Properties.read(content, none)).toBe(first);
-  // The same declarations in another map are the same types.
-  const declared = () => PropertyTypes.read('{"types":{"unique":"text"}}');
-  const typed = Properties.read(content, declared());
-  expect(typed).not.toBe(first);
-  expect(Properties.read(content, declared())).toBe(typed);
+  const first = Properties.read(content);
+  expect(Properties.read(content)).toBe(first);
 });
 
 test("the oldest note's properties are dropped beyond the limit", () => {
   const first = "# first, held until the limit is passed";
-  const kept = Properties.read(first, none);
-  expect(Properties.read(first, none)).toBe(kept);
-  for (let i = 0; i < CACHE_LIMIT; i++) Properties.read(`# note ${i}`, none);
-  expect(Properties.read(first, none)).not.toBe(kept);
+  const kept = Properties.read(first);
+  expect(Properties.read(first)).toBe(kept);
+  for (let i = 0; i < CACHE_LIMIT; i++) Properties.read(`# note ${i}`);
+  expect(Properties.read(first)).not.toBe(kept);
 });
 
 test("a number is written as .NET writes its round-trip form", () => {
@@ -75,9 +68,7 @@ test("a number is written as .NET writes its round-trip form", () => {
   expect(written.map(([n]) => formatNumber(n))).toEqual(written.map(([, s]) => s));
 });
 
-test("a datetime written as a block scalar, ending in a line break, is read as .NET does", () => {
-  const types = PropertyTypes.read(JSON.stringify({ types: { at: "datetime", on: "date" } }));
-  const read = Properties.read("---\nat: |\n  2026-11-23T10:00\non: |\n  2026-11-23\n---\n", types);
-  expect(read.values.get("at")).toEqual({ kind: "datetime", dateTime: "2026-11-23T10:00:00" });
-  expect(read.values.get("on")).toEqual({ kind: "text", text: "2026-11-23\n" });
+test("a date and time ending in a line break is read as .NET does", () => {
+  expect(Properties.typed("2026-11-23T10:00\n", "datetime")).toEqual({ kind: "date", moment: "2026-11-23T10:00:00", hasTime: true });
+  expect(Properties.typed("2026-11-23\n", "date")).toBeNull();
 });

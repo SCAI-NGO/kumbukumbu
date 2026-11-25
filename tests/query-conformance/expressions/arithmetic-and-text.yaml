@@ -1,4 +1,4 @@
-description: Arithmetic works on numbers; + with a text joins texts; a calculation on anything else, or without a finite result, is null.
+description: Arithmetic works on numbers as JavaScript's do, an infinity or NaN included; + with a text joins texts; a calculation on anything else is null.
 source: spec
 notes:
   Ann.md: |
@@ -15,4 +15,9 @@ cases:
   - { expression: name + n, values: { Ann.md: text Ann7 } }
   - { expression: name * 2, values: { Ann.md: null } }
   - { expression: missing + 1, values: { Ann.md: null } }
-  - { expression: n / 0, values: { Ann.md: null } }
+  - { expression: n / 0, values: { Ann.md: number Infinity } }
+  - { expression: -n / 0, values: { Ann.md: number -Infinity } }
+  - { expression: 0 / 0, values: { Ann.md: number NaN } }
+  - { expression: n % 0, values: { Ann.md: number NaN } }
+  - { expression: '"" + n / 0 + " " + 0 / 0', values: { Ann.md: text Infinity NaN } }
+  - { expression: (n / 0).toString(), values: { Ann.md: text Infinity } }

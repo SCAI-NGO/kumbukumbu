@@ -1,0 +1,11 @@
+description: A date's field on a text is an error in the cell.
+source: obsidian 1.15.1
+pending: [cs, ts]
+notes:
+  Ann.md: |
+    ---
+    birthday: soon
+    ---
+cases:
+  - expression: birthday.month
+    values: { Ann.md: error Cannot find "month" on type String }
