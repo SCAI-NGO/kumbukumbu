@@ -14,9 +14,9 @@
 //   and its links come from the copy, never from the server".
 // - The mode: detected from failed requests and the socket, always visible, "N changes waiting" until flushed
 //   → offline.spec #2; Vitest mode.test.tsx "a request that gets no answer goes offline …", core mode.test.ts.
-// - Works offline: tree, reading, wiki links, embeds → offline.spec #1; words search across mirrored vaults → left
-//   out (not in Task 7's gaps; MiniSearch over the copy is core's, no browser step of its own); backlinks and tags →
-//   core links tests; editing, new notes, trashing → offline.spec #2; images and PDFs in the mirror → offline.spec #7.
+// - Works offline: tree, reading, wiki links, embeds → offline.spec #1; words search across mirrored vaults → gaps #7
+//   (decided by Chris on 2026-11-25 for 0.7.0); core search.test.ts, Vitest useSearch.test.tsx "useSearch offline";
+//   backlinks and tags → core links tests; editing, new notes, trashing → offline.spec #2; images and PDFs in the mirror → offline.spec #7.
 // - Needs a connection (shown, not silently failing): the graph → gaps #6; Similar notes → gaps #6, in the graph's
 //   words (link prediction §2, §3.7, as Chris decided on 2026-11-24: one way for everything that needs a connection); menus (history, blame, move, rename,
 //   duplicate) → gaps #2; search by meaning, console, calendar, board, settings pages → left out (not among Task 7's
@@ -47,7 +47,8 @@
 // - Dimmed, not hidden, "Needs a connection" as title and as a menu item's second line → gaps #2.
 // - A page reached by address or left open says one sentence in its pane → gaps #6 (the graph's); the console's,
 //   history's, blame's, calendar's, board's and Settings pages' → left out (not among Task 7's gaps).
-// - Search says what it searches → left out (not among Task 7's gaps).
+// - Search says what it searches: the notice line, Hybrid and Meaning dimmed, the mode kept → gaps #7; Vitest
+//   ModeChips.test.tsx; "Not searched: Archive (not kept on this device)" → left out (backlog).
 // - A vault not kept here: dimmed in the switcher → left out (gaps #1 asserts its notes aren't on the device); an
 //   attachment not fetched: "Opens when you're online" → offline.spec #7, gaps #1.
 // §3a Settings, Offline
@@ -98,7 +99,7 @@
 // - 4.11 the mode, the contacts, the copy's life with the session → offline.spec #4, #5, #6; Vitest life.test.tsx.
 // - 4.12 the wiring → every test here.
 //
-// The new tests, gaps #1 to #6, in Chromium (desktop) and Firefox (offline-firefox), except #4: it shows Home with the
+// The new tests, gaps #1 to #7, in Chromium (desktop) and Firefox (offline-firefox), except #4: it shows Home with the
 // PIN in a session of its own, so it is @serial (plan review point 2: offline-firefox runs in the parallel phase and
 // leaves @serial out), Chromium only. It also covers Task 8's fifth place, the offline copy's vault list.
 import type { Page } from "@playwright/test";
@@ -531,5 +532,33 @@ test("gaps #6: offline the graph and Similar notes say they need a connection @o
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Drawing the graph…")).toHaveCount(0, { timeout: 30_000 });
   await expect(dialog, "F-07: the graph says it needs a connection").toContainText("The graph needs a connection. It's back when you are.", { timeout: 5_000 });
+  await page.context().setOffline(false);
+});
+
+test("gaps #7: offline, search finds words in the copy and says it finds words only @offline", async ({ page, aliceApi, folder }) => {
+  // A word no other note holds, so the one result is this test's.
+  const word = `kelp${randomBytes(4).toString("hex")}`;
+  const log = `/Work/${folder}/Harbour log.md`;
+  await aliceApi.putNote(log, `# Harbour log\n\nThe ${word} was landed at dawn.\n`);
+  await turnOn(page);
+  await page.goto(notePage(log));
+  await expect(article(page)).toContainText("landed at dawn");
+  await goOffline(page);
+
+  await page.getByRole("button", { name: /^Search/ }).click();
+  const sheet = page.getByRole("dialog", { name: "Search" });
+  // §3a: every offline search runs by words, the chosen mode kept (Hybrid, dimmed with the others but Exact).
+  await expect(sheet.getByRole("button", { name: "Hybrid" })).toBeDisabled();
+  await expect(sheet.getByRole("button", { name: "Hybrid" })).toHaveAttribute("aria-pressed", "true");
+  await expect(sheet.getByRole("switch", { name: "Include earlier versions" })).toBeDisabled();
+  await sheet.getByRole("searchbox", { name: "Search" }).fill(`dawn ${word}`);
+  await expect(sheet.getByText("You're offline: search finds words only. Search by meaning is back when you are.", { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(sheet.getByRole("heading", { level: 2 })).toContainText("1 result");
+  const card = sheet.getByRole("button", { name: new RegExp(`Harbour log.*${folder}`) });
+  await expect(card).toContainText(`The ${word} was landed at dawn.`);
+
+  await card.click();
+  await expect(page).toHaveURL(/Harbour%20log\.md$/);
+  await expect(article(page)).toContainText("landed at dawn");
   await page.context().setOffline(false);
 });

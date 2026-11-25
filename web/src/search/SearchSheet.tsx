@@ -7,6 +7,7 @@ import { useOpenNote } from "../shell/openInPane";
 import { secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
 import { useDialog } from "../hooks/useDialog";
+import { NEEDS_CONNECTION, useOffline } from "../offline/mode";
 import { useEditor } from "../state/editor";
 import { writerText } from "../api/activity";
 import CompareVersions from "../shell/CompareVersions";
@@ -47,7 +48,9 @@ export default function SearchSheet() {
   const results = search.data?.results;
   const hint = MODES.find((m) => m.mode === searchMode)!.hint;
   const [withEarlier, setWithEarlier] = useState(false);
-  const earlier = useEarlierSearch(search.settled, withEarlier);
+  // The copy keeps no history: offline the switch stays, dimmed, and is kept for when the connection is back (§3a).
+  const offline = useOffline();
+  const earlier = useEarlierSearch(search.settled, withEarlier && !offline);
   const [comparing, setComparing] = useState<EarlierResult | null>(null);
 
   const open = (path: string, line?: number) => {
@@ -122,7 +125,7 @@ export default function SearchSheet() {
             {results.length === 0 ? (
               <div className="flex flex-col items-start gap-3">
                 <p className="text-text-body">No notes found.</p>
-                {searchMode === "exact" && (
+                {searchMode === "exact" && !offline && (
                   <button type="button" onClick={() => setSearchMode("meaning")} className={secondaryButtonClass}>
                     Search by meaning instead
                   </button>
@@ -139,7 +142,7 @@ export default function SearchSheet() {
             )}
           </div>
         )}
-        {withEarlier && !search.idle && (
+        {withEarlier && !offline && !search.idle && (
           <div className="mt-4 flex flex-col gap-2">
             <h3 className="text-[15px] font-bold text-text">Earlier versions</h3>
             {earlier.isError && <p role="alert" className="text-text-body">{errorText(earlier.error)}</p>}
@@ -185,7 +188,7 @@ export default function SearchSheet() {
         </label>
         <ModeChips mode={searchMode} onChange={setSearchMode} />
         <div className="flex flex-wrap gap-x-4">
-          <Switch on={withEarlier} onToggle={() => setWithEarlier((on) => !on)} label="Include earlier versions" />
+          <Switch on={withEarlier} onToggle={() => setWithEarlier((on) => !on)} label="Include earlier versions" disabled={offline} />
           <Switch on={withArchive} onToggle={() => setWithArchive((on) => !on)} label="Include archive" />
         </div>
       </div>
@@ -201,14 +204,16 @@ export default function SearchSheet() {
   );
 }
 
-function Switch({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
+function Switch({ on, onToggle, label, disabled = false }: { on: boolean; onToggle: () => void; label: string; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
       onClick={onToggle}
-      className="flex min-h-11 items-center gap-2.5 self-start rounded-[10px] px-1 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent"
+      disabled={disabled}
+      title={disabled ? NEEDS_CONNECTION : undefined}
+      className="flex min-h-11 items-center gap-2.5 self-start rounded-[10px] px-1 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
     >
       <span aria-hidden className={`relative h-6 w-10 flex-none rounded-full transition-colors ${on ? "bg-accent" : "bg-surface-2 ring-1 ring-line"}`}>
         <span className={`absolute top-1 size-4 rounded-full bg-surface shadow transition-[left] ${on ? "left-5" : "left-1"}`} />
