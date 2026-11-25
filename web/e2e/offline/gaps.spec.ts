@@ -553,7 +553,7 @@ test("gaps #7: offline, search finds words in the copy and says it finds words o
   await expect(sheet.getByRole("switch", { name: "Include earlier versions" })).toBeDisabled();
   await sheet.getByRole("searchbox", { name: "Search" }).fill(`dawn ${word}`);
   await expect(sheet.getByText("You're offline: search finds words only. Search by meaning is back when you are.", { exact: true })).toBeVisible({ timeout: 10_000 });
-  await expect(sheet.getByRole("heading", { level: 2 })).toContainText("1 result");
+  await expect(sheet.getByRole("heading", { level: 2 })).toContainText("1 result words");
   const card = sheet.getByRole("button", { name: new RegExp(`Harbour log.*${folder}`) });
   await expect(card).toContainText(`The ${word} was landed at dawn.`);
 

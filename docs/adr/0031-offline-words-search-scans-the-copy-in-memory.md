@@ -1,8 +1,8 @@
 # 0031. Offline words search scans the copy's texts in memory
 
 - **Date:** 2026-11-25
-- **Status:** Proposed
-- **Decided by:** Chris, that words search works offline in 0.7.0; the plain scan instead of MiniSearch is proposed for his yes
+- **Status:** Accepted
+- **Decided by:** Chris (words search offline in 0.7.0, and the plain scan instead of MiniSearch, accepted on 2026-11-25)
 - **Spec:** [Offline mode](../superpowers/specs/2026-11-22-offline-mode-design.md) §2a, §3, §3a "Search says what it searches"
 
 ## Context

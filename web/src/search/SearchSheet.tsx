@@ -51,6 +51,8 @@ export default function SearchSheet() {
   // The copy keeps no history: offline the switch stays, dimmed, and is kept for when the connection is back (§3a).
   const offline = useOffline();
   const earlier = useEarlierSearch(search.settled, withEarlier && !offline);
+  // Offline every search runs by words, so the heading says so; the chosen mode is kept for when the connection is back.
+  const searchedBy = offline ? "words" : searchMode;
   const [comparing, setComparing] = useState<EarlierResult | null>(null);
 
   const open = (path: string, line?: number) => {
@@ -72,11 +74,11 @@ export default function SearchSheet() {
               "Recent notes"
             ) : results ? (
               <>
-                {results.length === 1 ? "1 result" : `${results.length} results`} <span className="font-mono text-[12px] font-normal text-accent-text">{searchMode}</span>
+                {results.length === 1 ? "1 result" : `${results.length} results`} <span className="font-mono text-[12px] font-normal text-accent-text">{searchedBy}</span>
               </>
             ) : (
               <>
-                Searching <span className="font-mono text-[12px] font-normal text-accent-text">{searchMode}</span>
+                Searching <span className="font-mono text-[12px] font-normal text-accent-text">{searchedBy}</span>
               </>
             )}
           </h2>
