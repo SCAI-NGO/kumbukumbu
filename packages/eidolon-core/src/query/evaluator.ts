@@ -304,7 +304,8 @@ export class Evaluator {
       throw new QueryError("too-large", `The query takes more than ${MAX_RUN_STEPS.toLocaleString("en")} steps over its notes.`, at.position);
   }
 
-  // One search of a regular expression from a place. It counts what it may read, one step for each 16 characters: up to
+  // One search of a regular expression from a place. It counts what it may read, 4 + its size steps for each 32
+  // characters, as re2js takes about 32 ms × (size + 3.5) for a million (a step stays about 1 µs at every size): up to
   // the match's end and on by the longest match, or, when it fails or a match has no longest, the rest of the text
   // (/(?:a*c)?/ on "aaa…" reads it for each match), so a global replace or split can't take quadratic time. The first
   // search of a pattern in a run also counts the states the server's engine builds for it (regexShape), as the server does.
@@ -315,7 +316,7 @@ export class Evaluator {
     }
     const found = m.find(from);
     const read = found && r.longest !== null ? Math.min(m.end() - from + r.longest, text.length - from) : text.length - from;
-    this.step(1 + Math.floor(read / 16), at);
+    this.step(1 + Math.floor((read * (4 + r.size)) / 32), at);
     return found;
   };
 
@@ -565,7 +566,9 @@ export class Evaluator {
     }
     const shape = regexShape(pattern);
     if (!runs(shape)) {
-      this.warn("regex", shape.countTooLarge
+      this.warn("regex", shape.unsupported !== null
+        ? `The regular expression has syntax at character ${shape.unsupported + 1} outside the part of RE2 that runs here, such as lookaround, a backreference, a named group, a comment, \\p{…} or a flag other than i, m and s, so it is null.`
+        : shape.countTooLarge
         ? `The regular expression counts a repetition more than ${MAX_COUNT} times (alone or multiplied through nesting), which RE2 doesn't run, so it is null.`
         : `The regular expression is ${shape.size} positions written out, more than the ${MAX_PATTERN_SIZE} that run in time, so it is null.`, position);
       return null;

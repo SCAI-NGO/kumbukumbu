@@ -310,7 +310,7 @@ public class QueryCommandTests
         var check = (await Run("query check /V/Patterns.base")).Output.Split('\n');
 
         Assert.Equal("/V/Patterns.base: ok, 1 view (Patterns), 0 parameters; 2 warnings", check[0]);
-        Assert.StartsWith("warning: view Patterns: regex in 'file.name + /a(?=b)/.matches(file.name)' at 12: The regular expression doesn't compile or needs backtracking", check[1]);
+        Assert.StartsWith("warning: view Patterns: regex in 'file.name + /a(?=b)/.matches(file.name)' at 12: The regular expression has syntax at character 4 outside the part of RE2 that runs here", check[1]);
         Assert.Equal("warning: view Patterns: regex in 'file.name + /a/x.matches(file.name)' at 12: The regular expression has the unknown or repeated flag 'x' (flags are g, i, m, s, u), so it is null.", check[2]);
         Assert.False((await Run("query execute /V/Patterns.base")).IsError);
     }

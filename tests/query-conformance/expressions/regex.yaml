@@ -34,3 +34,77 @@ cases:
   - { expression: '/^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.matches("ann@example.org")', values: { Ann.md: boolean true } }
   - { expression: '/\r?\n/.matches("a\r\nb")', values: { Ann.md: boolean true } }
   - { expression: '/[a-z]{1,64}/i.matches("Kumbu")', values: { Ann.md: boolean true } }
+  # An unbounded count stands for its body twice, n + 1 times for {n,}: the states of a loop wrap around, so the
+  # server's engine builds more of them than for the body written out once. Under {0,} four groups are 81 positions,
+  # three 61; under * ten optional groups (?:a|aa)? are 61, eleven 67.
+  - { expression: '/(?:(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?){0,}c/.matches("a".repeat(1000))', values: { Ann.md: null } }
+  - { expression: '/(?:(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?){0,}c/.matches("a".repeat(1000))', values: { Ann.md: boolean false } }
+  - { expression: '/(?:(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?)*c/i.matches("a".repeat(1000))', values: { Ann.md: null } }
+  - { expression: '/(?:(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?)*c/i.matches("a".repeat(1000))', values: { Ann.md: boolean false } }
+  # Only the syntax both engines read alike runs, and the whole pattern must be read: anything else is null, whatever it
+  # hides (here a comment that holds a [ and so swallowed the pattern after it).
+  - { expression: '/(?#:[)(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?c]/.matches("a".repeat(1000))', values: { Ann.md: null } }
+  # Each construct outside that subset is null in both engines, though one of them runs it.
+  - { expression: '/(?#c)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?x)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?<=a)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?<!b)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?!b)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a*+/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a++/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?>a)/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?(1)a|b)/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\p{L}/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\pL/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\Q.\E/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\Aa/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a\z/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a\Z/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\Ga/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\e/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\u0061/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\x{61}/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\cA/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\0/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(a)\k<1>/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?P<n>a)/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?<n>a)/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?''n''a)/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?U)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?-i)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?ii)a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/[[:alpha:]]/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/[a-z-[b]]/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/[]a]/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a{,3}/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a{/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a}/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a]/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a{2}{3}/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a**/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/^*a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\b+a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(?i)*a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/[\w-z]/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/[a-c-e]/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/[\D]/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/\_/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/a)/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(a/.matches("a")', values: { Ann.md: null } }
+  - { expression: '/😀/.matches("a")', values: { Ann.md: null } }
+  # What runs means the same in both, as RE2 means it: \d and \w are ASCII, \s is [\t\n\f\r ], $ without m is the end
+  # of the text, and i folds a letter with all its case forms.
+  - { expression: '"Müller".replace(/\w+/, "X")', values: { Ann.md: text Xüller } }
+  - { expression: '/^\d$/.matches("٣")', values: { Ann.md: boolean false } }
+  - { expression: "/^\\s$/.matches(\"\u00a0\")", values: { Ann.md: boolean false } }
+  - { expression: "/^\\S$/.matches(\"\v\")", values: { Ann.md: boolean true } }
+  - { expression: '/a$/.matches("a\n")', values: { Ann.md: boolean false } }
+  - { expression: '/a$/m.matches("a\nb")', values: { Ann.md: boolean true } }
+  - { expression: '/^σ+$/i.matches("ΣσςΣ")', values: { Ann.md: boolean true } }
+  - { expression: '/^[a-z]+$/i.matches("ſK")', values: { Ann.md: boolean true } }
+  - { expression: '/^[^a-z]$/i.matches("ſ")', values: { Ann.md: boolean false } }
+  - { expression: '/^(?:(?i)σ)σ$/.matches("ςσ")', values: { Ann.md: boolean true } }
+  - { expression: '/^(?:(?i)σ)σ$/.matches("ςς")', values: { Ann.md: boolean false } }
+  - { expression: '/^[\w.+-]+$/i.matches("ſ.K+-")', values: { Ann.md: boolean true } }

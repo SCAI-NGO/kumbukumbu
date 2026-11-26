@@ -40,4 +40,7 @@ cases:
   - { expression: '"a\r\n".repeat(30000).split(/\r?\n/).length', values: { Ann.md: number 30001 } }
   - { expression: '"a\r\n".repeat(30000).replace(/\r?\n/g, " ").length', values: { Ann.md: number 60000 } }
   - { expression: '"a\n".repeat(30000).split(/\n+/).length', error: too-large }
-
+  # A search costs more the larger its pattern, as RE2 reads each character once for each position it may be at: a
+  # pattern of 61 positions over 600,000 characters is past a note's steps, one of 5 isn't.
+  - { expression: '/x{0,60}y/.matches("a".repeat(600000))', error: too-large }
+  - { expression: '/x{0,4}y/.matches("a".repeat(600000))', values: { Ann.md: boolean false } }

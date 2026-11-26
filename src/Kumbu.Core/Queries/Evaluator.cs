@@ -279,17 +279,18 @@ public sealed partial class Evaluator
     /// <summary>The steps reading, comparing or building a value takes: one for each 64 of its characters and items.</summary>
     private static long Work(Value value) => value is TextValue or ListValue or ObjectValue ? Measure(value).Size / 64 : 0;
 
-    // One search of a regular expression from a place. It counts what it may read, one step for each 16 characters: up to
+    // One search of a regular expression from a place. It counts what it may read, 4 + its size steps for each 32
+    // characters, as re2js takes about 32 ms × (size + 3.5) for a million (a step stays about 1 µs at every size): up to
     // the match's end and on by the longest match, or, when it fails or a match has no longest, the rest of the text
     // (/(?:a*c)?/ on "aaa…" reads it for each match), so a global replace or split can't take quadratic time. The first
     // search of a pattern in a run also counts the states .NET builds for it, which grow with the square of its size
-    // (RegexShape): 128 × 64² steps, about 0.25 s, for the largest that runs, so a run holds no more than nine of those.
+    // (RegexShape): 128 × 64² steps, about 0.4 s, for the largest that runs, so a run holds no more than nine of those.
     private Match Search(RegexValue r, string text, int from, Expr at)
     {
         if (searchedInRun.Add(r)) Step(128 * r.Size * r.Size, at);
         var m = r.Regex.Match(text, from);
         var read = m.Success && r.Longest is { } longest ? Math.Min(m.Index + m.Length - from + longest, text.Length - from) : text.Length - from;
-        Step(1 + read / 16, at);
+        Step(1 + read * (4 + r.Size) / 32, at);
         return m;
     }
 
@@ -591,10 +592,12 @@ public sealed partial class Evaluator
             return null;
         }
 
-        var shape = RegexShape.Of(r.Pattern);
+        var shape = RegexShape.Of(r.Pattern, r.Flags.Contains('i'), r.Flags.Contains('m'));
         if (!shape.Runs)
         {
-            Warn("regex", shape.CountTooLarge
+            Warn("regex", shape.Unsupported is { } unsupported
+                ? $@"The regular expression has syntax at character {unsupported + 1} outside the part of RE2 that runs here, such as lookaround, a backreference, a named group, a comment, \p{{…}} or a flag other than i, m and s, so it is null."
+                : shape.CountTooLarge
                 ? $"The regular expression counts a repetition more than {RegexShape.MaxCount} times (alone or multiplied through nesting), which RE2 doesn't run, so it is null."
                 : $"The regular expression is {shape.Size} positions written out, more than the {RegexShape.MaxSize} that run in time, so it is null.", r.Position);
             return null;
@@ -612,15 +615,15 @@ public sealed partial class Evaluator
             Regex? regex;
             lock (Compiled)
             {
-                if (!Compiled.TryGetValue((r.Pattern, options), out regex))
+                if (!Compiled.TryGetValue((shape.Pattern, options), out regex))
                 {
-                    regex = new Regex(r.Pattern, options);
+                    regex = new Regex(shape.Pattern, options);
                     if (Compiled.Count >= MaxCompiled || compiledSize + shape.Size > MaxCompiledSize)
                     {
                         Compiled.Clear();
                         compiledSize = 0;
                     }
-                    Compiled[(r.Pattern, options)] = regex;
+                    Compiled[(shape.Pattern, options)] = regex;
                     compiledSize += shape.Size;
                 }
             }
