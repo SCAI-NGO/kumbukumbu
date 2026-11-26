@@ -52,7 +52,7 @@ test("a long chain of one operator compiles and evaluates without running out of
   expect(source.length).toBeLessThan(10_000);
   const evaluator = new Evaluator();
   const expr = evaluator.compile(source);
-  expect(evaluator.evaluate(expr, { note, this: null, now: NOW })).toEqual({ kind: "boolean", boolean: false });
+  expect(evaluator.evaluate(expr, { note, this: null, now: NOW })).toEqual({ kind: "null" });
 });
 
 // Each step of a chain is a level of the parser's 64, so a long chain is a syntax error whatever the stack, and one
@@ -100,7 +100,7 @@ const ladder = (text: (i: number) => string) => {
 // the walk goes deepest.
 test("formulas at every limit, each a long chain, compile and evaluate", () => {
   const formulas = ladder((i) => `formula.f${i + 1}` + "&&1".repeat(Math.floor((ExpressionParser.MAX_LENGTH - 12) / 3)));
-  expect(run(formulas, "formula.f0")).toEqual({ kind: "boolean", boolean: true });
+  expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 1 });
 });
 
 // Nested as deeply as an expression may be, 64 levels of formulas stack about 4,000 levels: more than the levels a
@@ -219,8 +219,8 @@ test("a lambda that asks for a long list of tags again for each takes no longer 
   expect(performance.now() - started).toBeLessThan(5000);
 });
 
-test("a sort direction that sorts nothing is a warning, and the query still runs", () => {
-  const yaml = "views:\n  - type: table\n    name: Sorts\n    sort:\n      - { property: file.name, direction: asc }\n";
+test("a sort direction that is neither ASC nor DESC is a warning, and the key sorts ascending", () => {
+  const yaml = "views:\n  - type: table\n    name: Sorts\n    sort:\n      - { property: file.name, direction: up }\n";
   const { warnings } = Base.parse(yaml).run(null, [note], null, NOW);
-  expect(warnings).toEqual([{ code: "sort-direction", message: 'sort direction "asc" sorts nothing; use ASC or DESC', expression: "file.name", position: 0 }]);
+  expect(warnings).toEqual([{ code: "sort-direction", message: 'sort direction "up" is neither ASC nor DESC; sorting ascending', expression: "file.name", position: 0 }]);
 });

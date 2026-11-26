@@ -1,0 +1,14 @@
+description: A single = is a syntax error at its place, since Bases has no assignment; = inside a text or a regular expression, and ==, !=, <= and >=, are not.
+source: kumbu
+reason: Obsidian 1.15.1 gives null for a = 1 (finding 18), so a mistyped comparison silently matches nothing.
+notes:
+  Ann.md: |
+    ---
+    name: a=b
+    n: 1
+    ---
+cases:
+  - { expression: 'a = 1', error: syntax, message: use == to compare }
+  - { expression: 'name == "a=b"', values: { Ann.md: boolean true } }
+  - { expression: '/a=b/.matches(name)', values: { Ann.md: boolean true } }
+  - { expression: 'n != 2 && n <= 1 && n >= 1', values: { Ann.md: boolean true } }

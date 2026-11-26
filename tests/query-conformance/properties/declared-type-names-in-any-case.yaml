@@ -1,5 +1,6 @@
-description: A declaration in another case than the property's doesn't change its value either.
-source: spec
+description: A declared type holds for the property whatever the case it is written in.
+source: kumbu
+reason: Obsidian 1.15.1 ignores types.json for a base's values (finding 10), so a date declared a text stays a date; whoever declares a text means the text as written (ADR 0041).
 types:
   Birthday: text
 notes:
@@ -10,4 +11,4 @@ notes:
 expect:
   properties:
     Ann.md:
-      birthday: date 1980-11-03
+      birthday: text 1980-11-03

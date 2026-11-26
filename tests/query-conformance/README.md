@@ -10,8 +10,9 @@ One YAML file per case, named for what it shows.
 
 ```yaml
 description: One sentence on what the case shows.
-source: spec          # or "obsidian 1.15.1": checked in real Obsidian, with that version
-types:                # optional: the "types" of the vault's .obsidian/types.json, which change no value
+source: spec          # or "obsidian 1.15.1": checked in real Obsidian, with that version; or "kumbu": departs from Obsidian
+reason: …             # with source: kumbu only, one line: the Obsidian behaviour it departs from, and why
+types:                # optional: the "types" of the vault's .obsidian/types.json, which convert the values that fit them
   birthday: date
 notes:                # path: the note's full text
   People/Ann.md: |
@@ -56,6 +57,7 @@ cases:
     values: { Ann.md: error Cannot find function "nothing" }
   - expression: a = 1
     error: syntax             # or too-deep, too-large
+    message: use == to compare   # optional: the error's message starts with this text
 ```
 
 An expression that runs but can't give a value for a note (an unknown function or method, a formula that doesn't exist or uses itself, a calculation between types that don't fit) gives an error value in that note's cell, as Obsidian does; `error` is only for what fails the whole query: syntax, before any note is read, and the limits, which the runner looks for by evaluating the expression for every note. The expressions of one file are one run over its notes, so `random()` gives a note the same number in each.
@@ -110,7 +112,7 @@ A score is the cosine rounded to six decimals, in both engines. `text` names a p
 
 The server's runner passes `vectors` to every run, and the offline runner holds every run to `offline` when the case has it. A query whose `meaning:` can't be read fails at reading on both engines, so a case of such errors needs no `offline`.
 
-`source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian. Where Obsidian gives another result, the case takes Obsidian's ([ADR 0039](../../docs/adr/0039-bases-follow-obsidian.md)).
+`source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian. Where Obsidian gives another result, the case takes Obsidian's ([ADR 0039](../../docs/adr/0039-bases-follow-obsidian.md)), unless Obsidian's result is plainly a bug: then the case keeps Kumbu²'s result with `source: kumbu` and a `reason:` naming what Obsidian does and why Kumbu² doesn't ([ADR 0041](../../docs/adr/0041-kumbu-doesnt-copy-obsidians-bugs.md)). A runner fails a `kumbu` case without a reason, and a reason on any other case; a new Obsidian run checks the `kumbu` cases to see whether Obsidian has fixed one.
 
 ## Values
 

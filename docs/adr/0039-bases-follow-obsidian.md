@@ -1,7 +1,7 @@
 # 0039. Bases follow Obsidian's semantics; Kumbu² only adds diagnostics
 
 - **Date:** 2026-11-25
-- **Status:** Accepted
+- **Status:** Accepted; superseded in part by [0041](0041-kumbu-doesnt-copy-obsidians-bugs.md) where Obsidian's result is a bug
 - **Decided by:** Chris, with Claude
 - **Spec:** [Queries: the data side](../superpowers/specs/2026-11-24-queries-data-side-design.md), [Bases follow Obsidian](../superpowers/specs/2026-11-25-bases-follow-obsidian-design.md)
 

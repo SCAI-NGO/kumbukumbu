@@ -441,10 +441,11 @@ public sealed partial class Evaluator
         {
             if (value is ErrorValue) return value;
             var (op, right) = (spine[i].Operator, spine[i].Right);
+            // && and || give an operand, as JavaScript's do, not Obsidian's checkbox (ADR 0041).
             value = op switch
             {
-                Operator.And => Truthy(value) ? Logical(Eval(right, scope)) : new BooleanValue(false),
-                Operator.Or => Truthy(value) ? new BooleanValue(true) : Logical(Eval(right, scope)),
+                Operator.And => Truthy(value) ? Eval(right, scope) : value,
+                Operator.Or => Truthy(value) ? value : Eval(right, scope),
                 _ => Charged(op, value, Eval(right, scope), spine[i]),
             };
             // Each step of a chain is a value of its own: "a" + "a" + ... grows at each.
@@ -461,9 +462,6 @@ public sealed partial class Evaluator
         Step(Work(left) + Work(right) + Work(value), at);
         return value;
     }
-
-    // && and || give a checkbox, as Obsidian's do (finding 12), and pass on an error of the side they had to read.
-    private static Value Logical(Value v) => v is ErrorValue ? v : new BooleanValue(Truthy(v));
 
     // The binary expressions down the left side of one, the outermost first.
     private static List<BinaryExpr> LeftSpine(BinaryExpr expr)

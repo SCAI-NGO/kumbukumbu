@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// A note's properties, typed as Obsidian's Bases type them, by the YAML alone (Kumbu.Core Queries/Properties): a plain
-// scalar reads as what it looks like (YAML 1.2's core schema, and dates) and a quoted one stays text. A declared type
-// changes nothing, a single value is not made a list, and the tags property gives its tags with their '#'. The cases are
-// in tests/query-conformance/properties.
+// A note's properties, typed (Kumbu.Core Queries/Properties): a plain scalar reads as what it looks like (YAML 1.2's
+// core schema, and dates) and a quoted one stays text; for a run, a declared type converts a value that fits it cleanly,
+// and any other keeps its own (bases-without-obsidian-bugs spec §2 item 4). The tags property gives its tags with their
+// '#'. The cases are in tests/query-conformance/properties.
 import { isAlias, isMap, isScalar, isSeq, parseAllDocuments, type Node, type Scalar } from "yaml";
 import { frontmatterEnd, splitLines } from "../links/text";
-import type { PropertyType } from "./propertyTypes";
+import { PropertyTypes, type PropertyType, type PropertyTypeMap } from "./propertyTypes";
 import {
   NULL, booleanValue, dateValue, listValue, numberValue, objectValue, textValue, type Value,
 } from "./value";
@@ -27,23 +27,34 @@ export const CACHE_LIMIT = 20_000;
 // the working set holds it unchanged, so each is parsed once, not once per query. The server keys a ConditionalWeakTable
 // by the string, which goes with the string; a string can't be a WeakMap key, so this is a Map by content, bounded, the
 // oldest entry out first.
-const byContent = new Map<string, NoteProperties>();
+const byContent = new Map<string, { types: PropertyTypeMap; properties: NoteProperties }>();
 
-function read(content: string): NoteProperties {
+/** The properties as a run reads them, with the vault's declared types; without any, tags, aliases and cssclasses are
+ * still lists, as the server's run reads them. */
+function read(content: string, types: PropertyTypeMap = PropertyTypes.none): NoteProperties {
   const known = byContent.get(content);
-  if (known !== undefined) return known;
-  const properties = parse(content, false);
-  byContent.set(content, properties);
+  if (known !== undefined && sameTypes(known.types, types)) return known.properties;
+  const properties = parse(content, false, types);
+  byContent.delete(content);
+  byContent.set(content, { types, properties });
   if (byContent.size > CACHE_LIMIT) byContent.delete(byContent.keys().next().value!);
   return properties;
 }
 
-/** The frontmatter with every value as the text it is written as, as the server's Frontmatter.Read gives it: for the tags. */
-function asWritten(content: string): NoteProperties {
-  return parse(content, true);
+// The vault's types.json is read for each query, so the same declarations come as another map.
+function sameTypes(a: PropertyTypeMap, b: PropertyTypeMap): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [name, type] of a) if (b.get(name) !== type) return false;
+  return true;
 }
 
-function parse(content: string, written: boolean): NoteProperties {
+/** The frontmatter with every value as the text it is written as, as the server's Frontmatter.Read gives it: for the tags. */
+function asWritten(content: string): NoteProperties {
+  return parse(content, true, null);
+}
+
+function parse(content: string, written: boolean, types: PropertyTypeMap | null): NoteProperties {
   const lines = splitLines(content);
   const end = frontmatterEnd(lines);
   if (end === 0) return { values: NO_VALUES, problem: null };
@@ -56,7 +67,7 @@ function parse(content: string, written: boolean): NoteProperties {
     if (root === null || root === undefined) return { values: NO_VALUES, problem: null };
     if (isScalar(root) && isPlain(root) && isEmptyOrTilde(root)) return { values: NO_VALUES, problem: null };
     if (!isMap(root)) return { values: NO_VALUES, problem: "The frontmatter is not a map of keys and values." };
-    return { values: new Budget(written).top(root), problem: null };
+    return { values: new Budget(written).top(root, types), problem: null };
   } catch (e) {
     if (e instanceof TooLarge || e instanceof RangeError) return { values: NO_VALUES, problem: TOO_LARGE_PROBLEM };
     if (e instanceof KeyTwice) return { values: NO_VALUES, problem: `The frontmatter has the key '${e.key}' twice.` };
@@ -84,8 +95,8 @@ class Budget {
 
   constructor(private readonly written: boolean) {}
 
-  top(map: Node): Map<string, Value> {
-    const values = this.map(map, 0);
+  top(map: Node, types: PropertyTypeMap | null): Map<string, Value> {
+    const values = this.map(map, 0, types === null ? () => null : (name) => PropertyTypes.of(name, types));
     // Obsidian gives the tags property's tags with their '#', as file.tags has them (finding 6).
     const tags = values.get("tags");
     if (tags !== undefined && !this.written) values.set("tags", tagged(tags));
@@ -99,7 +110,7 @@ class Budget {
     return node;
   }
 
-  private map(node: Node, depth: number): Map<string, Value> {
+  private map(node: Node, depth: number, typeOf: (name: string) => PropertyType | null): Map<string, Value> {
     const result = new Map<string, Value>();
     if (!isMap(node)) return result;
     for (const pair of node.items) {
@@ -107,24 +118,26 @@ class Budget {
       // A key that is a list or a map reads as its type's name, so two of them read alike.
       const name = key === null ? "" : isScalar(key) ? rawOf(key) : isMap(key) ? "Mapping" : "Sequence";
       if (result.has(name)) throw new KeyTwice(name);
-      result.set(name, this.convert(pair.value as Node | null, depth + 1));
+      result.set(name, this.convert(pair.value as Node | null, typeOf(name), depth + 1));
     }
     return result;
   }
 
-  private convert(source: Node | null, depth: number): Value {
+  // Only a property's own value is declared: what a list or a map holds reads as written.
+  private convert(source: Node | null, type: PropertyType | null, depth: number): Value {
     if (++this.values > MAX_VALUES || depth > MAX_DEPTH) throw new TooLarge();
     const node = this.resolve(source);
-    if (node === null) return this.scalar("", true);
-    if (isMap(node)) return objectValue(this.map(node, depth));
-    if (isSeq(node)) return listValue(node.items.map((item) => this.convert(item as Node | null, depth + 1)));
-    if (isScalar(node)) return this.scalar(rawOf(node), isPlain(node));
+    if (node === null) return this.scalar("", true, type);
+    if (isMap(node)) return objectValue(this.map(node, depth, () => null));
+    if (isSeq(node)) return listValue(node.items.map((item) => this.convert(item as Node | null, null, depth + 1)));
+    if (isScalar(node)) return this.scalar(rawOf(node), isPlain(node), type);
     return NULL;
   }
 
-  private scalar(raw: string, plain: boolean): Value {
-    if (plain && isNull(raw)) return NULL;
-    return plain && !this.written ? inferred(raw) : textValue(raw);
+  private scalar(raw: string, plain: boolean, type: PropertyType | null): Value {
+    // An empty value is empty, quoted or not, when a type is declared: "" isn't a value of it that doesn't fit.
+    if ((plain && isNull(raw)) || (type !== null && raw.length === 0)) return NULL;
+    return (type === null ? null : declared(raw, type)) ?? (plain && !this.written ? inferred(raw) : textValue(raw));
   }
 }
 
@@ -132,6 +145,23 @@ function tagged(value: Value): Value {
   if (value.kind === "text" && value.text.length > 0) return value.text.startsWith("#") ? value : textValue(`#${value.text}`);
   if (value.kind === "list") return listValue(value.items.map((item) => (item.kind === "text" ? tagged(item) : item)));
   return value;
+}
+
+/** A value of `type` when the text converts to one cleanly; null when it doesn't. */
+function declared(raw: string, type: PropertyType): Value | null {
+  switch (type) {
+    // A number or a date declared a text is the text it is written as (01010 keeps its zero).
+    case "text": return textValue(raw);
+    case "multitext": return listValue([textValue(raw)]);
+    // A plain decimal only: "4,50" and "1e3" may mean something else than the number they'd read as.
+    case "number": return PLAIN_DECIMAL.test(raw) ? decimal(raw) : null;
+    case "checkbox": {
+      const lower = raw.toLowerCase();
+      return lower === "true" ? booleanValue(true) : lower === "false" ? booleanValue(false) : null;
+    }
+    // One date type: a date, with a time or without, is a date of either declared type, as it is written.
+    default: return date(raw) ?? dateTime(raw);
+  }
 }
 
 /** A text as a value of `type`, as a parameter of that type reads it; null when it doesn't fit. */
@@ -171,6 +201,7 @@ const NUMBER = /^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?\n?$/;
 // A date keeps its plain $: .NET's pattern matches before a final line break, but the exact parse of the text then fails.
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DATE_TIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(:(\d{2})(\.(\d{1,7}))?)?\n?$/;
+const PLAIN_DECIMAL = /^[-+]?[0-9]+(\.[0-9]+)?$/;
 const HEX = /^0x[0-9a-fA-F]+$/;
 const OCTAL = /^0o[0-7]+$/;
 const INFINITY = /^[-+]?\.(inf|Inf|INF)$/;

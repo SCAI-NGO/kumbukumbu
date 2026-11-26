@@ -3,4 +3,4 @@ source: spec
 notes:
   Ann.md: ""
 cases:
-  - { expression: 'a = 1', error: syntax }
+  - { expression: '1 +', error: syntax }

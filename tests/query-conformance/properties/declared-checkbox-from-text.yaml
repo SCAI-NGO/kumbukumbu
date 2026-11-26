@@ -1,0 +1,17 @@
+description: A declared checkbox reads the text true or false, in any case, as a checkbox.
+source: kumbu
+reason: Obsidian 1.15.1 ignores types.json for a base's values (finding 10), so a quoted "false" declared a checkbox stays text, and a filter on it is truthy; whoever declares a type means the values that fit it (ADR 0041).
+types:
+  done: checkbox
+  seen: checkbox
+notes:
+  Ann.md: |
+    ---
+    done: "false"
+    seen: "TRUE"
+    ---
+expect:
+  properties:
+    Ann.md:
+      done: boolean false
+      seen: boolean true

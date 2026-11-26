@@ -1,5 +1,6 @@
-description: Only ASC and DESC sort; a sort key without a direction, or with asc or Desc, sorts nothing, and the rows keep path order unless a later key sorts.
-source: obsidian 1.15.1
+description: A sort key without a direction sorts ascending; the direction ignores case; any other direction (up, or deſc with a long s, as case is ASCII's only) warns with sort-direction and sorts ascending. Empty values go last either way and ties keep path order.
+source: kumbu
+reason: Obsidian 1.15.1 sorts nothing for a key without a direction or with lower or mixed case asc/desc (finding 20); a person writing no direction means ascending (ADR 0041).
 notes:
   a.md: |
     ---
@@ -12,6 +13,14 @@ notes:
   c.md: |
     ---
     rank: 3
+    ---
+  d.md: |
+    ---
+    title: no rank
+    ---
+  e.md: |
+    ---
+    rank: 2
     ---
 base: |
   views:
@@ -41,7 +50,17 @@ base: |
       sort:
         - { property: rank, direction: Desc }
     - type: table
-      name: Skipped then sorted
+      name: Unknown
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: up }
+    - type: table
+      name: Long s
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: deſc }
+    - type: table
+      name: Lower case then upper
       order: [file.basename, rank]
       sort:
         - { property: rank, direction: asc }
@@ -49,19 +68,25 @@ base: |
 runs:
   - view: Up
     columns: [file.basename, rank]
-    rows: [[text b, number 1], [text a, number 2], [text c, number 3]]
+    rows: [[text b, number 1], [text a, number 2], [text e, number 2], [text c, number 3], [text d, null]]
   - view: Down
     columns: [file.basename, rank]
-    rows: [[text c, number 3], [text a, number 2], [text b, number 1]]
+    rows: [[text c, number 3], [text a, number 2], [text e, number 2], [text b, number 1], [text d, null]]
   - view: None
     columns: [file.basename, rank]
-    rows: [[text a, number 2], [text b, number 1], [text c, number 3]]
+    rows: [[text b, number 1], [text a, number 2], [text e, number 2], [text c, number 3], [text d, null]]
   - view: Lower case
     columns: [file.basename, rank]
-    rows: [[text a, number 2], [text b, number 1], [text c, number 3]]
+    rows: [[text b, number 1], [text a, number 2], [text e, number 2], [text c, number 3], [text d, null]]
   - view: Mixed case
     columns: [file.basename, rank]
-    rows: [[text a, number 2], [text b, number 1], [text c, number 3]]
-  - view: Skipped then sorted
+    rows: [[text c, number 3], [text a, number 2], [text e, number 2], [text b, number 1], [text d, null]]
+  - view: Unknown
     columns: [file.basename, rank]
-    rows: [[text c, number 3], [text b, number 1], [text a, number 2]]
+    rows: [[text b, number 1], [text a, number 2], [text e, number 2], [text c, number 3], [text d, null]]
+  - view: Long s
+    columns: [file.basename, rank]
+    rows: [[text b, number 1], [text a, number 2], [text e, number 2], [text c, number 3], [text d, null]]
+  - view: Lower case then upper
+    columns: [file.basename, rank]
+    rows: [[text b, number 1], [text e, number 2], [text a, number 2], [text c, number 3], [text d, null]]

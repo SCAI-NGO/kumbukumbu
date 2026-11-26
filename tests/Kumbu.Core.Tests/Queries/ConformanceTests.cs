@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Text.Json;
 using Kumbu.Core.Queries;
 using YamlDotNet.RepresentationModel;
 
@@ -29,11 +30,12 @@ public class ConformanceTests
         var root = Load(file);
         Assert.True(root.Children.ContainsKey("description"), "A case says what it shows.");
         var source = Text(root["source"]);
-        Assert.True(source == "spec" || source.StartsWith("obsidian ", StringComparison.Ordinal), $"Unknown source '{source}'.");
+        Assert.True(source is "spec" or "kumbu" || source.StartsWith("obsidian ", StringComparison.Ordinal), $"Unknown source '{source}'.");
+        Assert.True((source == "kumbu") == root.Children.ContainsKey("reason"), "A case departing from Obsidian (source: kumbu), and only such a case, gives its reason.");
         if (root.Children.TryGetValue("pending", out var pending) && ((YamlSequenceNode)pending).Children.Select(Text).Contains(Me))
             Assert.Skip("Pending for the C# engine.");
 
-        var notes = ((YamlMappingNode)root["notes"]).Children.ToDictionary(n => Text(n.Key), n => Properties.Read(Text(n.Value)));
+        var notes = ((YamlMappingNode)root["notes"]).Children.ToDictionary(n => Text(n.Key), n => Properties.Read(Text(n.Value), Types(root)));
         if (root.Children.TryGetValue("query", out _) || root.Children.TryGetValue("runs", out var r) && ((YamlSequenceNode)r).Children.Any(c => ((YamlMappingNode)c).Children.ContainsKey("query")))
         {
             Queries(root);
@@ -68,6 +70,12 @@ public class ConformanceTests
             Assert.True(problems.Contains(path) == (read.Problem is not null), $"{path}: problem '{read.Problem}'.");
     }
 
+    // The case's types as its vault's .obsidian/types.json declares them, read as the server reads that file.
+    private static IReadOnlyDictionary<string, PropertyType> Types(YamlMappingNode root) =>
+        root.Children.TryGetValue("types", out var types)
+            ? PropertyTypes.Read(JsonSerializer.Serialize(new { types = ((YamlMappingNode)types).Children.ToDictionary(t => Text(t.Key), t => Text(t.Value)) }))
+            : PropertyTypes.None;
+
     // Default clock of a case without "now": any fixed moment, so no case depends on the day it runs.
     private static readonly DateTime DefaultNow = new(2026, 1, 1, 12, 0, 0);
 
@@ -78,7 +86,7 @@ public class ConformanceTests
         var times = root.Children.TryGetValue("times", out var t) ? (YamlMappingNode)t : new YamlMappingNode();
         QueryNote File(string path, string content)
         {
-            var properties = QueryNote.IsNotePath(path) ? Properties.Read(content) : new NoteProperties(new Dictionary<string, Value>(), null);
+            var properties = QueryNote.IsNotePath(path) ? Properties.Read(content, Types(root)) : new NoteProperties(new Dictionary<string, Value>(), null);
             if (!times.Children.TryGetValue(path, out var given)) return new QueryNote(path, content, properties);
             DateTime Time(string key) => DateTime.ParseExact(Text(((YamlMappingNode)given)[key]), "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
             return new QueryNote(path, content, properties, created: Time("ctime"), modified: Time("mtime"));
@@ -109,17 +117,20 @@ public class ConformanceTests
             if (c.Children.TryGetValue("error", out var error))
             {
                 // Most errors of the query come from compiling; the limits of what an expression builds come from evaluating it.
-                var code = Assert.ThrowsAny<Exception>(() =>
+                var thrown = Assert.ThrowsAny<Exception>(() =>
                 {
                     var compiled = evaluator.Compile(text);
                     foreach (var note in notes.Values) evaluator.Evaluate(compiled, new Scope(note, self, now) { Vault = vault });
-                }) switch
+                });
+                var code = thrown switch
                 {
                     QuerySyntaxError => "syntax",
                     QueryError e => e.Code,
                     var e => e.GetType().Name,
                 };
                 Assert.True(Text(error) == code, $"{text}: expected the error {Text(error)}, got {code}.");
+                if (c.Children.TryGetValue("message", out var message))
+                    Assert.True(thrown.Message.StartsWith(Text(message), StringComparison.Ordinal), $"{text}: expected a message starting '{Text(message)}', got '{thrown.Message}'.");
                 continue;
             }
 

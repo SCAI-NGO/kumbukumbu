@@ -71,7 +71,7 @@ public class EvaluatorTests
     // the next formula where the walk goes deepest. Long chains are walked, not nested, so they fit; deep nesting in every
     // formula goes past the levels a stack holds, and is too deep.
     [Theory]
-    [InlineData("chain", "BooleanValue { Boolean = True }")]
+    [InlineData("chain", "NumberValue { Number = 1 }")]
     [InlineData("negations", "too-deep")]
     public void Formulas_at_every_limit_evaluate_or_are_too_deep(string shape, string outcome)
     {

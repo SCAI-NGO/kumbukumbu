@@ -379,13 +379,13 @@ public class QueryCommandTests
     }
 
     [Fact]
-    public async Task Check_warns_of_a_sort_direction_that_sorts_nothing_and_the_query_still_runs()
+    public async Task Check_warns_of_a_sort_direction_that_is_neither_ASC_nor_DESC_and_the_query_still_runs()
     {
-        _store.AddTextFile("/V/Sorts.base", "views:\n  - type: table\n    name: Sorts\n    order: [file.name]\n    sort:\n      - { property: file.name, direction: asc }\n");
+        _store.AddTextFile("/V/Sorts.base", "views:\n  - type: table\n    name: Sorts\n    order: [file.name]\n    sort:\n      - { property: file.name, direction: up }\n");
 
         Assert.Equal(ShellResult.Ok("""
             /V/Sorts.base: ok, 1 view (Sorts), 0 parameters; 1 warning
-            warning: view Sorts: sort-direction in 'file.name' at 0: sort direction "asc" sorts nothing; use ASC or DESC
+            warning: view Sorts: sort-direction in 'file.name' at 0: sort direction "up" is neither ASC nor DESC; sorting ascending
             """), await Run("query check /V/Sorts.base"));
         Assert.False((await Run("query execute /V/Sorts.base")).IsError);
     }
@@ -414,6 +414,62 @@ public class QueryCommandTests
     }
 
     private static string Message(string expression) => Assert.Throws<QuerySyntaxError>(() => ExpressionParser.Parse(expression)).Message;
+
+    // A vault of its own whose types.json declares rating and done, with values that fit and values that don't.
+    private void AddRatings()
+    {
+        _store.AddTextFile("/T/.obsidian/types.json", "{\"types\": {\"rating\": \"number\", \"done\": \"checkbox\", \"colour\": \"number\"}}");
+        AddNote("/T/A.md", "---\nrating: \"4,50\"\ncolour: red\n---\n");
+        AddNote("/T/B.md", "---\nrating: high\ndone: \"FALSE\"\n---\n");
+        AddNote("/T/C.md", "---\nrating: \"4.50\"\ndone: maybe\n---\n");
+        _store.AddTextFile("/T/Ratings.base", "filters: file.ext == \"md\"\nviews:\n  - type: table\n    name: Ratings\n    order: [rating, done]\n");
+    }
+
+    [Fact]
+    public async Task Check_warns_about_values_that_do_not_fit_their_declared_type()
+    {
+        AddRatings();
+
+        Assert.Equal(ShellResult.Ok("""
+            /T/Ratings.base: ok, 1 view (Ratings), 0 parameters; 2 warnings
+            warning: type-mismatch: 1 note has done values that aren't checkbox (first: /T/C.md)
+            warning: type-mismatch: 2 notes have rating values that aren't number (first: /T/A.md)
+            """), await Run("query check /T/Ratings.base"));
+    }
+
+    [Fact]
+    public async Task Check_does_not_warn_about_a_property_the_query_does_not_use()
+    {
+        AddRatings();
+
+        Assert.DoesNotContain("colour", (await Run("query check /T/Ratings.base")).Output);
+    }
+
+    [Fact]
+    public async Task Execute_reads_the_declared_types_anew_when_types_json_changes()
+    {
+        AddRatings();
+        Assert.Contains("| /T/C.md | 4.5 | maybe |", (await Run("query execute /T/Ratings.base")).Output);
+
+        _store.AddTextFile("/T/.obsidian/types.json", "{\"types\": {\"rating\": \"text\"}}");
+
+        Assert.Contains("| /T/C.md | 4.50 | maybe |", (await Run("query execute /T/Ratings.base")).Output);
+    }
+
+    [Fact]
+    public async Task Execute_is_unchanged_by_a_mismatch()
+    {
+        AddRatings();
+
+        Assert.Equal(ShellResult.Ok("""
+            Ratings: 3 rows
+            | path | rating | done |
+            | --- | --- | --- |
+            | /T/A.md | 4,50 |  |
+            | /T/B.md | high | false |
+            | /T/C.md | 4.5 | maybe |
+            """), await Run("query execute /T/Ratings.base"));
+    }
 
     [Fact]
     public async Task Properties_lists_each_with_its_type_and_how_many_notes_have_it()

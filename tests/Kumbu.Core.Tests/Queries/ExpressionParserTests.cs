@@ -81,7 +81,7 @@ public class ExpressionParserTests
     [InlineData("(a", 2, "')'")]
     [InlineData("[1, 2", 5, "']'")]
     [InlineData("{a 1}", 3, "':'")]
-    [InlineData("a = 1", 2, "'=='")]
+    [InlineData("a = 1", 2, "use == to compare")]
     [InlineData("a & b", 2, "'&&'")]
     [InlineData("a | b", 2, "'||'")]
     [InlineData("/open", 0, "unterminated")]
