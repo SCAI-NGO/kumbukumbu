@@ -718,7 +718,8 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
                   : notice.text}
           </p>
         )}
-        {note.isError && <p className="mt-4 text-text-body">{noteError}</p>}
+        {/* A read again that failed leaves the note it has: the error only where there is none (F-16). */}
+        {note.isError && !note.data && <p className="mt-4 text-text-body">{noteError}</p>}
         {note.data && (
           <article ref={article} className="mt-4">
             {parts.frontmatter !== null && (
