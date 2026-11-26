@@ -43,7 +43,12 @@ export type ModeInput =
   | { type: "signedIn" }
   | { type: "conflict"; conflict: Conflict }
   /** The done line's time is up, or the person dismissed it, or opened the conflicts. */
-  | { type: "seen" };
+  | { type: "seen" }
+  /**
+   * The copy locked or went, or the session ended or changed hands: what the mode knows of that person (the conflict
+   * copies' paths, the done line, the count waiting) is not the next person's to see.
+   */
+  | { type: "forget" };
 
 export const initialMode: ModeState = { offline: false, phase: "online", waiting: 0, done: null, conflicts: [] };
 
@@ -88,6 +93,10 @@ export class ModeMachine {
       case "signedIn": this.sessionLost = false; break;
       case "conflict": this.state = { ...this.state, conflicts: [...this.state.conflicts, input.conflict] }; break;
       case "seen": this.state = { ...this.state, done: null, conflicts: [] }; break;
+      case "forget":
+        this.state = { ...this.state, waiting: 0, done: null, conflicts: [] };
+        this.peak = 0;
+        break;
     }
     this.evaluate();
   }

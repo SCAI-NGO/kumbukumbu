@@ -51,6 +51,7 @@ export class SharedMode {
     if (input.type === "socket") this.mine.socket = input.up;
     else if (input.type === "failed" || input.type === "reached") this.mine.failing = input.type === "failed";
     else if (input.type === "waiting") this.mine.waiting = input.count;
+    else if (input.type === "forget") this.mine.waiting = null;
     else if (input.type === "sessionLost" || input.type === "signedIn") this.mine.sessionLost = input.type === "sessionLost";
     if (this.machine !== null) return this.machine.apply(input);
     this.early?.push(input);

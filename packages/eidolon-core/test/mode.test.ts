@@ -159,6 +159,31 @@ test("conflicts stay until seen, online too", () => {
   expect(last().conflicts).toEqual([]);
 });
 
+test("a session's end forgets the conflicts, the done line and the count of the person before", () => {
+  const { m, last } = machine();
+  m.apply({ type: "failed" });
+  m.apply({ type: "waiting", count: 3 });
+  vi.advanceTimersByTime(HOLD_MS);
+  m.apply({ type: "socket", tab: "a", up: true });
+  m.apply({ type: "conflict", conflict: { vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" } });
+  m.apply({ type: "waiting", count: 0 });
+  vi.advanceTimersByTime(60_000);
+  expect(last().done).toEqual({ uploaded: 3 });
+  m.apply({ type: "forget" });
+  expect(last()).toMatchObject({ waiting: 0, done: null, conflicts: [] });
+});
+
+test("offline, a forgotten count leaves nothing to upload for the next person", () => {
+  const { m, last } = machine();
+  m.apply({ type: "failed" });
+  m.apply({ type: "waiting", count: 3 });
+  m.apply({ type: "forget" });
+  expect(last()).toMatchObject({ offline: true, phase: "offline", waiting: 0 });
+  vi.advanceTimersByTime(HOLD_MS);
+  m.apply({ type: "socket", tab: "a", up: true });
+  expect(last()).toMatchObject({ offline: false, done: null });
+});
+
 describe("tabs", () => {
   /** One browser's mode channel: every other listener hears a message, later. */
   function bus() {
@@ -230,6 +255,22 @@ describe("tabs", () => {
     blocker.release();
     await vi.advanceTimersByTimeAsync(0);
     expect(heard).toMatchObject({ offline: true, waiting: 2 });
+  });
+
+  test("a tab opened after a session's end hears nothing of that person's conflicts or count", async () => {
+    const { tabs, locks, channel } = await browser(2);
+    tabs[1]!.send({ type: "conflict", conflict: { vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" } });
+    tabs[1]!.send({ type: "waiting", count: 3 });
+    await vi.advanceTimersByTimeAsync(0);
+    tabs[1]!.send({ type: "forget" });
+    await vi.advanceTimersByTimeAsync(0);
+    // The tab that told the count leads now: what it saw before the end isn't told again.
+    tabs[0]!.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    let heard: ModeState | undefined;
+    new SharedMode({ locks, channel: channel(), clock }, "late", (s) => (heard = s));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toMatchObject({ waiting: 0, conflicts: [] });
   });
 
   test("a tab opened later hears the state at once", async () => {
