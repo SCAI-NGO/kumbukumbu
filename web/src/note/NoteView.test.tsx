@@ -85,6 +85,22 @@ describe("the note view", () => {
     expect(screen.queryByText("This vault is being re-encrypted; try again in a moment.")).not.toBeInTheDocument();
   });
 
+  // As F-16 for the whole app (hand tests of 0.7.0): back from offline, a read of the note that failed stood above
+  // the note it had, though nothing was wrong with what was shown.
+  it("keeps a note it has without an error above it when reading it again fails", async () => {
+    let up = true;
+    noteApi({ [`GET /api/notes${PLAN}`]: () => (up ? json(200, noteView(PLAN, source)) : json(500, {})) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp(planUrl, queryClient);
+    expect(await screen.findByRole("heading", { level: 2, name: "Goals" })).toBeInTheDocument();
+
+    up = false;
+    await act(() => queryClient.refetchQueries({ queryKey: ["note"] }));
+    await waitFor(() => expect(queryClient.getQueryCache().findAll({ queryKey: ["note"] }).some((q) => q.state.status === "error")).toBe(true));
+    expect(screen.queryByText("The server can't be reached right now. Try again in a moment.")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Goals" })).toBeInTheDocument();
+  });
+
   it("renders the note, with its front matter as properties above the body", async () => {
     noteApi();
     renderApp(planUrl);
