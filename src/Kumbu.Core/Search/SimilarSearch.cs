@@ -78,7 +78,7 @@ public static class SimilarSearch
             .Where(n => !sourcePaths.Contains(n.Path) && (archive || !ArchiveFolder.Contains(n.Path)) && query.LeftOut?.Invoke(n) != true)
             .ToDictionary(n => n.Path);
 
-        var (best, otherModel) = Rank(sources, candidates, stored.Chunks, space, index.Bound);
+        var (best, otherModel) = Rank(sources, candidates, stored.Chunks, space, index.Bound, ct);
 
         // Link distances per source, in its vault's graph, walked without the notes left out by tag or archive.
         var filter = new GraphFilter([], [], Archive: archive) { WithoutTags = query.WithoutTags ?? [] };
@@ -137,7 +137,8 @@ public static class SimilarSearch
     /// is matched to the note's current chunk as semsearch matches it, and headings with nothing below them don't count.
     /// </summary>
     private static (Dictionary<VaultPath, (Chunk Chunk, double Score, double[] Scores)> Best, int OtherModel) Rank(
-        IReadOnlyList<Resolved> sources, Dictionary<VaultPath, Note> candidates, IReadOnlyList<ChunkVector> stored, string space, ChunkBound bound)
+        IReadOnlyList<Resolved> sources, Dictionary<VaultPath, Note> candidates, IReadOnlyList<ChunkVector> stored, string space, ChunkBound bound,
+        CancellationToken ct)
     {
         var length = sources[0].Vectors[0].Length;
         var best = new Dictionary<VaultPath, (Chunk Chunk, double Score, double[] Scores)>();
@@ -146,6 +147,7 @@ public static class SimilarSearch
         var chunksOf = new Dictionary<VaultPath, List<Chunk>>();
         foreach (var vector in stored)
         {
+            ct.ThrowIfCancellationRequested();
             if (!candidates.TryGetValue(vector.Path, out var note)) continue;
             if (vector.Space != space || vector.Vector.Length != length)
             {

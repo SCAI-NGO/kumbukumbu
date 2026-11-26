@@ -19,6 +19,9 @@ public class SimilarTests
     {
         public bool Off { get; init; }
 
+        /// <summary>Run once the vectors below a vault or folder are read: before the candidates are ranked.</summary>
+        public Action? ScopeRead { get; init; }
+
         public Task<SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct) => throw new NotSupportedException();
 
         public async Task<StoredVectors> VectorsAsync(VaultPath scope, CancellationToken ct)
@@ -38,6 +41,7 @@ public class SimilarTests
                 chunks.AddRange(embedded);
             }
 
+            if (!scope.IsNote) ScopeRead?.Invoke();
             return new StoredVectors(SemanticState.Ready, chunks, pending);
         }
 
@@ -97,6 +101,33 @@ public class SimilarTests
             Hits(result));
         Assert.Contains("   viscosity of blood\n", result.Output);
         Assert.EndsWith("(by the stored embeddings, nothing sent to an embedding provider; distance counts links either way; cat \"path#Section\" reads one)", result.Output);
+    }
+
+    [Fact]
+    public async Task Ends_when_its_token_is_cancelled_while_it_ranks()
+    {
+        var store = Store();
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var caller = new FixedCaller(Writers.Dev);
+        using var left = new CancellationTokenSource();
+        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), search: new FakeIndex(store, Words) { ScopeRead = left.Cancel });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => shell.RunAsync("similar /R/Fish.md", left.Token));
+    }
+
+    [Fact]
+    public async Task Answers_busy_when_ranking_runs_out_of_time()
+    {
+        var store = Store();
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var caller = new FixedCaller(Writers.Dev);
+        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller),
+            search: new FakeIndex(store, Words) { ScopeRead = () => time.Advance(HeavyCall.TimeLimit) });
+
+        var result = await shell.RunAsync("similar /R/Fish.md", TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsError);
+        Assert.Equal("similar: the server is busy comparing notes; try again in a moment", result.Output);
     }
 
     [Fact]

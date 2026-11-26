@@ -14,10 +14,13 @@ namespace Kumbu.Core.Sh.Commands;
 /// two notes at once, by the lower of the two. Swanson's open and closed discovery, for the skill
 /// <c>synthesize-knowledge</c>.
 /// </summary>
-public sealed class Similar(INoteReader notes, ISearchIndex index) : ICommand
+public sealed class Similar(INoteReader notes, ISearchIndex index, TimeProvider time) : ICommand
 {
     private const int DefaultMax = 10;
     private const int MaxMax = 50;
+
+    /// <summary>The answer when the comparison ran out of time or found no place: the same call may work in a moment.</summary>
+    internal const string Busy = "similar: the server is busy comparing notes; try again in a moment";
 
     private static readonly Option[] Spec =
     [
@@ -108,8 +111,20 @@ public sealed class Similar(INoteReader notes, ISearchIndex index) : ICommand
             leftOut = n => outside?.Invoke(n) == true || rejected.Any(r => r(n));
         }
 
-        var result = await SimilarSearch.RunAsync(notes, index, new SimilarQuery(
-            sources, scope, max, options.Has("unlinked"), options.Has("archive"), leftOut, exclusions.WithoutTags), ct);
+        SimilarResult result;
+        using (var call = new HeavyCall(ct, HeavyCall.TimeLimit, time))
+        {
+            try
+            {
+                result = await SimilarSearch.RunAsync(notes, index, new SimilarQuery(
+                    sources, scope, max, options.Has("unlinked"), options.Has("archive"), leftOut, exclusions.WithoutTags), call.Token);
+            }
+            catch (OperationCanceledException) when (call.TimedOut)
+            {
+                return ShellResult.Error(Busy);
+            }
+        }
+
         if (result.Error is { } error) return ShellResult.Error($"similar: {error}");
 
         var lines = new List<string> { Heading(sources, scope, result.Hits.Count) };

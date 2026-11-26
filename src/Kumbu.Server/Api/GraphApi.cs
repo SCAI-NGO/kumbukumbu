@@ -139,7 +139,7 @@ public static class GraphApi
     /// embedded, so nothing goes to an embedding provider. No <c>ETag</c>: the scores change with the prose, the graph's tag doesn't.</summary>
     private static async Task<Ok<GraphSimilarityView>> SimilarityAsync(
         string? path, int? depth, string? dir, int? cap, string[]? tag, bool? days, bool? attachments, bool? ghosts, bool? archive,
-        INoteStore store, ISearchIndex index, CancellationToken ct)
+        INoteStore store, ISearchIndex index, TimeProvider time, CancellationToken ct)
     {
         var (g, query) = await LocalQueryAsync(path, depth, dir, cap, tag, days, attachments, ghosts, archive, store, ct);
         var local = query();
@@ -158,7 +158,7 @@ public static class GraphApi
         var state = stored.State.ToString().ToLowerInvariant();
         if (stored.State != SemanticState.Ready) return TypedResults.Ok(new GraphSimilarityView(state, [], stored.Reason));
 
-        var scores = PairSimilarity.Score(stored, pairs);
+        var scores = PairSimilarity.Score(stored, pairs, time, HeavyCall.TimeLimit, ct);
         return TypedResults.Ok(new GraphSimilarityView(
             state, [.. pairs.Select((p, i) => new GraphSimilarityPair(p.A.Value, p.B.Value, scores[i] is { } s ? Math.Round(s, 4) : null))], stored.Reason));
 
