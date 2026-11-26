@@ -10,13 +10,14 @@ import { chooseOffline } from "./engines";
 
 /**
  * The menu item for a folder (`folder`: its path in the vault, "" the vault itself) of the vault `vaultId`, or none:
- * without an open copy, or for a vault this device doesn't keep. Inside a folder kept whole, only that one is offered.
+ * without an open copy, or for a vault this device doesn't keep or its copy doesn't hold (yet). Inside a folder kept
+ * whole, only that one is offered.
  */
 export function useKeepOffline(vaultId: string | undefined): (folder: string) => MenuItem[] {
   const mirror = useOfflineCopy((s) => s.mirror);
   const [, changed] = useReducer((n: number) => n + 1, 0);
   return (folder) => {
-    if (vaultId === undefined || mirror === null || mirror.locked || !mirrors(mirror.choice, vaultId)) return [];
+    if (vaultId === undefined || mirror === null || mirror.locked || !mirrors(mirror.choice, vaultId) || mirror.vault(vaultId) === undefined) return [];
     const kept = mirror.choice.kept[vaultId] ?? [];
     if (kept.includes(folder)) {
       const remove = () => void chooseOffline(mirror, (c) => ({ ...c, kept: { ...c.kept, [vaultId]: (c.kept[vaultId] ?? []).filter((f) => f !== folder) } })).then(changed);
