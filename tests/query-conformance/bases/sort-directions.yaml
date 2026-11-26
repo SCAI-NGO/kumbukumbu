@@ -1,5 +1,6 @@
-description: Only ASC and DESC sort; a sort key without a direction, or with asc or Desc, sorts nothing, and the rows keep path order unless a later key sorts.
-source: obsidian 1.15.1
+description: A sort key without a direction sorts ascending; the direction ignores case; any other direction (up) warns with sort-direction and sorts ascending. Empty values go last either way and ties keep path order.
+source: kumbu
+reason: Obsidian 1.15.1 sorts nothing for a key without a direction or with lower or mixed case asc/desc (finding 20); a person writing no direction means ascending (ADR 0041).
 notes:
   a.md: |
     ---
