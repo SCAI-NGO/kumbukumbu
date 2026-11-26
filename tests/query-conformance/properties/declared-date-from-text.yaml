@@ -1,0 +1,20 @@
+description: A declared date or datetime reads a quoted ISO date, with or without a time, as a date; a date is a date of either declared type, as it is written.
+source: kumbu
+reason: Obsidian 1.15.1 ignores types.json for a base's values (finding 10), so a quoted "2026-11-23" declared a date stays text and has no month; whoever declares a type means the values that fit it (ADR 0041).
+types:
+  birthday: date
+  meeting: datetime
+  due: datetime
+notes:
+  Ann.md: |
+    ---
+    birthday: "2026-11-23"
+    meeting: "2026-11-23T10:00"
+    due: 2026-11-23
+    ---
+expect:
+  properties:
+    Ann.md:
+      birthday: date 2026-11-23
+      meeting: date 2026-11-23T10:00:00
+      due: date 2026-11-23

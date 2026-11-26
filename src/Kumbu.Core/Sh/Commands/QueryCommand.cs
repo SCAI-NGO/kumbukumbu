@@ -12,7 +12,8 @@ namespace Kumbu.Core.Sh.Commands;
 
 /// <summary><c>query</c> (queries spec §7): the named queries, one surface for every one of them, so an agent finds and
 /// calls them as it finds notes. A query runs over every file of its own vault, as Obsidian's Bases do (bases spec
-/// 2026-11-25 §1): its notes, archived ones too, typed by their YAML alone (§2), and its other files.</summary>
+/// 2026-11-25 §1): its notes, archived ones too, typed by their YAML and the vault's declared types (bases-without-
+/// obsidian-bugs spec §2 item 4), and its other files.</summary>
 public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZone zone, ISearchIndex search) : ICommand
 {
     private const string TypesFile = ".obsidian/types.json";
@@ -44,11 +45,13 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           its code, the expression it is in and the position there. A function, method or formula
           that doesn't exist, formulas that use each other in a circle, a regular expression that is
           null and a sort direction that is neither ASC nor DESC are warnings: the query runs, with an error
-          value (or null) in the cells they touch.
+          value (or null) in the cells they touch. So is a property declared in {TypesFile} with
+          values that don't fit its type, once for each, with how many notes and the first of them:
+          those values keep their own.
         query properties [path]
           The properties of the notes below a path (default: every vault): each with the types of
           its values, as they are written, the type declared in the vault's {TypesFile} before them
-          (a declaration doesn't change a value), and how many notes have it.
+          (a run converts the values that fit it), and how many notes have it.
 
         A query is a path, or the name of exactly one listed query (its file name, ignoring case).
 
@@ -82,6 +85,14 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         view needs a name, or the whole base is an error; a filter group has exactly one of and, or,
         not. A sort key's direction is ASC or DESC in any case; without one the key sorts ascending.
         Any other direction sorts ascending too, and query check warns.
+
+        A property is typed by how it is written: a plain 11 is a number, a quoted "11" text,
+        2026-11-23 a date, 2026-11-23T14:30 a date with its time. A type declared in {TypesFile}
+        converts a value that fits it cleanly: a number a plain decimal ("4.50"; not "4,50" or
+        "1e3"), a checkbox the text true or false in any case, a date or datetime an ISO date, a
+        text a number or date as it is written (01010 keeps its zero), a list (multitext) a single
+        value, as a list of one. tags, aliases and cssclasses are lists in every vault. Any other
+        value keeps its own, and query check warns of it.
 
         The language (JavaScript's operators: == != < <= > >= + - * / % && || !; a single = is a
         syntax error). && and || give an operand, as in JavaScript: a || b is a when it is truthy,
@@ -228,7 +239,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             // Before anything is read or sent: a text that may not go to the provider fails here.
             var text = query.Meaning is null ? null : query.MeaningText(given);
             query.CheckView(options.Value("view"));
-            vault = await VaultAsync(path, query.Mentions("ctime") || query.Mentions("mtime"), ct);
+            vault = await VaultAsync(path, await TypesAsync(path.Segments[0], ct), query.Mentions("ctime") || query.Mentions("mtime"), ct);
             // The query note as this, with its size and times as its row has them.
             if (vault.Keys.FirstOrDefault(n => n.Path == note.Path) is { } row)
                 query = Query.Read(new QueryNote(note.Path, note.Content, note.Properties, row.Size, row.Created, row.Modified));
@@ -281,6 +292,8 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             var problems = query.Check(await LocalNowAsync(ct));
             var warnings = problems.SelectMany(p => p.Warnings.Select(w => $"view {p.View ?? "(the table)"}: {Says(w.Code, w.Message, w.Expression, w.Position)}")).ToList();
             if (query.Meaning is { } meaning) warnings.AddRange(await ShadowedAsync(path, meaning.As, ct));
+            var types = await TypesAsync(path.Segments[0], ct);
+            warnings.AddRange(Mismatched(await VaultAsync(path, types, noteTimes: false, ct), types));
             // Warnings leave a query that runs: each names what gives an error value in the cells it touches.
             if (problems.Any(p => p.Error is not null))
                 return ShellResult.Error(Lines.Join(problems.Where(p => p.Error is not null).Select(p => $"query: {path.Value}: view {p.View ?? "(the table)"}: {Says(p.Error!)}")
@@ -307,6 +320,24 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             .OrderBy(n => n.Path.Value, TextOrder.Default)
             .Select(n => $"meaning: {n.Path.Value} has a property {name} of its own, which the score hides in a run");
     }
+
+    // The properties whose values don't fit their declared type in the notes a run reads: one warning each, as such a
+    // value keeps its own and the query runs (bases-without-obsidian-bugs spec §2 item 4).
+    private static IEnumerable<string> Mismatched(Dictionary<QueryNote, VaultPath> vault, IReadOnlyDictionary<string, PropertyType> types) =>
+        vault
+            .SelectMany(file => file.Key.Properties.Values
+                .Select(p => (Name: p.Key, Type: PropertyTypes.Of(p.Key, types), p.Value, Path: file.Value.Value))
+                .Where(p => p.Type is { } type && !Properties.Fits(p.Value, type)))
+            .OrderBy(p => p.Path, TextOrder.Default)
+            .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, TextOrder.Default)
+            .Select(g =>
+            {
+                var count = g.Select(p => p.Path).Distinct(StringComparer.Ordinal).Count();
+                var notes = count == 1 ? "1 note has" : $"{count:N0} notes have";
+                // The property's name is a note's text: on one line, and short.
+                return $"type-mismatch: {notes} {Clip(g.Key)} values that aren't {Query.Name(g.First().Type!.Value)} (first: {g.First().Path})";
+            });
 
     private async Task<ShellResult> PropertiesAsync(List<string> args, CancellationToken ct)
     {
@@ -342,7 +373,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
                     1 => f.Value.Kinds.Keys.Single(),
                     _ => string.Join(", ", f.Value.Kinds.OrderByDescending(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key} {k.Value}")),
                 };
-                // A declared type doesn't change the values (Obsidian's Bases ignore it), so both are told.
+                // The values as written, beside the declared type a run converts the values that fit to, so both are told.
                 var type = f.Value.Declared ? $"{Query.Name(f.Value.Type)} (declared), {kinds}" : kinds;
                 return $"{f.Key}: {type}, {(f.Value.Notes == 1 ? "1 note" : $"{f.Value.Notes:N0} notes")}";
             })));
@@ -433,7 +464,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
 
     // The files a query of this vault runs over, each with its path in the store; times in the caller's zone, as now() is.
     // A note's times take a read of each note, so only a query that may ask for them pays it; an attachment's come with its listing.
-    private async Task<Dictionary<QueryNote, VaultPath>> VaultAsync(VaultPath query, bool noteTimes, CancellationToken ct)
+    private async Task<Dictionary<QueryNote, VaultPath>> VaultAsync(VaultPath query, IReadOnlyDictionary<string, PropertyType> types, bool noteTimes, CancellationToken ct)
     {
         var vault = VaultPath.Root.Child(query.Segments[0]);
         var local = await zone.ZoneAsync(ct);
@@ -444,7 +475,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         {
             if (!InObsidian(note.Path)) continue;
             var stored = noteTimes ? await notes.GetAsync(note.Path, ct) : null;
-            all[new QueryNote(InVault(note.Path), note.Content, Properties.Read(note.Content), null,
+            all[new QueryNote(InVault(note.Path), note.Content, Properties.Read(note.Content, types), null,
                 stored is null ? null : Local(NoteCreation.Of(stored).At), stored is null ? null : Local(stored.LastWriteAt))] = note.Path;
         }
 

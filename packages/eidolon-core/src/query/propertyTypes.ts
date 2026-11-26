@@ -23,9 +23,21 @@ const NAMES: ReadonlyMap<string, PropertyType> = new Map<string, PropertyType>([
 
 const NONE: PropertyTypeMap = new Map();
 
+// Lists of text in every vault, declared or not.
+const BUILT_IN: PropertyTypeMap = new Map<string, PropertyType>(
+  ["tags", "aliases", "cssclasses"].map((name) => [foldCase(name), "multitext"]),
+);
+
 export const PropertyTypes = {
   /** Nothing declared. */
   none: NONE,
+
+  /** The type a property has in a vault with these declarations: its own, else tags, aliases and cssclasses as lists;
+   * null for one that is typed by how its values are written. */
+  of(name: string, types: PropertyTypeMap): PropertyType | null {
+    const folded = foldCase(name);
+    return types.get(folded) ?? BUILT_IN.get(folded) ?? null;
+  },
 
   /** The type of an Obsidian type name ("date"), matched exactly as types.json writes it; null for another name. */
   named(name: string): PropertyType | null {

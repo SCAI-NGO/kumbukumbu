@@ -1,19 +1,17 @@
-description: A declared type doesn't change a value, whether the value fits it or not; each reads as YAML reads it.
+description: A value that doesn't fit its declared type keeps its own value, rather than being lost.
 source: spec
 types:
   birthday: date
   rating: number
   done: checkbox
-  flag: text
-  meeting: datetime
+  scores: number
 notes:
   Ann.md: |
     ---
     birthday: soon
     rating: high
     done: yes
-    flag: true
-    meeting: 2026-11-23
+    scores: [1, 2]
     ---
 expect:
   properties:
@@ -21,5 +19,4 @@ expect:
       birthday: text soon
       rating: text high
       done: text yes
-      flag: boolean true
-      meeting: date 2026-11-23
+      scores: [number 1, number 2]

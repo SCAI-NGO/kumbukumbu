@@ -415,6 +415,43 @@ public class QueryCommandTests
 
     private static string Message(string expression) => Assert.Throws<QuerySyntaxError>(() => ExpressionParser.Parse(expression)).Message;
 
+    // A vault of its own whose types.json declares rating and done, with values that fit and values that don't.
+    private void AddRatings()
+    {
+        _store.AddTextFile("/T/.obsidian/types.json", "{\"types\": {\"rating\": \"number\", \"done\": \"checkbox\"}}");
+        AddNote("/T/A.md", "---\nrating: \"4,50\"\n---\n");
+        AddNote("/T/B.md", "---\nrating: high\ndone: \"FALSE\"\n---\n");
+        AddNote("/T/C.md", "---\nrating: \"4.50\"\ndone: maybe\n---\n");
+        _store.AddTextFile("/T/Ratings.base", "filters: file.ext == \"md\"\nviews:\n  - type: table\n    name: Ratings\n    order: [rating, done]\n");
+    }
+
+    [Fact]
+    public async Task Check_warns_about_values_that_do_not_fit_their_declared_type()
+    {
+        AddRatings();
+
+        Assert.Equal(ShellResult.Ok("""
+            /T/Ratings.base: ok, 1 view (Ratings), 0 parameters; 2 warnings
+            warning: type-mismatch: 1 note has done values that aren't checkbox (first: /T/C.md)
+            warning: type-mismatch: 2 notes have rating values that aren't number (first: /T/A.md)
+            """), await Run("query check /T/Ratings.base"));
+    }
+
+    [Fact]
+    public async Task Execute_is_unchanged_by_a_mismatch()
+    {
+        AddRatings();
+
+        Assert.Equal(ShellResult.Ok("""
+            Ratings: 3 rows
+            | path | rating | done |
+            | --- | --- | --- |
+            | /T/A.md | 4,50 |  |
+            | /T/B.md | high | false |
+            | /T/C.md | 4.5 | maybe |
+            """), await Run("query execute /T/Ratings.base"));
+    }
+
     [Fact]
     public async Task Properties_lists_each_with_its_type_and_how_many_notes_have_it()
     {

@@ -1,4 +1,4 @@
-description: A declared date doesn't change a value; a date with a time keeps its time.
+description: A declared date keeps the time of a date written with one.
 source: obsidian 1.15.1
 types:
   due: date

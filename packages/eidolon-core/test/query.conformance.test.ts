@@ -11,6 +11,7 @@ import { Evaluator } from "../src/query/evaluator";
 import { QueryError, QuerySyntaxError } from "../src/query/errors";
 import { QueryNote } from "../src/query/note";
 import { Properties } from "../src/query/properties";
+import { PropertyTypes, type PropertyTypeMap } from "../src/query/propertyTypes";
 import { Query, type QueryParam } from "../src/query/query";
 import { QueryVault } from "../src/query/vault";
 import { asMilliseconds, formatNumber, type Value } from "../src/query/value";
@@ -113,7 +114,7 @@ for (const [file, root] of cases) {
     expect(source === "spec" || source === "kumbu" || source.startsWith("obsidian "), `Unknown source '${source}'.`).toBe(true);
     expect(root.reason !== undefined, "A case departing from Obsidian (source: kumbu), and only such a case, gives its reason.").toBe(source === "kumbu");
 
-    const notes = new Map(Object.entries(map(root.notes)).map(([path, content]) => [path, Properties.read(text(content))]));
+    const notes = new Map(Object.entries(map(root.notes)).map(([path, content]) => [path, Properties.read(text(content), typesOf(root))]));
 
     if (root.query !== undefined || (root.runs !== undefined && list(root.runs).some((r) => map(r).query !== undefined))) {
       queries(root);
@@ -144,6 +145,12 @@ for (const [file, root] of cases) {
   });
 }
 
+// The case's types as its vault's .obsidian/types.json declares them, read as the host reads that file.
+const typesOf = (root: Case): PropertyTypeMap =>
+  root.types === undefined
+    ? PropertyTypes.none
+    : PropertyTypes.read(JSON.stringify({ types: Object.fromEntries(Object.entries(map(root.types)).map(([k, v]) => [k, text(v)])) }));
+
 // The code a thrown error is compared by, as the C# runner names it.
 const codeOf = (e: unknown): string =>
   e instanceof QuerySyntaxError ? "syntax" : e instanceof QueryError ? e.code : e instanceof Error ? e.constructor.name : String(e);
@@ -153,7 +160,7 @@ const codeOf = (e: unknown): string =>
 function queryNotes(root: Case): Map<string, QueryNote> {
   const times = root.times === undefined ? {} : map(root.times);
   const file = (path: string, content: string) => {
-    const properties = QueryNote.isNotePath(path) ? Properties.read(content) : { values: new Map(), problem: null };
+    const properties = QueryNote.isNotePath(path) ? Properties.read(content, typesOf(root)) : { values: new Map(), problem: null };
     const given = times[path];
     return given === undefined
       ? new QueryNote(path, content, properties)

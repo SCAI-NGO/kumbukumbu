@@ -1,0 +1,20 @@
+description: A declared number reads a quoted plain decimal as a number; a decimal comma or an exponent doesn't convert and stays the text it is.
+source: kumbu
+reason: Obsidian 1.15.1 ignores types.json for a base's values (finding 10), so a quoted "4.50" declared a number stays text; whoever declares a type means the values that fit it (ADR 0041).
+types:
+  rating: number
+  price: number
+  count: number
+notes:
+  Ann.md: |
+    ---
+    rating: "4.50"
+    price: "4,50"
+    count: "1e3"
+    ---
+expect:
+  properties:
+    Ann.md:
+      rating: number 4.5
+      price: text 4,50
+      count: text 1e3

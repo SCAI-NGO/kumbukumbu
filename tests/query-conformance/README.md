@@ -12,7 +12,7 @@ One YAML file per case, named for what it shows.
 description: One sentence on what the case shows.
 source: spec          # or "obsidian 1.15.1": checked in real Obsidian, with that version; or "kumbu": departs from Obsidian
 reason: …             # with source: kumbu only, one line: the Obsidian behaviour it departs from, and why
-types:                # optional: the "types" of the vault's .obsidian/types.json, which change no value
+types:                # optional: the "types" of the vault's .obsidian/types.json, which convert the values that fit them
   birthday: date
 notes:                # path: the note's full text
   People/Ann.md: |
