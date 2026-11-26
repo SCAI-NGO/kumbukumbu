@@ -130,6 +130,25 @@ public class SimilarTests
         Assert.Equal("similar: the server is busy comparing notes; try again in a moment", result.Output);
     }
 
+    private sealed class NoPlace : IHeavyCalls
+    {
+        public Task<IDisposable?> TryStartAsync(CancellationToken ct) => Task.FromResult<IDisposable?>(null);
+    }
+
+    [Fact]
+    public async Task Answers_busy_when_it_finds_no_place()
+    {
+        var store = Store();
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var caller = new FixedCaller(Writers.Dev);
+        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), search: new FakeIndex(store, Words), heavy: new NoPlace());
+
+        var result = await shell.RunAsync("similar /R/Fish.md", TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsError);
+        Assert.Equal("similar: the server is busy comparing notes; try again in a moment", result.Output);
+    }
+
     [Fact]
     public async Task Unlinked_leaves_out_what_the_note_links_and_what_links_it()
     {

@@ -37,7 +37,7 @@ public sealed class Shell
     public Shell(
         INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null,
         IAttachmentPixels? pixels = null, IWriterLabels? labels = null, Publishing.IPublisher? publisher = null, string version = "0.0.0-dev",
-        IStorageFigures? figures = null, Skills.ISkillUpdates? updates = null, ICallerZone? zone = null)
+        IStorageFigures? figures = null, Skills.ISkillUpdates? updates = null, ICallerZone? zone = null, Search.IHeavyCalls? heavy = null)
     {
         _observer = observer;
         _pixels = pixels;
@@ -50,7 +50,7 @@ public sealed class Shell
         [
             .. ReadingCommands(notes, _now, _zone, pixels, marks: marks),
             new Csv(notes),
-            new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks), new Similar(notes, search ?? new Search.NoSearchIndex(), mover.Time),
+            new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks), new Similar(notes, search ?? new Search.NoSearchIndex(), mover.Time, heavy),
             new Html(notes), new Xml(notes),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             .. pixels is null || files is null ? Array.Empty<ICommand>() : [new PdfImages(notes, pixels, files, mover.Time)],

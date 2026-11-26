@@ -3,6 +3,7 @@ using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
+using Kumbu.Server.Auth;
 using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace Kumbu.Server.Api;
@@ -49,7 +50,7 @@ public static class SimilarApi
     }
 
     private static async Task<Ok<SimilarNotesView>> SimilarAsync(
-        string vault, string? path, INoteStore store, ISearchIndex index, TimeProvider time, CancellationToken ct)
+        string vault, string? path, INoteStore store, ISearchIndex index, TimeProvider time, HeavyCallGate gate, RequestCaller caller, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, PathKind.Note);
         var content = await store.ReadAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
@@ -62,6 +63,7 @@ public static class SimilarApi
         // Not the archive, unless the note is in it (spec §3.5).
         var query = new SimilarQuery([new SimilarSource(notePath)], VaultPath.Root.Child(notePath.Vault!), Max, Unlinked: true,
             Archive: ArchiveFolder.Contains(notePath), LeftOut: NotRelated.LeftOutFor(new Note(notePath, content)));
+        using var place = await gate.StartAsync(caller.User?.Id ?? "", ct);
         SimilarResult result;
         using (var call = new HeavyCall(ct, HeavyCall.TimeLimit, time))
         {
