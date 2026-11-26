@@ -41,7 +41,7 @@ Search by meaning embeds a note's sections: it finds what happens to be in the t
 ## 4. Errors and limits
 
 - `meaning:` that isn't a map of `property`, `text`, `min`, `as`: the code `meaning`, with what is wrong. `property` other than `summary` or `description`, `text` neither a declared parameter nor a quoted text, `min` not a number from -1 to 1, `as` not a name: `meaning`.
-- The provider failing or timing out (5 s, one retry, as a search query): `meaning-unavailable`, the query doesn't run. *Why:* a list without the meaning it was asked for would mislead.
+- The provider failing or timing out (5 s, one retry after a timeout, as a search query): `meaning-unavailable`, the query doesn't run. *Why:* a list without the meaning it was asked for would mislead. A remote provider that has just timed out pauses its queries for a minute, as it does for a search, so the retry then sends nothing and fails at once. *Why:* a provider that didn't answer in 5 s rarely answers 5 s later, and the pause keeps a hung provider from holding every caller up.
 - The text to embed is at most 2,000 characters (it is anyone's input; a summary-length question needs no more): over it, `param-value`.
 - A run embeds one text; nothing else reaches the provider.
 
