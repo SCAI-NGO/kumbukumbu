@@ -1,0 +1,51 @@
+description: A query note's meaning gives every note the cosine of its summary's vector and the text's, which the base sorts and shows as a property.
+source: spec
+query: Queries/Closest.md
+notes:
+  Queries/Closest.md: |
+    ---
+    type: query
+    params:
+      topic:
+        type: text
+        required: true
+    meaning:
+      property: summary
+      text: topic
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    views:
+      - type: table
+        name: Closest
+        order: [file.basename, closeness]
+        sort:
+          - property: closeness
+            direction: DESC
+    ```
+  Notes/Across.md: |
+    ---
+    summary: Something else entirely
+    ---
+  Notes/Near.md: |
+    ---
+    summary: Two copies meeting again
+    ---
+  Notes/Same.md: |
+    ---
+    summary: Offline sync conflicts
+    ---
+vectors:
+  query: [1, 0]
+  notes:
+    Notes/Same.md: [1, 0]
+    Notes/Near.md: [0.6, 0.8]
+    Notes/Across.md: [0, 1]
+offline: { error: meaning-offline }
+runs:
+  - args: { topic: offline sync }
+    columns: [file.basename, closeness]
+    rows:
+      - [text Same, number 1]
+      - [text Near, number 0.6]
+      - [text Across, number 0]

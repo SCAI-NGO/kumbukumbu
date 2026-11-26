@@ -1,0 +1,36 @@
+description: The score takes the name as gives it, shadowing a note's own property of that name for the run, while this keeps the query note's own value.
+source: spec
+query: Queries/Scored.md
+notes:
+  Queries/Scored.md: |
+    ---
+    type: query
+    score: 5
+    meaning:
+      property: description
+      text: "offline sync"
+      as: score
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    formulas:
+      own: this.score
+    views:
+      - type: table
+        name: Scored
+        order: [file.basename, score, formula.own]
+    ```
+  Notes/Rated.md: |
+    ---
+    description: How two copies meet
+    score: 99
+    ---
+vectors:
+  query: [1, 0]
+  notes:
+    Notes/Rated.md: [1, 0]
+offline: { error: meaning-offline }
+runs:
+  - columns: [file.basename, score, formula.own]
+    rows:
+      - [text Rated, number 1, number 5]

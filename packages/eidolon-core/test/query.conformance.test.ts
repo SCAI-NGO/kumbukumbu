@@ -257,14 +257,16 @@ function queries(root: Case): void {
       .map(([name, value]) => [name, Array.isArray(value) ? value.map(text) : [text(value)]]));
     const go = () => Query.read(notes.get(path)!).run(view, args, notes.values(), now);
     const label = `${path} ${[...args].map(([k, v]) => `${k}=${v.join(",")}`).join(" ")}`;
-    if (run.error !== undefined) {
+    // Offline, a case may expect another result than the server's: the offline engine has no vectors.
+    const error = root.offline === undefined ? run.error : map(root.offline).error;
+    if (error !== undefined) {
       let code = "none";
       try {
         go();
       } catch (e) {
         code = codeOf(e);
       }
-      expect(code, `${label}: expected the error ${text(run.error)}.`).toBe(text(run.error));
+      expect(code, `${label}: expected the error ${text(error)}.`).toBe(text(error));
       continue;
     }
 

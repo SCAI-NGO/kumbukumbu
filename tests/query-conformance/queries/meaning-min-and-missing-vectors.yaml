@@ -1,0 +1,74 @@
+description: With min, a note less close than it or without a vector is left out; without min, a note without a vector is a row whose score is null.
+source: spec
+notes:
+  Queries/At least.md: |
+    ---
+    type: query
+    meaning:
+      property: summary
+      text: "offline sync"
+      min: 0.5
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    views:
+      - type: table
+        name: Close
+        order: [file.basename, closeness]
+        sort:
+          - property: closeness
+            direction: DESC
+    ```
+  Queries/All.md: |
+    ---
+    type: query
+    meaning:
+      property: summary
+      text: "offline sync"
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    views:
+      - type: table
+        name: All
+        order: [file.basename, closeness]
+        sort:
+          - property: closeness
+            direction: DESC
+    ```
+  Notes/Across.md: |
+    ---
+    summary: Something else entirely
+    ---
+  Notes/Listed.md: |
+    ---
+    summary: [offline, sync]
+    ---
+  Notes/Near.md: |
+    ---
+    summary: Two copies meeting again
+    ---
+  Notes/Same.md: |
+    ---
+    summary: Offline sync conflicts
+    ---
+vectors:
+  query: [1, 0]
+  notes:
+    Notes/Same.md: [1, 0]
+    Notes/Near.md: [0.6, 0.8]
+    Notes/Across.md: [0, 1]
+offline: { error: meaning-offline }
+runs:
+  - query: Queries/At least.md
+    columns: [file.basename, closeness]
+    rows:
+      - [text Same, number 1]
+      - [text Near, number 0.6]
+  - query: Queries/All.md
+    columns: [file.basename, closeness]
+    rows:
+      - [text Same, number 1]
+      - [text Near, number 0.6]
+      - [text Across, number 0]
+      - [text Listed, null]

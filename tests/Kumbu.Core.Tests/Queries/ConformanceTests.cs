@@ -184,6 +184,10 @@ public class ConformanceTests
         if (root.Children.TryGetValue("views", out var views))
             Assert.Equal(((YamlSequenceNode)views).Children.Select(Text), Query.Read(notes[main!]).ViewNames);
 
+        var vectors = root.Children.TryGetValue("vectors", out var given)
+            ? new MeaningVectors(Vector(given["query"]), ((YamlMappingNode)given["notes"]).Children.ToDictionary(e => Text(e.Key), e => Vector(e.Value)))
+            : null;
+
         foreach (var run in ((YamlSequenceNode)root["runs"]).Children.Cast<YamlMappingNode>())
         {
             var path = run.Children.TryGetValue("query", out var own) ? Text(own) : main!;
@@ -191,7 +195,7 @@ public class ConformanceTests
             var arguments = run.Children.TryGetValue("args", out var a)
                 ? ((YamlMappingNode)a).Children.ToDictionary(e => Text(e.Key), e => (IReadOnlyList<string>)(e.Value is YamlSequenceNode list ? list.Children.Select(Text).ToList() : [Text(e.Value)]))
                 : new Dictionary<string, IReadOnlyList<string>>();
-            QueryResult Run() => Query.Read(notes[path]).Run(view, arguments, notes.Values, now);
+            QueryResult Run() => Query.Read(notes[path]).Run(view, arguments, notes.Values, now, meaning: vectors);
             var label = $"{path} {string.Join(" ", arguments.Select(e => $"{e.Key}={string.Join(",", e.Value)}"))}";
             if (run.Children.TryGetValue("error", out var error))
             {
@@ -211,6 +215,9 @@ public class ConformanceTests
             Assert.True(expectedRows == actualRows, $"{label}: expected\n{expectedRows}\ngot\n{actualRows}");
         }
     }
+
+    private static float[] Vector(YamlNode node) =>
+        ((YamlSequenceNode)node).Children.Select(c => float.Parse(Text(c), CultureInfo.InvariantCulture)).ToArray();
 
     // The rows as the case writes them and as the result has them, one line each, a cell that matches told as the case tells it.
     private static (string Expected, string Actual) Rows(YamlSequenceNode rows, QueryResult result)

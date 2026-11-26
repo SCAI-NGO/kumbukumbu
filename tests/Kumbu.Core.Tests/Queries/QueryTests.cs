@@ -70,5 +70,21 @@ public class QueryTests
             problems.Select(p => p.Error is { } e ? $"{p.View} {e.Code} '{e.Expression}' {e.Position}" : string.Join(", ", p.Warnings.Select(w => $"{p.View} warning {w.Code} '{w.Expression}' {w.Position}"))));
     }
 
+    private const string Ranked = "---\ntype: query\nparams:\n  topic:\n    type: text\nmeaning:\n  property: summary\n  text: topic\n---\n```base\n```\n";
+
+    [Fact]
+    public void A_run_with_meaning_and_no_vectors_is_unavailable_and_check_needs_none()
+    {
+        var query = Query.Read(Note("Q.md", Ranked));
+        var arguments = new Dictionary<string, IReadOnlyList<string>> { ["topic"] = ["offline sync"] };
+
+        var e = Assert.Throws<QueryError>(() => query.Run(null, arguments, [], new DateTime(2026, 1, 1), TestContext.Current.CancellationToken));
+
+        Assert.Equal("meaning-unavailable", e.Code);
+        Assert.Equal(new QueryMeaning("summary", "topic", null, null, "closeness"), query.Meaning);
+        Assert.Equal("offline sync", query.MeaningText(arguments));
+        Assert.Empty(query.Check(new DateTime(2026, 1, 1)));
+    }
+
     private static QueryNote Note(string path, string content) => new(path, content, Properties.Read(content));
 }

@@ -1,0 +1,109 @@
+description: A meaning that isn't a map of property, text, min and as, or whose values break their rules (text naming a parameter that isn't a text among them), fails the query when it is read.
+source: spec
+notes:
+  Queries/Not a map.md: |
+    ---
+    type: query
+    meaning: summary
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    ```
+  Queries/Unknown key.md: |
+    ---
+    type: query
+    meaning:
+      property: summary
+      text: "offline sync"
+      limit: 3
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    ```
+  Queries/Tags.md: |
+    ---
+    type: query
+    meaning:
+      property: tags
+      text: "offline sync"
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    ```
+  Queries/No such parameter.md: |
+    ---
+    type: query
+    meaning:
+      property: summary
+      text: topic
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    ```
+  Queries/Min too high.md: |
+    ---
+    type: query
+    meaning:
+      property: summary
+      text: "offline sync"
+      min: 2
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    ```
+  Queries/Min not a number.md: |
+    ---
+    type: query
+    meaning:
+      property: summary
+      text: "offline sync"
+      min: high
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    ```
+  Queries/As not a name.md: |
+    ---
+    type: query
+    meaning:
+      property: summary
+      text: "offline sync"
+      as: "1x"
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    ```
+  Queries/Number parameter.md: |
+    ---
+    type: query
+    params:
+      year:
+        type: number
+    meaning:
+      property: summary
+      text: year
+    ---
+    ```base
+    filters: file.inFolder("Notes")
+    ```
+  Notes/Same.md: |
+    ---
+    summary: Offline sync conflicts
+    ---
+runs:
+  - query: Queries/Not a map.md
+    error: meaning
+  - query: Queries/Unknown key.md
+    error: meaning
+  - query: Queries/Tags.md
+    error: meaning
+  - query: Queries/No such parameter.md
+    error: meaning
+  - query: Queries/Min too high.md
+    error: meaning
+  - query: Queries/Min not a number.md
+    error: meaning
+  - query: Queries/As not a name.md
+    error: meaning
+  - query: Queries/Number parameter.md
+    error: meaning
