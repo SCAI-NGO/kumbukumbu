@@ -389,8 +389,8 @@ public class SkillsCommandTests
         Assert.False(result.IsError, result.Output);
         Assert.Equal(
             [
-                // Words over name and description first, words over the body ("# Notes") second, after create-query, which says
-                // "notes" more often; below 1/61 + 1/62 as the system skills that also say "notes" share the lower ranks, so 0.0482.
+                // Words over name and description first, and high among the bodies ("# Notes"), which the system skills that also
+                // say "notes" share.
                 "1. release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.  score 0.0482",
                 // The system skills say "notes" in their descriptions, some more often than others.
                 "2. ingest-attachments (system): " + Description("ingest-attachments") + "  score 0.0481",

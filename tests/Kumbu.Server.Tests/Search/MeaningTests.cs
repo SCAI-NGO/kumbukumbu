@@ -16,7 +16,7 @@ namespace Kumbu.Server.Tests.Search;
 /// <summary><see cref="EncryptedNoteStore.MeaningAsync"/>: what a query with <c>meaning:</c> takes from the index (embeddable
 /// properties design, decision 6 and §4): the text embedded once, each note's current property vector.</summary>
 [Collection("mongo")]
-public sealed class MeaningTests(MongoFixture fixture)
+public sealed class MeaningTests(MongoFixture fixture) : IDisposable
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -28,12 +28,20 @@ public sealed class MeaningTests(MongoFixture fixture)
 
     private sealed record Setup(VaultWorld World, VaultCatalog Catalog, SearchIndex Index, EncryptedNoteStore Store, FakeEmbedder Embedder);
 
+    private readonly List<SearchIndex> _indexes = [];
+
+    public void Dispose()
+    {
+        foreach (var index in _indexes) index.Dispose();
+    }
+
     private async Task<Setup> StartAsync(VaultWorld? world = null, bool start = true)
     {
         world ??= new VaultWorld(fixture.NewDatabase());
         var catalog = world.Catalog();
         var embedder = new FakeEmbedder();
         var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder), NullLogger<SearchIndex>.Instance);
+        _indexes.Add(index);
         if (start) await index.StartAsync(Ct);
         if ((await catalog.OpenAsync(Token, Ct)).Count == 0) await catalog.CreateAsync("Work", Token, null, Ct);
         return new Setup(world, catalog, index, new EncryptedNoteStore(catalog, new FixedCredential(Token), index), embedder);
@@ -124,5 +132,68 @@ public sealed class MeaningTests(MongoFixture fixture)
         Assert.Null(result.Query);
         Assert.Contains("didn't answer", result.Reason, StringComparison.Ordinal);
         Assert.Equal(2, s.Embedder.Seen.Count(t => t == ("hens", true)));
+    }
+
+    /// <summary>A store that counts the queries its embedder is asked, before the embedder fails them with <paramref name="failure"/>.</summary>
+    private async Task<(Setup Setup, Func<int> Queries)> FailingAsync(Exception failure)
+    {
+        var s = await StartAsync();
+        await FilledAsync(s);
+        var queries = 0;
+        s.Embedder.BeforeEmbed = query =>
+        {
+            if (query) Interlocked.Increment(ref queries);
+            return Task.CompletedTask;
+        };
+        s.Embedder.Failure = failure;
+        return (s, () => queries);
+    }
+
+    [Fact]
+    public async Task A_provider_whose_own_timeout_fires_twice_is_unavailable()
+    {
+        // As the remote driver throws when a query's own timeout ran out.
+        var (s, queries) = await FailingAsync(new EmbeddingUnavailableException("the embedding provider Remote didn't answer within 5 s", providerDown: true) { TimedOut = true });
+
+        var result = await s.Store.MeaningAsync(P("/Work"), "summary", "hens", Ct);
+
+        Assert.Equal((SemanticState.Off, 2), (result.State, queries()));
+        Assert.Null(result.Query);
+        Assert.Equal("the embedding provider Remote didn't answer within 5 s", result.Reason);
+    }
+
+    [Fact]
+    public async Task A_provider_that_fails_otherwise_is_asked_once()
+    {
+        var (s, queries) = await FailingAsync(new EmbeddingUnavailableException("the embedding provider Remote answered 503 Service Unavailable", providerDown: true));
+
+        var result = await s.Store.MeaningAsync(P("/Work"), "summary", "hens", Ct);
+
+        Assert.Equal((SemanticState.Off, 1), (result.State, queries()));
+        Assert.Equal("the embedding provider Remote answered 503 Service Unavailable", result.Reason);
+    }
+
+    [Fact]
+    public async Task The_own_key_of_an_owner_who_is_away_is_not_used()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        var catalog = world.Catalog(byok: true);
+        var embedder = new FakeEmbedder();
+        using var index = new SearchIndex(catalog, EmbeddingProviders.Of(embedder), NullLogger<SearchIndex>.Instance);
+        (string Id, byte[] Key) alice = ("u1", VaultCrypto.NewKey()), bob = ("u2", VaultCrypto.NewKey());
+        var users = world.Db.GetCollection<Kumbu.Server.Accounts.UserDocument>("users");
+        await users.UpdateOneAsync(u => u.Id == alice.Id, Builders<Kumbu.Server.Accounts.UserDocument>.Update.Set(u => u.EmbeddingsKeyId, "key-id-u1"), cancellationToken: Ct);
+        var created = await catalog.CreateForUserAsync("Gartenarbeit", alice.Id, alice.Key, Ct);
+        var vault = Assert.Single(await catalog.OpenForUserAsync(alice.Id, alice.Key, Ct)).Vault;
+        await catalog.SetEmbeddingProviderAsync(vault, Byok.Provider, "sk-key-of-u1-0001", "key-id-u1", Ct);
+        // Bob has seen her own key as the provider: only her being away keeps his query from it.
+        await Share.GrantAsync(catalog, world.Memberships(catalog), alice, created.Id, bob, "Garten", MemberRole.Write);
+        await users.UpdateOneAsync(u => u.Id == alice.Id, Builders<Kumbu.Server.Accounts.UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+
+        var result = await new EncryptedNoteStore(catalog, new UserCredential(bob.Id, bob.Key), index).MeaningAsync(P("/Garten"), "summary", "hens", Ct);
+
+        Assert.Equal(SemanticState.Off, result.State);
+        Assert.Equal("its owner's account is deactivated, and its owner's own key isn't used meanwhile", result.Reason);
+        Assert.DoesNotContain(embedder.Seen, t => t.Query);
     }
 }

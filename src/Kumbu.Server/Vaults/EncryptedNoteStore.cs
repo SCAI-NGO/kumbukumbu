@@ -1057,7 +1057,8 @@ public sealed class EncryptedNoteStore(
     /// The text's vector by the vault's provider, under the same rules as a search's query (its consent, the owner's own
     /// key while she is away), and each note's stored vector of <paramref name="property"/>: of the current model, of the
     /// note's current text for it (a summary edited and not yet embedded again has none) and of the text's length.
-    /// The provider is asked once, and once more if it doesn't answer within <see cref="MeaningTimeout"/>.
+    /// The provider is asked once, and once more if it doesn't answer in time: within <see cref="MeaningTimeout"/>, or
+    /// within its driver's own timeout, whichever runs out first. It isn't asked again after any other failure.
     /// </summary>
     public async Task<Kumbu.Core.Search.MeaningResult> MeaningAsync(VaultPath vault, string property, string text, CancellationToken ct)
     {
@@ -1077,12 +1078,16 @@ public sealed class EncryptedNoteStore(
             timeout.CancelAfter(MeaningTimeout);
             try
             {
-                embedded = await EmbedQueryAsync(access.Vault, text, timeout.Token);
+                embedded = await EmbedQueryAsync(access.Vault, text, timeout.Token, throwTimeouts: true);
                 break;
+            }
+            catch (Search.EmbeddingUnavailableException e) when (e.TimedOut)
+            {
+                embedded = (Kumbu.Core.Search.SemanticState.Off, e.Message, null);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                embedded = (Kumbu.Core.Search.SemanticState.Off, $"its embedding provider didn't answer within {MeaningTimeout.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds, twice", null);
+                embedded = (Kumbu.Core.Search.SemanticState.Off, $"its embedding provider didn't answer within {MeaningTimeout.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds", null);
             }
         }
 
@@ -1125,8 +1130,9 @@ public sealed class EncryptedNoteStore(
     private static bool InScope(VaultPath scope, VaultPath path) =>
         scope.IsRoot || path == scope || path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal);
 
-    /// <summary>The query's vector by one provider, or why there is none.</summary>
-    private async Task<(Kumbu.Core.Search.SemanticState State, string? Reason, float[]? Vector)> EmbedQueryAsync(UnlockedVault vault, string query, CancellationToken ct)
+    /// <summary>The query's vector by one provider, or why there is none; with <paramref name="throwTimeouts"/>, a provider
+    /// that didn't answer in time throws its <see cref="Search.EmbeddingUnavailableException"/>, for the caller to try again.</summary>
+    private async Task<(Kumbu.Core.Search.SemanticState State, string? Reason, float[]? Vector)> EmbedQueryAsync(UnlockedVault vault, string query, CancellationToken ct, bool throwTimeouts = false)
     {
         if (index!.Providers.Resolve(vault)?.Driver is not { } driver)
         {
@@ -1138,7 +1144,7 @@ public sealed class EncryptedNoteStore(
         {
             return (Kumbu.Core.Search.SemanticState.Ready, null, (await driver.EmbedAsync([query], query: true, ct))[0]);
         }
-        catch (Search.EmbeddingUnavailableException e)
+        catch (Search.EmbeddingUnavailableException e) when (!(throwTimeouts && e.TimedOut))
         {
             return (Kumbu.Core.Search.SemanticState.Off, e.Message, null);
         }

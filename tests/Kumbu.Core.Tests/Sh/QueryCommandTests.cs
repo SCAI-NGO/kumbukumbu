@@ -532,6 +532,21 @@ public class QueryCommandTests
     }
 
     [Fact]
+    public async Task Inspect_shows_a_literal_text_on_one_line_and_clipped()
+    {
+        var (sh, store) = MeaningShell(null);
+        var literal = "first line\\nsecond line " + new string('a', 300);
+        store.Put(new StoredNote(VaultPath.TryParse("/V/Queries/Fixed.md", out var fixedPath) ? fixedPath : throw new ArgumentException(),
+            $"---\ntype: query\nmeaning:\n  property: description\n  text: \"{literal}\"\n---\n# Fixed\n\n```base\nviews:\n  - type: table\n    name: All\n```\n",
+            1, Writers.Seed, InMemoryNoteStore.Seeded, [], "", Ref: WriterRef.Server));
+
+        var shown = await sh.RunAsync("query inspect /V/Queries/Fixed.md", CancellationToken.None);
+
+        Assert.False(shown.IsError, shown.Output);
+        Assert.Contains($"\nMeaning: closeness, how close description is to \"first line second line {new string('a', 176)}…\"\n", shown.Output);
+    }
+
+    [Fact]
     public async Task Check_warns_when_as_shadows_a_property_below_the_query_folder()
     {
         var (sh, store) = MeaningShell(null);

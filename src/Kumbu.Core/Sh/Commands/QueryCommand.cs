@@ -191,7 +191,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         if (query.Params.Count > 0) output.AddRange(["Parameters:", .. query.Params.Select(p => $"  {Long(p)}")]);
         if (query.Meaning is { } meaning)
         {
-            var to = meaning.Param is { } param ? $"the parameter {param}" : $"\"{meaning.Text}\"";
+            var to = meaning.Param is { } param ? $"the parameter {param}" : $"\"{Clip(OneLine(meaning.Text!))}\"";
             output.Add($"Meaning: {meaning.As}, how close {meaning.Property} is to {to}" + (meaning.Min is { } min ? $"; at least {min.ToString(CultureInfo.InvariantCulture)}" : ""));
         }
 
