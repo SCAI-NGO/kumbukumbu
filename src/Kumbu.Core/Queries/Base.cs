@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using System.Text.RegularExpressions;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
@@ -138,16 +139,16 @@ public sealed partial class Base
         var cells = columns.Select(c => Column(c, evaluator)).ToList();
         var sortWarnings = new List<QueryWarning>();
         // A key without a direction sorts ascending, and the direction ignores case; Obsidian sorts nothing for either (finding 20).
-        // A direction that is neither warns, and the key sorts ascending.
+        // A direction that is neither warns, and the key sorts ascending. Case is ASCII's only, in both engines: "deſc" is neither.
         var sort = view is not null && Child(view, "sort") is YamlSequenceNode keys
             ? keys.Children.Select(k => k is YamlMappingNode m && Scalar(m, "property") is { } p
                     ? (Property: p, Direction: Scalar(m, "direction"))
                     : throw Invalid("A sort key needs a property."))
                 .Select(k =>
                 {
-                    if (k.Direction is not null && !k.Direction.Equals("ASC", StringComparison.OrdinalIgnoreCase) && !k.Direction.Equals("DESC", StringComparison.OrdinalIgnoreCase))
+                    if (k.Direction is not null && !Ascii.EqualsIgnoreCase(k.Direction, "ASC") && !Ascii.EqualsIgnoreCase(k.Direction, "DESC"))
                         sortWarnings.Add(new QueryWarning("sort-direction", $"sort direction \"{k.Direction}\" is neither ASC nor DESC; sorting ascending", k.Property, 0));
-                    return (Expr: Column(k.Property, evaluator), Descending: string.Equals(k.Direction, "DESC", StringComparison.OrdinalIgnoreCase));
+                    return (Expr: Column(k.Property, evaluator), Descending: k.Direction is not null && Ascii.EqualsIgnoreCase(k.Direction, "DESC"));
                 }).ToList()
             : [];
         var limit = view is not null && Scalar(view, "limit") is { } l

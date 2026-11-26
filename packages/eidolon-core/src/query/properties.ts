@@ -27,26 +27,18 @@ export const CACHE_LIMIT = 20_000;
 // the working set holds it unchanged, so each is parsed once, not once per query. The server keys a ConditionalWeakTable
 // by the string, which goes with the string; a string can't be a WeakMap key, so this is a Map by content, bounded, the
 // oldest entry out first.
-const byContent = new Map<string, NoteProperties>();
-const typedByContent = new Map<string, { types: PropertyTypeMap; properties: NoteProperties }>();
+const byContent = new Map<string, { types: PropertyTypeMap; properties: NoteProperties }>();
 
-/** The properties as the YAML alone types them; with `types`, as a run reads them, with the vault's declared types. */
-function read(content: string, types?: PropertyTypeMap): NoteProperties {
-  if (types === undefined) {
-    const known = byContent.get(content);
-    if (known !== undefined) return known;
-    return remember(byContent, content, parse(content, false, null));
-  }
-  const known = typedByContent.get(content);
+/** The properties as a run reads them, with the vault's declared types; without any, tags, aliases and cssclasses are
+ * still lists, as the server's run reads them. */
+function read(content: string, types: PropertyTypeMap = PropertyTypes.none): NoteProperties {
+  const known = byContent.get(content);
   if (known !== undefined && sameTypes(known.types, types)) return known.properties;
-  typedByContent.delete(content);
-  return remember(typedByContent, content, { types, properties: parse(content, false, types) }).properties;
-}
-
-function remember<T>(cache: Map<string, T>, content: string, entry: T): T {
-  cache.set(content, entry);
-  if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
-  return entry;
+  const properties = parse(content, false, types);
+  byContent.delete(content);
+  byContent.set(content, { types, properties });
+  if (byContent.size > CACHE_LIMIT) byContent.delete(byContent.keys().next().value!);
+  return properties;
 }
 
 // The vault's types.json is read for each query, so the same declarations come as another map.
@@ -143,7 +135,8 @@ class Budget {
   }
 
   private scalar(raw: string, plain: boolean, type: PropertyType | null): Value {
-    if (plain && isNull(raw)) return NULL;
+    // An empty value is empty, quoted or not, when a type is declared: "" isn't a value of it that doesn't fit.
+    if ((plain && isNull(raw)) || (type !== null && raw.length === 0)) return NULL;
     return (type === null ? null : declared(raw, type)) ?? (plain && !this.written ? inferred(raw) : textValue(raw));
   }
 }

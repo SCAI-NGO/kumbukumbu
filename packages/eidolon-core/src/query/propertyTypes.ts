@@ -46,23 +46,37 @@ export const PropertyTypes = {
 
   /** The `types` of a types.json; a file that isn't one, or a type name Obsidian doesn't have, declares nothing. */
   read(json: string): PropertyTypeMap {
-    let root: unknown;
-    try {
-      root = JSON.parse(json);
-    } catch {
-      return NONE;
-    }
-    const types = isObject(root) ? root.types : undefined;
-    if (!isObject(types)) return NONE;
-
-    const declared = new Map<string, PropertyType>();
-    for (const [name, value] of Object.entries(types)) {
-      const type = typeof value === "string" ? PropertyTypes.named(value) : null;
-      if (type !== null) declared.set(foldCase(name), type);
-    }
+    const known = byText.get(json);
+    if (known !== undefined) return known;
+    if (byText.size >= REMEMBERED) byText.clear();
+    const declared = parse(json);
+    byText.set(json, declared);
     return declared;
   },
 };
+
+// The declarations by the text they were read from, so each query of an unchanged file gets the same map and a note's
+// typed properties are found by reference, not by comparing every declaration. Bounded: a full cache starts over.
+const REMEMBERED = 64;
+const byText = new Map<string, PropertyTypeMap>();
+
+function parse(json: string): PropertyTypeMap {
+  let root: unknown;
+  try {
+    root = JSON.parse(json);
+  } catch {
+    return NONE;
+  }
+  const types = isObject(root) ? root.types : undefined;
+  if (!isObject(types)) return NONE;
+
+  const declared = new Map<string, PropertyType>();
+  for (const [name, value] of Object.entries(types)) {
+    const type = typeof value === "string" ? PropertyTypes.named(value) : null;
+    if (type !== null) declared.set(foldCase(name), type);
+  }
+  return declared;
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

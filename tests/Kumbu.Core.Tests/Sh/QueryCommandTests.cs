@@ -418,8 +418,8 @@ public class QueryCommandTests
     // A vault of its own whose types.json declares rating and done, with values that fit and values that don't.
     private void AddRatings()
     {
-        _store.AddTextFile("/T/.obsidian/types.json", "{\"types\": {\"rating\": \"number\", \"done\": \"checkbox\"}}");
-        AddNote("/T/A.md", "---\nrating: \"4,50\"\n---\n");
+        _store.AddTextFile("/T/.obsidian/types.json", "{\"types\": {\"rating\": \"number\", \"done\": \"checkbox\", \"colour\": \"number\"}}");
+        AddNote("/T/A.md", "---\nrating: \"4,50\"\ncolour: red\n---\n");
         AddNote("/T/B.md", "---\nrating: high\ndone: \"FALSE\"\n---\n");
         AddNote("/T/C.md", "---\nrating: \"4.50\"\ndone: maybe\n---\n");
         _store.AddTextFile("/T/Ratings.base", "filters: file.ext == \"md\"\nviews:\n  - type: table\n    name: Ratings\n    order: [rating, done]\n");
@@ -435,6 +435,25 @@ public class QueryCommandTests
             warning: type-mismatch: 1 note has done values that aren't checkbox (first: /T/C.md)
             warning: type-mismatch: 2 notes have rating values that aren't number (first: /T/A.md)
             """), await Run("query check /T/Ratings.base"));
+    }
+
+    [Fact]
+    public async Task Check_does_not_warn_about_a_property_the_query_does_not_use()
+    {
+        AddRatings();
+
+        Assert.DoesNotContain("colour", (await Run("query check /T/Ratings.base")).Output);
+    }
+
+    [Fact]
+    public async Task Execute_reads_the_declared_types_anew_when_types_json_changes()
+    {
+        AddRatings();
+        Assert.Contains("| /T/C.md | 4.5 | maybe |", (await Run("query execute /T/Ratings.base")).Output);
+
+        _store.AddTextFile("/T/.obsidian/types.json", "{\"types\": {\"rating\": \"text\"}}");
+
+        Assert.Contains("| /T/C.md | 4.50 | maybe |", (await Run("query execute /T/Ratings.base")).Output);
     }
 
     [Fact]

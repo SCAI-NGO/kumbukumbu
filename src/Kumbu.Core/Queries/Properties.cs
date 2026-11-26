@@ -132,7 +132,8 @@ public static partial class Properties
 
     private static Value Scalar(string raw, bool plain, PropertyType? type)
     {
-        if (plain && IsNull(raw)) return NullValue.Instance;
+        // An empty value is empty, quoted or not, when a type is declared: "" isn't a value of it that doesn't fit.
+        if (plain && IsNull(raw) || type is not null && raw.Length == 0) return NullValue.Instance;
         var converted = type switch
         {
             null => null,

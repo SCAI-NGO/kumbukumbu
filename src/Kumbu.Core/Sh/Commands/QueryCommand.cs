@@ -45,9 +45,9 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           its code, the expression it is in and the position there. A function, method or formula
           that doesn't exist, formulas that use each other in a circle, a regular expression that is
           null and a sort direction that is neither ASC nor DESC are warnings: the query runs, with an error
-          value (or null) in the cells they touch. So is a property declared in {TypesFile} with
-          values that don't fit its type, once for each, with how many notes and the first of them:
-          those values keep their own.
+          value (or null) in the cells they touch. So is a property the query uses, declared in
+          {TypesFile}, with values that don't fit its type, once for each, with how many notes and
+          the first of them: those values keep their own.
         query properties [path]
           The properties of the notes below a path (default: every vault): each with the types of
           its values, as they are written, the type declared in the vault's {TypesFile} before them
@@ -294,7 +294,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             var warnings = problems.SelectMany(p => p.Warnings.Select(w => $"view {p.View ?? "(the table)"}: {Says(w.Code, w.Message, w.Expression, w.Position)}")).ToList();
             if (query.Meaning is { } meaning) warnings.AddRange(await ShadowedAsync(path, meaning.As, ct));
             var types = await TypesAsync(path.Segments[0], ct);
-            warnings.AddRange(Mismatched(await VaultAsync(path, types, noteTimes: false, ct), types));
+            warnings.AddRange(Mismatched(query, await VaultAsync(path, types, noteTimes: false, ct), types));
             // Warnings leave a query that runs: each names what gives an error value in the cells it touches.
             if (problems.Any(p => p.Error is not null))
                 return ShellResult.Error(Lines.Join(problems.Where(p => p.Error is not null).Select(p => $"query: {path.Value}: view {p.View ?? "(the table)"}: {Says(p.Error!)}")
@@ -322,13 +322,15 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             .Select(n => $"meaning: {n.Path.Value} has a property {name} of its own, which the score hides in a run");
     }
 
-    // The properties whose values don't fit their declared type in the notes a run reads: one warning each, as such a
-    // value keeps its own and the query runs (bases-without-obsidian-bugs spec §2 item 4).
-    private static IEnumerable<string> Mismatched(Dictionary<QueryNote, VaultPath> vault, IReadOnlyDictionary<string, PropertyType> types) =>
+    // The properties the query mentions whose values don't fit their declared type in the notes a run reads: one warning
+    // each, as such a value keeps its own and the query runs (bases-without-obsidian-bugs spec §2 item 4). A property the
+    // query doesn't read can't change its rows, so it isn't told.
+    private static IEnumerable<string> Mismatched(Query query, Dictionary<QueryNote, VaultPath> vault, IReadOnlyDictionary<string, PropertyType> types) =>
         vault
             .SelectMany(file => file.Key.Properties.Values
                 .Select(p => (Name: p.Key, Type: PropertyTypes.Of(p.Key, types), p.Value, Path: file.Value.Value))
                 .Where(p => p.Type is { } type && !Properties.Fits(p.Value, type)))
+            .Where(p => query.Mentions(p.Name))
             .OrderBy(p => p.Path, TextOrder.Default)
             .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .OrderBy(g => g.Key, TextOrder.Default)

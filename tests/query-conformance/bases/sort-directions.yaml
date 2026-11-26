@@ -1,4 +1,4 @@
-description: A sort key without a direction sorts ascending; the direction ignores case; any other direction (up) warns with sort-direction and sorts ascending. Empty values go last either way and ties keep path order.
+description: A sort key without a direction sorts ascending; the direction ignores case; any other direction (up, or deſc with a long s, as case is ASCII's only) warns with sort-direction and sorts ascending. Empty values go last either way and ties keep path order.
 source: kumbu
 reason: Obsidian 1.15.1 sorts nothing for a key without a direction or with lower or mixed case asc/desc (finding 20); a person writing no direction means ascending (ADR 0041).
 notes:
@@ -55,6 +55,11 @@ base: |
       sort:
         - { property: rank, direction: up }
     - type: table
+      name: Long s
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: deſc }
+    - type: table
       name: Lower case then upper
       order: [file.basename, rank]
       sort:
@@ -77,6 +82,9 @@ runs:
     columns: [file.basename, rank]
     rows: [[text c, number 3], [text a, number 2], [text e, number 2], [text b, number 1], [text d, null]]
   - view: Unknown
+    columns: [file.basename, rank]
+    rows: [[text b, number 1], [text a, number 2], [text e, number 2], [text c, number 3], [text d, null]]
+  - view: Long s
     columns: [file.basename, rank]
     rows: [[text b, number 1], [text a, number 2], [text e, number 2], [text c, number 3], [text d, null]]
   - view: Lower case then upper

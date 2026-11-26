@@ -114,7 +114,8 @@ export class Base {
     const sortNode = view === null ? undefined : child(view, "sort");
     const sortWarnings: QueryWarning[] = [];
     // A key without a direction sorts ascending, and the direction ignores case; Obsidian sorts nothing for either (finding 20).
-    // A direction that is neither warns, and the key sorts ascending.
+    // A direction that is neither warns, and the key sorts ascending. Case is ASCII's only, in both engines: "deſc" is neither
+    // (toUpperCase() and a u flag would fold ſ to S).
     const sort = sortNode?.kind === "seq"
       ? sortNode.items
         .map((k) => {
@@ -123,9 +124,9 @@ export class Base {
           return { property, direction: scalarOf(k, "direction") };
         })
         .map((k) => {
-          const direction = k.direction?.toUpperCase() ?? "ASC";
-          if (direction !== "ASC" && direction !== "DESC") sortWarnings.push({ code: "sort-direction", message: `sort direction "${k.direction}" is neither ASC nor DESC; sorting ascending`, expression: k.property, position: 0 });
-          return { expr: column(k.property, evaluator), descending: direction === "DESC" };
+          const descending = k.direction !== null && /^desc$/i.test(k.direction);
+          if (k.direction !== null && !descending && !/^asc$/i.test(k.direction)) sortWarnings.push({ code: "sort-direction", message: `sort direction "${k.direction}" is neither ASC nor DESC; sorting ascending`, expression: k.property, position: 0 });
+          return { expr: column(k.property, evaluator), descending };
         })
       : [];
     const limitText = view === null ? null : scalarOf(view, "limit");
