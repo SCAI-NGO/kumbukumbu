@@ -115,3 +115,13 @@ A typed value is written as its type and its normalised text, so a comparison te
 | `error`, `error Cannot find function "nothing"` | an error value: any (`error` alone), or one whose message starts with the text given, so a case can quote as much of Obsidian's message as it needs |
 
 A runner fails on an empty folder and on a file it can't read; the offline runner also fails on a folder below this one that it doesn't know.
+
+## Regular expressions
+
+Both engines run only the part of RE2's syntax they read the same way (`RegexShape` in each; anything else is null), and the server rewrites a pattern to mean what RE2 means (`\d`, `\w` and `\s` as ASCII, `$` without `m` as the end of the text, case folding as RE2 folds). Two differences remain, so no case pins them:
+
+- `\b` and `\B` see a word character as Unicode on the server and as ASCII (`[0-9A-Za-z_]`) offline: `/caf\b/` matches "café" offline only. .NET's linear engine has no way to write RE2's boundary (no lookaround, no ECMAScript option).
+- A character outside the BMP (an emoji) is two UTF-16 units to `.` and a negated class on the server and one code point offline, so a match's place and length can differ on such text. A pattern may not hold one.
+
+One difference is a bug of .NET's linear engine, pinned as pending for C# (`expressions/regex-leftmost-match.yaml`).
+

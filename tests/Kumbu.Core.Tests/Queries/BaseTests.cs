@@ -132,13 +132,13 @@ public class BaseTests
     public void The_costliest_pattern_of_the_largest_size_that_runs_searches_as_much_text_as_a_note_s_steps_allow_in_time()
     {
         // 21 optional groups of overlapping branches, case-insensitive: size 64, the shape whose states grow fastest
-        // (380 ms on 1,000,000 characters in a Release build); one group more is null. Its first search and 200,000
-        // characters take 926,783 steps of a note's 1,000,000.
+        // (380 ms on 1,000,000 characters in a Release build); one group more is null. Its first search and 100,000
+        // characters take 864,289 steps of a note's 1,000,000.
         var note = new QueryNote("a.md", "", Properties.Read(""));
         var evaluator = new Evaluator();
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
-        var value = evaluator.Evaluate(evaluator.Compile($"/{string.Concat(Enumerable.Repeat("(?:a|aa)?", 21))}c/i.matches(\"a\".repeat(200000))"), new Scope(note, null, DateTime.UnixEpoch));
+        var value = evaluator.Evaluate(evaluator.Compile($"/{string.Concat(Enumerable.Repeat("(?:a|aa)?", 21))}c/i.matches(\"a\".repeat(100000))"), new Scope(note, null, DateTime.UnixEpoch));
 
         Assert.Equal(new BooleanValue(false), value);
         Assert.Empty(evaluator.Warnings);

@@ -53,12 +53,12 @@ test("a pattern whose counts expand too far is null, with a warning that says wh
   }
 });
 
-// re2js has no DFA here: it scans about 2 µs a character at this size, so a search costs (4 + 63) steps for each 32
-// characters; its first search and 200,000 characters take 926,783 steps of a note's 1,000,000.
+// re2js has no DFA here: it scans about 2 µs a character at this size, so a search costs (4 + 64) steps for each 20
+// characters; its first search and 100,000 characters take 864,289 steps of a note's 1,000,000.
 test("the costliest pattern of the largest size that runs searches as much text as a note's steps allow in time", { timeout: 20000 }, () => {
   const evaluator = new Evaluator();
   const started = performance.now();
-  const expr = evaluator.compile(`/${"(?:a|aa)?".repeat(21)}c/i.matches("a".repeat(200000))`);
+  const expr = evaluator.compile(`/${"(?:a|aa)?".repeat(21)}c/i.matches("a".repeat(100000))`);
   expect(evaluator.evaluate(expr, { note, this: null, now: "2026-01-01T12:00:00" })).toEqual({ kind: "boolean", boolean: false });
   expect(evaluator.warnings).toEqual([]);
   expect(performance.now() - started).toBeLessThan(5000);

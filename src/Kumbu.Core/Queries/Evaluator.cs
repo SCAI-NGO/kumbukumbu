@@ -279,8 +279,9 @@ public sealed partial class Evaluator
     /// <summary>The steps reading, comparing or building a value takes: one for each 64 of its characters and items.</summary>
     private static long Work(Value value) => value is TextValue or ListValue or ObjectValue ? Measure(value).Size / 64 : 0;
 
-    // One search of a regular expression from a place. It counts what it may read, 4 + its size steps for each 32
-    // characters, as re2js takes about 32 ms × (size + 3.5) for a million (a step stays about 1 µs at every size): up to
+    // One search of a regular expression from a place. It counts what it may read, 4 + its size steps for each 20
+    // characters, so a step stays about 1 µs at every size (re2js, case-insensitive on non-ASCII text, takes up to
+    // 1.6 µs a step at a /32 rate): up to
     // the match's end and on by the longest match, or, when it fails or a match has no longest, the rest of the text
     // (/(?:a*c)?/ on "aaa…" reads it for each match), so a global replace or split can't take quadratic time. The first
     // search of a pattern in a run also counts the states .NET builds for it, which grow with the square of its size
@@ -290,7 +291,7 @@ public sealed partial class Evaluator
         if (searchedInRun.Add(r)) Step(128 * r.Size * r.Size, at);
         var m = r.Regex.Match(text, from);
         var read = m.Success && r.Longest is { } longest ? Math.Min(m.Index + m.Length - from + longest, text.Length - from) : text.Length - from;
-        Step(1 + read * (4 + r.Size) / 32, at);
+        Step(1 + read * (4 + r.Size) / 20, at);
         return m;
     }
 

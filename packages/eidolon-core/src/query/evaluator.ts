@@ -304,8 +304,9 @@ export class Evaluator {
       throw new QueryError("too-large", `The query takes more than ${MAX_RUN_STEPS.toLocaleString("en")} steps over its notes.`, at.position);
   }
 
-  // One search of a regular expression from a place. It counts what it may read, 4 + its size steps for each 32
-  // characters, as re2js takes about 32 ms × (size + 3.5) for a million (a step stays about 1 µs at every size): up to
+  // One search of a regular expression from a place. It counts what it may read, 4 + its size steps for each 20
+  // characters, so a step stays about 1 µs at every size (re2js, case-insensitive on non-ASCII text, takes up to
+  // 1.6 µs a step at a /32 rate): up to
   // the match's end and on by the longest match, or, when it fails or a match has no longest, the rest of the text
   // (/(?:a*c)?/ on "aaa…" reads it for each match), so a global replace or split can't take quadratic time. The first
   // search of a pattern in a run also counts the states the server's engine builds for it (regexShape), as the server does.
@@ -316,7 +317,7 @@ export class Evaluator {
     }
     const found = m.find(from);
     const read = found && r.longest !== null ? Math.min(m.end() - from + r.longest, text.length - from) : text.length - from;
-    this.step(1 + Math.floor((read * (4 + r.size)) / 32), at);
+    this.step(1 + Math.floor((read * (4 + r.size)) / 20), at);
     return found;
   };
 

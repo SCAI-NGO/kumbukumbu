@@ -1,0 +1,7 @@
+description: A regular expression replaces its leftmost match, the one that starts first. Pending in C#, where .NET 10's linear engine (RegexOptions.NonBacktracking, checked on 10.0.15) reports a later match for some patterns with an optional first part, such as a?b on "acbb" at index 3 instead of 2; no rewrite of the pattern avoids it, so the case stays here until .NET fixes it.
+source: spec
+pending: [cs]
+notes:
+  Ann.md: ""
+cases:
+  - { expression: '"acbb".replace(/a?b/, "X")', values: { Ann.md: text acXb } }
