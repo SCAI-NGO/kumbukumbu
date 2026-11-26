@@ -274,11 +274,12 @@ class Parser {
   }
 
   private unexpected(expected: string): QuerySyntaxError {
+    // Bases has no assignment: a lone "=" is a comparison mistyped, wherever it stands (ADR 0041).
+    if (this.peek() === "=" && this.peek(1) !== "=") return new QuerySyntaxError("use == to compare", this.at);
     const found = this.at < this.text.length ? `'${this.text[this.at]}'` : "the end";
     const next = this.peek(1);
     const hint =
-      this.peek() === "=" && next !== "=" ? " ('=' compares nothing: use '==')"
-      : this.peek() === "&" && next !== "&" ? " (use '&&')"
+      this.peek() === "&" && next !== "&" ? " (use '&&')"
       : this.peek() === "|" && next !== "|" ? " (use '||')"
       : "";
     return new QuerySyntaxError(`Expected ${expected}, found ${found}${hint}.`, this.at);

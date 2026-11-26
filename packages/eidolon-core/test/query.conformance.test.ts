@@ -110,7 +110,8 @@ for (const [file, root] of cases) {
   run(file, () => {
     expect(root.description, "A case says what it shows.").toBeDefined();
     const source = text(root.source);
-    expect(source === "spec" || source.startsWith("obsidian "), `Unknown source '${source}'.`).toBe(true);
+    expect(source === "spec" || source === "kumbu" || source.startsWith("obsidian "), `Unknown source '${source}'.`).toBe(true);
+    expect(root.reason !== undefined, "A case departing from Obsidian (source: kumbu), and only such a case, gives its reason.").toBe(source === "kumbu");
 
     const notes = new Map(Object.entries(map(root.notes)).map(([path, content]) => [path, Properties.read(text(content))]));
 
@@ -176,14 +177,18 @@ function expressions(root: Case): void {
     const evaluator = new Evaluator(formulas);
     if (c.error !== undefined) {
       let code = "none";
+      let message = "";
       try {
         // Most errors of the query come from compiling; the limits of what an expression builds come from evaluating it.
         const compiled = evaluator.compile(source);
         for (const note of notes.values()) evaluator.evaluate(compiled, { note, this: self, now, vault });
       } catch (e) {
         code = codeOf(e);
+        message = e instanceof Error ? e.message : String(e);
       }
       expect(code, `${source}: expected the error ${text(c.error)}.`).toBe(text(c.error));
+      if (c.message !== undefined)
+        expect(message.startsWith(text(c.message)), `${source}: expected a message starting '${text(c.message)}', got '${message}'.`).toBe(true);
       continue;
     }
 

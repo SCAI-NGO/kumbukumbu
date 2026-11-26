@@ -129,9 +129,6 @@ type ListOf = Extract<Value, { kind: "list" }>;
 type FileOf = Extract<Value, { kind: "file" }>;
 type RegexOf = Extract<Value, { kind: "regex" }>;
 
-// && and || give a checkbox, as Obsidian's do (finding 12), and pass on an error of the side they had to read.
-const logical = (v: Value): Value => (v.kind === "error" ? v : booleanValue(truthy(v)));
-
 // The binary expressions down the left side of one, the outermost first.
 function leftSpine(expr: BinaryExpr): BinaryExpr[] {
   const spine = [expr];
@@ -363,8 +360,9 @@ export class Evaluator {
         for (let i = spine.length - 1; i >= 0; i--) {
           if (value.kind === "error") return value;
           const { operator, right } = spine[i]!;
-          if (operator === "And") value = !truthy(value) ? booleanValue(false) : logical(this.eval(right, scope));
-          else if (operator === "Or") value = truthy(value) ? booleanValue(true) : logical(this.eval(right, scope));
+          // && and || give an operand, as JavaScript's do, not Obsidian's checkbox (ADR 0041).
+          if (operator === "And") value = truthy(value) ? this.eval(right, scope) : value;
+          else if (operator === "Or") value = truthy(value) ? value : this.eval(right, scope);
           else {
             // Comparing or joining two values reads both and builds the result.
             const [left, other] = [value, this.eval(right, scope)];

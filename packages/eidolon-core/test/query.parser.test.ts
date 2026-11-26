@@ -38,7 +38,7 @@ test("a long chain of one operator is built without recursion", () => {
 
 test("a message says what was expected, what was found and where", () => {
   const equals = failure("a = 1");
-  expect(equals.message).toBe("Expected the end of the expression, found '=' ('=' compares nothing: use '==').");
+  expect(equals.message).toBe("use == to compare");
   expect(equals.position).toBe(2);
   expect(failure("a & b").message).toBe("Expected the end of the expression, found '&' (use '&&').");
   expect(failure("(1").message).toBe("Expected ')', found the end.");

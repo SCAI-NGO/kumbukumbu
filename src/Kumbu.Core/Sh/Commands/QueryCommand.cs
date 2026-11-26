@@ -83,8 +83,10 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         not. A sort key sorts only with direction ASC or DESC, in capitals: without one, or with asc,
         it sorts nothing, as in Obsidian, and query check warns.
 
-        The language (JavaScript's operators: == != < <= > >= + - * / % && || !). && || and ! give
-        true or false; a text that reads as a number compares as that number, and - * / % read it
+        The language (JavaScript's operators: == != < <= > >= + - * / % && || !; a single = is a
+        syntax error). && and || give an operand, as in JavaScript: a || b is a when it is true,
+        else b, so nick || "none" is a fallback (Obsidian gives true or false); ! gives true or
+        false. A text that reads as a number compares as that number, and - * / % read it
         as one; a date plus or minus "1d", "2 hours" or "1y 2M" is a date (units y M w d h m s, or
         their names), a date minus a date a duration, shown in milliseconds. A regular expression
         is /pattern/flags, and matches through its own method: /^ann/i.matches(name). In filter,

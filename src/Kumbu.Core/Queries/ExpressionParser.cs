@@ -307,10 +307,11 @@ public sealed class ExpressionParser
 
     private QuerySyntaxError Unexpected(string expected)
     {
+        // Bases has no assignment: a lone '=' is a comparison mistyped, wherever it stands (ADR 0041).
+        if (Peek() == '=' && Peek(1) != '=') return new QuerySyntaxError("use == to compare", at);
         var found = at < text.Length ? $"'{text[at]}'" : "the end";
         var hint = (Peek(), Peek(1)) switch
         {
-            ('=', not '=') => " ('=' compares nothing: use '==')",
             ('&', not '&') => " (use '&&')",
             ('|', not '|') => " (use '||')",
             _ => "",

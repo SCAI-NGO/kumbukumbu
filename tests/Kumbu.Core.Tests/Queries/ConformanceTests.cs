@@ -29,7 +29,8 @@ public class ConformanceTests
         var root = Load(file);
         Assert.True(root.Children.ContainsKey("description"), "A case says what it shows.");
         var source = Text(root["source"]);
-        Assert.True(source == "spec" || source.StartsWith("obsidian ", StringComparison.Ordinal), $"Unknown source '{source}'.");
+        Assert.True(source is "spec" or "kumbu" || source.StartsWith("obsidian ", StringComparison.Ordinal), $"Unknown source '{source}'.");
+        Assert.True((source == "kumbu") == root.Children.ContainsKey("reason"), "A case departing from Obsidian (source: kumbu), and only such a case, gives its reason.");
         if (root.Children.TryGetValue("pending", out var pending) && ((YamlSequenceNode)pending).Children.Select(Text).Contains(Me))
             Assert.Skip("Pending for the C# engine.");
 
@@ -109,17 +110,20 @@ public class ConformanceTests
             if (c.Children.TryGetValue("error", out var error))
             {
                 // Most errors of the query come from compiling; the limits of what an expression builds come from evaluating it.
-                var code = Assert.ThrowsAny<Exception>(() =>
+                var thrown = Assert.ThrowsAny<Exception>(() =>
                 {
                     var compiled = evaluator.Compile(text);
                     foreach (var note in notes.Values) evaluator.Evaluate(compiled, new Scope(note, self, now) { Vault = vault });
-                }) switch
+                });
+                var code = thrown switch
                 {
                     QuerySyntaxError => "syntax",
                     QueryError e => e.Code,
                     var e => e.GetType().Name,
                 };
                 Assert.True(Text(error) == code, $"{text}: expected the error {Text(error)}, got {code}.");
+                if (c.Children.TryGetValue("message", out var message))
+                    Assert.True(thrown.Message.StartsWith(Text(message), StringComparison.Ordinal), $"{text}: expected a message starting '{Text(message)}', got '{thrown.Message}'.");
                 continue;
             }
 
