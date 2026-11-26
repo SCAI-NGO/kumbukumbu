@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, type JSX, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, type JSX, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation, useMatches, useNavigate, useSearchParams, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { useZonePreset } from "./calendar/preferences";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
+import { AuthScreen, primaryButtonClass } from "./components/form";
 import PasswordPrompt from "./components/PasswordPrompt";
 import { followSession, useDiscreetMode, useLatestPathname } from "./discreet/hideAgain";
 import { discreetUrl, NEUTRAL, showsDiscreet } from "./discreet/neutralWindow";
@@ -71,6 +72,14 @@ function RequireSession({ children }: { children?: ReactNode }) {
 
   useEffect(() => followVaults(queryClient), [queryClient]);
 
+  // Back from offline: the session is read again, so one read that failed meanwhile (a network still coming up, in
+  // Chris's hand test of 0.7.0, F-16) doesn't stay the last word.
+  const wasOffline = useRef(offline);
+  useEffect(() => {
+    if (wasOffline.current && !offline) void queryClient.invalidateQueries({ queryKey: ["session"] });
+    wasOffline.current = offline;
+  }, [offline, queryClient]);
+
   useEffect(() => {
     if (!session.data) return;
     signedIn(session.data);
@@ -90,8 +99,17 @@ function RequireSession({ children }: { children?: ReactNode }) {
   if (offline && copyOpen) return children ?? <Outlet />;
   if (session.isPending) return null;
   if (session.isError && !session.data && offline) return <Navigate to={`/signin?next=${encodeURIComponent(pathname())}`} replace />;
-  // A 401 has already sent the app to sign-in; anything else is shown.
-  if (session.isError) return <p className="p-4 text-text">{errorText(session.error)}</p>;
+  // A 401 has already sent the app to sign-in. A read that failed after the session was in keeps the app: the session
+  // it has still holds, and is read again (F-16). Without one, the failure is said, with a way to ask again.
+  if (session.isError && !session.data) {
+    return (
+      <AuthScreen title="Kumbu² didn't answer" lead={errorText(session.error)}>
+        <button type="button" onClick={() => void session.refetch()} className={primaryButtonClass}>
+          Try again
+        </button>
+      </AuthScreen>
+    );
+  }
   return children ?? <Outlet />;
 }
 

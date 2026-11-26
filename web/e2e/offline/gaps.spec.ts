@@ -113,6 +113,7 @@ import { dismissInstallHint, notePage } from "../calendar/helpers";
 import type { Api } from "../support/api";
 import { secrets, usernames, type User } from "../support/env";
 import { endHidden, hideDiscreet, limitWindow, reserve, reservePassword, revealDiscreet } from "../support/session";
+import { quietNetwork, reconnectSlowly } from "../support/network";
 import { shareWithBob, unshare } from "../support/share";
 import { expect, shot, shotsDir070, test } from "../support/test";
 
@@ -850,4 +851,53 @@ test("gaps #13: an upload cut off after its first change goes on once back, and 
   expect((await aliceApi.send("GET", `/api/notes/${old.slice(1).split("/").map(encodeURIComponent).join("/")}`)).status(), "Old trashed").toBe(404);
   // Each change once: no duplicate of the new note, no conflict copy against this device itself.
   expect(await notesBelow(aliceApi, folder)).toEqual([plan, created].sort());
+});
+
+test("gaps #14: Wi-Fi coming back slowly leaves the app as it was, and it goes online once the network answers @offline", async ({ page, aliceApi, folder }) => {
+  test.setTimeout(180_000);
+  const plan = `/Work/${folder}/Plan.md`;
+  await aliceApi.putNote(plan, "# Plan\n\nStill here.\n");
+  await turnOn(page);
+  await page.goto(notePage(plan));
+  await expect(article(page)).toContainText("Still here.");
+  await goOffline(page);
+  // Offline for longer than a mode holds (15 seconds), so the app may switch back as soon as the network answers.
+  await page.waitForTimeout(20_000);
+
+  // As on real Wi-Fi: the browser is online at once, its requests fail for some seconds more (longer than a read's
+  // retries), and the app comes into view again meanwhile (its stale reads, the session's among them, go out).
+  const back = reconnectSlowly(page.context(), 8_000);
+  await page.waitForTimeout(500);
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await back;
+
+  await expect(bar(page)).toHaveCount(0, { timeout: 60_000 });
+  await expect(page.getByText("The server can't be reached right now. Try again in a moment.")).toHaveCount(0);
+  await expect(article(page)).toContainText("Still here.");
+});
+
+test("gaps #15: Wi-Fi lost and back as Chromium on Linux has it, with no event: the app stays, and opening a note goes on @offline", async ({ page, aliceApi, folder }) => {
+  test.setTimeout(180_000);
+  const plan = `/Work/${folder}/Plan.md`;
+  await aliceApi.putNote(plan, "# Plan\n\nStill here. [[Other]]\n");
+  await aliceApi.putNote(`/Work/${folder}/Other.md`, "# Other\n\nThe other note.\n");
+  const net = await quietNetwork(page.context());
+  await turnOn(page);
+  await page.goto(notePage(plan));
+  await expect(article(page)).toContainText("Still here.");
+
+  // Wi-Fi off: nothing tells the app; opening another note is what finds out (Chris, F-16).
+  await net.lose();
+  await article(page).getByRole("link", { name: "Other" }).click();
+  await expect(bar(page)).toBeVisible({ timeout: 30_000 });
+  await expect(article(page)).toContainText("The other note.");
+  // Offline for longer than a mode holds (15 seconds), as Chris was.
+  await page.waitForTimeout(20_000);
+
+  // Wi-Fi on: again no event; the next note opened, or the socket trying again, finds the way back.
+  await net.restore();
+  await page.goBack();
+  await expect(bar(page)).toHaveCount(0, { timeout: 90_000 });
+  await expect(page.getByText("The server can't be reached right now. Try again in a moment."), "F-16: no error in place of the app once back").toHaveCount(0);
+  await expect(article(page), "F-16: the note is still shown once back").toContainText("Still here.");
 });
