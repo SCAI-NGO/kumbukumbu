@@ -7,8 +7,9 @@ import { vaultHinted } from "../api/history";
 import { useVaults } from "../api/notes";
 import { followRename } from "../api/sharing";
 import { leaveVaults } from "../discreet/leftElsewhere";
-import { enginesHinted, enginesReconnected } from "../offline/engines";
+import { confirmSession, enginesHinted, enginesReconnected } from "../offline/engines";
 import { contact, useOfflineMode } from "../offline/mode";
+import { useSession } from "../state/session";
 import { presenceKey, useSyncStatus } from "../state/sync";
 import { useShellNavigate } from "../windows/context";
 
@@ -132,6 +133,17 @@ export function useSyncSocket() {
       timer = setTimeout(() => void connect(), Math.min(MAX_DELAY, 1000 * 2 ** attempt++));
     };
     const connect = async () => {
+      // After an offline sign-in the tab knows the username only, and the cookie may be someone else's: the session is
+      // read first, and nothing goes on under another person's.
+      if (useSession.getState().user?.id === "") {
+        const view = await confirmSession();
+        if (stopped) return;
+        if (view === null) {
+          if (useSession.getState().user?.id === "") retry();
+          return;
+        }
+        queryClient.setQueryData(["session"], view);
+      }
       const names = queryClient.getQueryData<{ name: string }[]>(["vaults"]);
       let ticket: string;
       try {

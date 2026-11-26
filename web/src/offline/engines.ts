@@ -2,15 +2,15 @@
 // The sync engines of this tab's unlocked copy (offline mode design §3, §6), over fetch and the session cookie. They run
 // while the copy is open and this tab leads it; the app hears their conflicts, lost sessions and changes waiting.
 import { KumbuApi, type HttpFn } from "eidolon-core/api/client";
-import type { ListedVault } from "eidolon-core/engine/ports";
+import { AuthError, type ListedVault } from "eidolon-core/engine/ports";
 import type { OfflineChoice } from "eidolon-core/store/choice";
 import { MirrorEngines } from "eidolon-core/store/engines";
 import type { SealedMirror } from "eidolon-core/store/mirror";
 import { api, call } from "../api/client";
 import { useOfflineCopy } from "./copy";
-import { useSession } from "../state/session";
+import { useSession, type SessionView } from "../state/session";
 import { deviceLabel } from "./deviceLabel";
-import { openCopy } from "./mode";
+import { lockCopy, mirrorCopies, openCopy } from "./mode";
 import { nameVaults } from "./source";
 import { draftsFor } from "./writing";
 
@@ -36,7 +36,38 @@ export const mirrorHttp: HttpFn = async (r) => {
   return { status: response.status, headers, text: new TextDecoder().decode(bytes), bytes };
 };
 
+let reading: Promise<SessionView | null> | null = null;
+
+/**
+ * Reads the session and holds it against the copy this tab has open: the cookie is the browser's, and after an
+ * offline sign-in (the tab knows the username only) it may still be someone else's. The copy's own user's: the tab's
+ * session is that one from now on, and the view comes back. Another person's: the copy locks, its changes stay sealed,
+ * and the tab goes to sign-in. Null for that, and when Kumbu² can't be reached or there is no copy open.
+ */
+export function confirmSession(): Promise<SessionView | null> {
+  reading ??= (async () => {
+    try {
+      const mirror = useOfflineCopy.getState().mirror;
+      if (mirror === null || mirror.locked) return null;
+      const view = await call(api.GET("/api/session"));
+      // As the slot port compares them: by the hash of the user id in the copy's header.
+      if ((await (await mirrorCopies()).forUser(view.user.id))?.copy !== mirror.header.copy) {
+        await lockCopy();
+        useSession.getState().end();
+        return null;
+      }
+      if (useSession.getState().user?.id === "") useSession.getState().signedIn(view);
+      return view;
+    } catch {
+      // Unreachable, or a 401, which the API client has dealt with.
+      return null;
+    }
+  })().finally(() => (reading = null));
+  return reading;
+}
+
 async function listVaults(): Promise<ListedVault[]> {
+  if ((await confirmSession()) === null) throw new AuthError("This offline copy isn't the signed-in user's.");
   return (await call(api.GET("/api/vaults"))).map((v) => ({
     id: v.id, name: v.name, canWrite: v.canWrite, shared: v.shared, level: v.level, discreet: v.discreet,
   }));
