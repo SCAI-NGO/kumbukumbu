@@ -44,5 +44,6 @@ Records are public. A security decision says what we do and why, never which con
 | [0027](0027-query-properties-are-parsed-once-per-content.md) | Queries run in memory over the unlocked vault, each note's properties parsed once per content | Accepted |
 | [0034](0034-offline-queries-match-regular-expressions-in-linear-time.md) | Offline queries match regular expressions in linear time | Accepted |
 | [0039](0039-bases-follow-obsidian.md) | Bases follow Obsidian's semantics; Kumbu² only adds diagnostics | Accepted |
+| [0040](0040-query-work-is-bounded-and-regexes-are-a-common-subset.md) | A query's work is bounded, and its regular expressions are a common subset | Accepted |
 
 0002 to 0016 were recorded after the fact, on 2026-11-23, from the decisions of the 0.7.0 weekend; their dates are the days they were taken.

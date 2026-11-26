@@ -39,10 +39,14 @@ A copy is one user's mirror in one browser (design §4.7). `MirrorCopies` finds,
 
 ## Queries
 
-`src/query/` runs the same queries as the server (`docs/superpowers/specs/2026-11-24-queries-data-side-design.md`) over the notes of the copy: `Properties.read` types a note's frontmatter, `Query.read` reads a query note or `.base` file, and `run` gives a view's columns and rows. It is a port, not a second design: the cases in `tests/query-conformance` hold it and the C# engine to the same results, and its runner is `test/query.conformance.test.ts`. Two dependencies, both permissive and pure JavaScript:
+`src/query/` runs the same queries as the server (`docs/superpowers/specs/2026-11-24-queries-data-side-design.md`, with Obsidian's semantics from `2026-11-25-bases-follow-obsidian-design.md`) over the files of the copy: `Properties.read` types a note's frontmatter by its YAML alone, `Query.read` reads a query note or `.base` file, and `run` gives a view's columns and rows, an error in a cell being a value, and warnings beside them. A `QueryNote` is any file of the vault, an attachment or a `.base` file too, with its size and times; a `QueryVault` over the run's files resolves `file()`, `link()`, links and backlinks and draws `random()` once per row. It is a port, not a second design: the cases in `tests/query-conformance` hold it and the C# engine to the same results, and its runner is `test/query.conformance.test.ts`.
+
+Its work is bounded as the server's is, step for step (spec 2026-11-25 §7, [ADR 0040](../../docs/adr/0040-query-work-is-bounded-and-regexes-are-a-common-subset.md)): 10,000 characters and 64 levels for an expression, 512 levels with its formulas, 1,000,000 in size and steps for a note, 5,000,000 steps and 10,000,000 in size for a run; past them `too-deep` or `too-large`. It has no cancellation: the steps bound a run to a few seconds in a tab. `regexShape.ts` reads a pattern exactly as `Kumbu.Core/Queries/RegexShape.cs` does, so both engines run the same patterns and charge the same steps for them.
+
+Two dependencies, both permissive and pure JavaScript:
 
 - `yaml` (ISC) reads frontmatter, bases and `params:` so that each scalar stays its source text and style, which is what the typing rules need (a quoted `"2026-11-03"` stays text); aliases are resolved under a budget, so an anchor bomb is an error, not a hang.
-- `re2js` (MIT) is RE2 in JavaScript: a pattern in a query is anyone's input, and matching must take linear time so that a query note in a shared vault cannot hang a tab ([ADR 0034](../../docs/adr/0034-offline-queries-match-regular-expressions-in-linear-time.md)). The browser's `RegExp` is never used on a query's pattern.
+- `re2js` (MIT) is RE2 in JavaScript: a pattern in a query is anyone's input, and matching must take linear time so that a query note in a shared vault cannot hang a tab ([ADR 0034](../../docs/adr/0034-offline-queries-match-regular-expressions-in-linear-time.md)). The browser's `RegExp` is never used on a query's pattern. Only the subset `regexShape.ts` accepts reaches it; the rest is null.
 
 ## Commands
 

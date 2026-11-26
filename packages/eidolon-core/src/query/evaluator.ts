@@ -100,7 +100,7 @@ export const MethodReference: readonly LanguageEntry[] = [
   entry("hasTag", "file.hasTag(tag, ...)", "whether the note carries one of the tags, or one nested below it, ignoring case and a leading #"),
   entry("inFolder", "file.inFolder(folder)", "whether the file lies in the folder or below it"),
   entry("hasProperty", "file.hasProperty(name)", "whether the note's frontmatter has the property"),
-  entry("matches", "/regex/flags.matches(text)", "whether the regular expression matches the text (flags g, i, m, s, u; one RE2 can't run, such as lookaround, is null)"),
+  entry("matches", "/regex/flags.matches(text)", "whether the regular expression matches the text (flags g, i, m, s, u; one beyond the part of RE2 both engines run, such as lookaround, is null)"),
 ];
 
 /** The fields, by what they are read on. */

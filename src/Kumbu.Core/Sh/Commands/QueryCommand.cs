@@ -41,8 +41,9 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         query check <query>
           Compiles every view without running it and needing no arguments: ok, or each error with
           its code, the expression it is in and the position there. A function, method or formula
-          that doesn't exist, or formulas that use each other in a circle, are warnings: the query
-          runs, with an error value in the cells they touch.
+          that doesn't exist, formulas that use each other in a circle, a regular expression that is
+          null and a sort direction that sorts nothing are warnings: the query runs, with an error
+          value (or null) in the cells they touch.
         query properties [path]
           The properties of the notes below a path (default: every vault): each with the types of
           its values, as they are written, the type declared in the vault's {TypesFile} before them
@@ -94,11 +95,15 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           As in Obsidian, what an expression can't give for a note is an error value in its cell
           (error: Invalid operator between String and Number): a function, method or field its value
           hasn't, a formula that doesn't exist or uses itself, a calculation between types that don't
-          fit, number() of a text that isn't one. Whatever uses an error is that error; a filter that
-          gives one drops the row; a sort puts it after the empty values. null passes through most
-          of it: a method or field of null is null. A regular expression that doesn't compile or
-          needs backtracking is null, and query check says so. Only what can't be read (syntax) and
-          the limits (too-deep, too-large) are an error of the query.
+          fit, number() of a text that isn't one. Whatever uses an error is that error (false && and
+          true || stop before it, as in JavaScript); a filter that gives one drops the row; a sort puts it after the empty values. null passes through most
+          of it: a method or field of null is null. A regular expression is null, and query check
+          says why, when it doesn't compile or goes beyond the part of RE2 both engines run alike:
+          no lookaround, backreferences, named groups or Unicode classes, and at most 64 positions
+          written out (a count multiplies its body). Only what can't be read (syntax) and the limits
+          are an error of the query: too-deep past 64 levels of nesting, or 512 with the formulas it
+          uses added up; too-large past 1,000,000 steps or characters for one note, or 5,000,000
+          steps for the run.
 
           query ls
           query inspect Birthdays
