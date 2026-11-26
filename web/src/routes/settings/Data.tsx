@@ -66,7 +66,7 @@ function DeleteAccountSection() {
       queryClient.clear();
       useEditor.getState().reset();
       forgetLastNote(me?.id);
-      useSession.getState().end("Your account is deleted, with all your vaults and notes.");
+      useSession.getState().end("Your account is deleted, with all your vaults and notes.", "wipe");
     },
   });
 

@@ -9,7 +9,7 @@ import { SharedMode, type ModeChannel, type ModePorts } from "eidolon-core/mode/
 import { IdleLock } from "eidolon-core/store/idle";
 import { IDLE_MS, MirrorCopies, REMEMBERED_IDLE_MS, type SealedMirror } from "eidolon-core/store/mirror";
 import { create } from "zustand";
-import { useSession } from "../state/session";
+import { onSessionEnd, useSession } from "../state/session";
 import { useOfflineCopy } from "./copy";
 import { browserPorts, locks } from "./ports";
 
@@ -178,7 +178,7 @@ function armIdle(mirror: SealedMirror) {
   idle = new IdleLock(clock, mirror.header.idleMs, () => {
     const mode = useOfflineMode.getState();
     if (!mode.offline && useSession.getState().user !== null) return armIdle(mirror);
-    void lockCopy().then(() => useSession.getState().end());
+    useSession.getState().end();
   });
 }
 
@@ -280,6 +280,19 @@ export async function wipeCopy(): Promise<void> {
   if (header === null || typeof indexedDB === "undefined") return;
   await (await mirrorCopies()).wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
 }
+
+/** Removes the copy this tab holds from the device, without a word on the sign-in page: the caller has its own. */
+async function removeCopy(): Promise<void> {
+  const header = useOfflineCopy.getState().header;
+  idle?.stop();
+  idle = null;
+  useOfflineCopy.getState().mirror?.lock();
+  useOfflineCopy.getState().clear();
+  if (header === null || typeof indexedDB === "undefined") return;
+  await (await mirrorCopies()).wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
+}
+
+onSessionEnd((how) => void (how === "wipe" ? removeCopy() : lockCopy(how === "lockEverywhere")));
 
 /** For the tests: a fresh mode, as in a new tab. */
 export function resetOfflineMode() {

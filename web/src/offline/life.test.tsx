@@ -169,6 +169,33 @@ describe("a session's end", () => {
     expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).toBeNull();
   });
 
+  test("changing the password locks the copy in this tab", async () => {
+    await openedOnline();
+    const mirror = useOfflineCopy.getState().mirror!;
+    useSession.getState().end("Your password is changed and every session has ended. Sign in with the new one.");
+    await vi.waitFor(() => expect(useOfflineCopy.getState().mirror).toBeNull());
+    expect(mirror.locked).toBe(true);
+    // Sealed, on the device still: it opens again at the next sign-in.
+    expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).not.toBeNull();
+  });
+
+  test("a sign-out locks the copy in every tab", async () => {
+    await openedOnline();
+    const copies = new MirrorCopies(await browserPorts());
+    const other = (await copies.unlockOffline((await copies.forUser(user.id))!, "pw"))!;
+    useSession.getState().signOut();
+    await vi.waitFor(() => expect(other.locked).toBe(true));
+    expect(useOfflineCopy.getState().mirror).toBeNull();
+  });
+
+  test("deleting the account removes the copy from this device", async () => {
+    await openedOnline();
+    useSession.getState().end("Your account is deleted, with all your vaults and notes.", "wipe");
+    await vi.waitFor(async () => expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).toBeNull());
+    expect(useOfflineCopy.getState()).toMatchObject({ mirror: null, header: null });
+    expect(useSession.getState().notice).toBe("Your account is deleted, with all your vaults and notes.");
+  });
+
   test("a sign-in in a tab that holds the copy wraps it again under the password", async () => {
     await openedOnline();
     const held = useOfflineCopy.getState().mirror;

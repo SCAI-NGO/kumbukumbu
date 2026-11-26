@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import createClient, { type Middleware } from "openapi-fetch";
 import { useOfflineCopy } from "../offline/copy";
-import { lockCopy, useOfflineMode, wipeCopy } from "../offline/mode";
+import { useOfflineMode, wipeCopy } from "../offline/mode";
 import { endPendingSignOut, signOutPending } from "../offline/unlock";
 import { usePasswordPrompt } from "../state/passwordPrompt";
 import { useSession } from "../state/session";
@@ -62,9 +62,8 @@ async function endOnLostSession(key: string, response: Response) {
   // After a sign-out, the page being left may still ask (or hear back) for a moment; those 401s are the sign-out
   // itself. Asking for the session is the way back in, and still leads to sign-in.
   if (useSession.getState().signedOut && key !== "GET /api/session") return;
-  // The copy's life in the tab follows the session's: no way back past the sign-in page without the password, and
+  // The copy locks with it (the session store's rule): no way back past the sign-in page without the password, and
   // the next user never inherits it.
-  void lockCopy();
   useSession.getState().end();
 }
 

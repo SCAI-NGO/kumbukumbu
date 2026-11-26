@@ -10,7 +10,7 @@ import { api, call } from "../api/client";
 import { useOfflineCopy } from "./copy";
 import { useSession, type SessionView } from "../state/session";
 import { deviceLabel } from "./deviceLabel";
-import { lockCopy, mirrorCopies, openCopy } from "./mode";
+import { mirrorCopies, openCopy } from "./mode";
 import { nameVaults } from "./source";
 import { draftsFor } from "./writing";
 
@@ -52,7 +52,7 @@ export function confirmSession(): Promise<SessionView | null> {
       const view = await call(api.GET("/api/session"));
       // As the slot port compares them: by the hash of the user id in the copy's header.
       if ((await (await mirrorCopies()).forUser(view.user.id))?.copy !== mirror.header.copy) {
-        await lockCopy();
+        // The session's end locks the copy.
         useSession.getState().end();
         return null;
       }
