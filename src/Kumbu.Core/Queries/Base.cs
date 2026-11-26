@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text.RegularExpressions;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
@@ -15,7 +16,7 @@ public sealed record QueryResult(string View, IReadOnlyList<string> Columns, IRe
 /// formulas and views with their columns, sort and limit. A view without a name or a filter group that isn't one makes the
 /// whole base an error (as in Obsidian); any other fault is found when a view runs, so one broken view or formula
 /// doesn't take the others down. The cases are in <c>tests/query-conformance/bases</c>.</summary>
-public sealed class Base
+public sealed partial class Base
 {
     private const int MaxNodes = 10_000;
 
@@ -90,7 +91,7 @@ public sealed class Base
         };
         for (var i = 0; i < views.Count; i++)
         {
-            if (Scalar(views[i], "name") is not { Length: > 0 }) throw Invalid($"Missing or invalid \"name\" in view {i + 1}");
+            if (Child(views[i], "name") is not YamlScalarNode { Value: { Length: > 0 } name } node || !IsText(node.Style, name)) throw Invalid($"Missing or invalid \"name\" in view {i + 1}");
         }
 
         if (Child(map, "filters") is { } all) CheckGroups(all, 0);
@@ -101,6 +102,13 @@ public sealed class Base
 
         return new Base(map, Child(map, "filters"), formulas, views);
     }
+
+    // A name is a text, as YAML reads it: one that is quoted, or plain and neither null, a boolean nor a number.
+    private static bool IsText(ScalarStyle style, string value) =>
+        style is not (ScalarStyle.Plain or ScalarStyle.Any) || !NotText().IsMatch(value);
+
+    [GeneratedRegex(@"^(~|null|Null|NULL|true|True|TRUE|false|False|FALSE|[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?|0x[0-9a-fA-F]+|0o[0-7]+|[-+]?\.(inf|Inf|INF)|\.(nan|NaN|NAN))$")]
+    private static partial Regex NotText();
 
     // A filter is an expression or a group of exactly one of and, or and not, whose items are filters, as Obsidian reads it.
     private static void CheckGroups(YamlNode node, int depth)

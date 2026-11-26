@@ -25,6 +25,9 @@ export type QueryResult = {
   readonly warnings: readonly QueryWarning[];
 };
 
+// A name is a text, as YAML reads it: one that is quoted, or plain and neither null, a boolean nor a number.
+const NOT_TEXT = /^(~|null|Null|NULL|true|True|TRUE|false|False|FALSE|[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?|0x[0-9a-fA-F]+|0o[0-7]+|[-+]?\.(inf|Inf|INF)|\.(nan|NaN|NAN))$/;
+
 const invalid = (message: string) => new QueryError("base", message, 0);
 
 const scalarOf = (map: YamlMap, key: string): string | null => {
@@ -77,7 +80,8 @@ export class Base {
       throw invalid("views is not a list of views.");
     const views = (viewsNode?.items ?? []) as YamlMap[];
     views.forEach((v, i) => {
-      if ((scalarOf(v, "name") ?? "") === "") throw invalid(`Missing or invalid "name" in view ${i + 1}`);
+      const name = child(v, "name");
+      if (name?.kind !== "scalar" || name.value === "" || (name.plain === true && NOT_TEXT.test(name.value))) throw invalid(`Missing or invalid "name" in view ${i + 1}`);
     });
 
     const all = child(root, "filters");

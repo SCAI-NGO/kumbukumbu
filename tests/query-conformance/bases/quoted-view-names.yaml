@@ -1,0 +1,19 @@
+description: A view name that is quoted is a text whatever it reads as, so the base runs.
+source: spec
+notes:
+  a.md: ""
+base: |
+  views:
+    - type: table
+      name: "5"
+      order: [file.name]
+    - type: table
+      name: "true"
+      order: [file.name]
+runs:
+  - view: "5"
+    columns: [file.name]
+    rows: [[text a]]
+  - view: "true"
+    columns: [file.name]
+    rows: [[text a]]
