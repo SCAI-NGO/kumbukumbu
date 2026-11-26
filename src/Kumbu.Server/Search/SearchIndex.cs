@@ -153,7 +153,7 @@ public sealed class SearchIndex : BackgroundService
         }
 
         Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note.Version, provider.Driver)).Select(n => n.Key)
-            .Concat(pdfs.Where(p => !IsCurrent(embeddings.GetValueOrDefault(p.Key), p.Value, provider.Driver)).Select(p => p.Key))
+            .Concat(pdfs.Where(p => !IsCurrent(embeddings.GetValueOrDefault(p.Key), p.Value, provider.Driver, pdf: true)).Select(p => p.Key))
             .Concat(embeddings.Keys.Where(p => !notes.ContainsKey(p) && !pdfs.ContainsKey(p))));
     }
 
@@ -215,12 +215,15 @@ public sealed class SearchIndex : BackgroundService
 
     /// <summary>Embedded by this model, at this version, chunked under the current scheme, and with vectors of the length
     /// the model gives now: under one key a provider's model can change its output length (no Dimensions configured),
-    /// and such vectors don't compare.</summary>
-    private bool IsCurrent(NoteEmbeddings? embeddings, string version, IEmbeddingDriver driver) =>
-        embeddings?.Model == driver.ModelKey && embeddings.Version == version && embeddings.Scheme == Bound.Scheme && embeddings.Chunks.All(c => FitsLength(c, driver));
+    /// and such vectors don't compare. A note's embeddings stored before there were property vectors aren't current, so
+    /// the catch-up embeds its properties once (its chunks' vectors are reused); a PDF has no properties.</summary>
+    private bool IsCurrent(NoteEmbeddings? embeddings, string version, IEmbeddingDriver driver, bool pdf = false) =>
+        embeddings?.Model == driver.ModelKey && embeddings.Version == version && embeddings.Scheme == Bound.Scheme
+        && (pdf || embeddings.Properties is not null)
+        && embeddings.Chunks.All(c => FitsLength(c.Vector, driver)) && (embeddings.Properties ?? []).All(p => FitsLength(p.Vector, driver));
 
     /// <summary>A length of 0 is a remote model that hasn't answered yet: then any length fits.</summary>
-    private static bool FitsLength(EmbeddedChunk chunk, IEmbeddingDriver driver) => driver.Dimensions == 0 || chunk.Vector.Length == driver.Dimensions;
+    private static bool FitsLength(float[] vector, IEmbeddingDriver driver) => driver.Dimensions == 0 || vector.Length == driver.Dimensions;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -308,7 +311,9 @@ public sealed class SearchIndex : BackgroundService
 
             var note = entry.Note;
             if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note.Version, driver)) return;
-            await EmbedAsync(vault, path, filter, configured, note.Version, [.. Chunker.Split(new Note(path, note.Content), Bound).Select(c => (c.StartLine, c.Part, c.EmbeddingText))], ct);
+            var bound = Bound;
+            await EmbedAsync(vault, path, filter, configured, note.Version,
+                [.. Chunker.Split(new Note(path, note.Content), bound).Select(c => (c.StartLine, c.Part, c.EmbeddingText))], PropertyTexts.Of(path, note.Content, bound), ct);
         }
         finally
         {
@@ -342,34 +347,41 @@ public sealed class SearchIndex : BackgroundService
         var title = Chunker.PdfTitle(path);
         var bound = Bound;
         await EmbedAsync(vault, path, filter, configured, state.Version,
-            [.. texts.SelectMany((text, i) => Chunker.SplitPage(title, i + 1, text, bound).Select(c => (i + 1, c.Part, c.EmbeddingText)))],
+            [.. texts.SelectMany((text, i) => Chunker.SplitPage(title, i + 1, text, bound).Select(c => (i + 1, c.Part, c.EmbeddingText)))], [],
             ct);
     }
 
-    /// <summary>Embeds the chunks (start line or page, part, and the text to embed) and stores them as the path's
-    /// embeddings at <paramref name="version"/> under the current scheme; under the vault's index gate.</summary>
+    /// <summary>Embeds the chunks (start line or page, part, and the text to embed) and the properties (name and the
+    /// text to embed) and stores them as the path's embeddings at <paramref name="version"/> under the current scheme;
+    /// under the vault's index gate.</summary>
     private async Task EmbedAsync(
         UnlockedVault vault, VaultPath path, FilterDefinition<SealedDocument> filter, EmbeddingProvider configured, string version,
-        IReadOnlyList<(int StartLine, int Part, string Text)> chunks, CancellationToken ct)
+        IReadOnlyList<(int StartLine, int Part, string Text)> chunks, IReadOnlyList<(string Name, string Text)> properties, CancellationToken ct)
     {
         var provider = configured.Name;
         var driver = configured.Driver;
         var kind = configured.External ? KumbuMetrics.ProviderKind.External : KumbuMetrics.ProviderKind.Internal;
         var model = driver.ModelKey;
         var scheme = Bound.Scheme;
-        var hashes = chunks.Select(c => Hash(c.Text)).ToList();
-        if (vault.Embeddings.GetValueOrDefault(path) is { } stored && IsCurrent(stored, version, driver)
-            && stored.Chunks.Select(c => (c.StartLine, c.Part, c.Hash)).SequenceEqual(chunks.Select((c, i) => (c.StartLine, c.Part, hashes[i]))))
+        // The chunks' texts, then the properties'.
+        var texts = chunks.Select(c => c.Text).Concat(properties.Select(p => p.Text)).ToList();
+        var hashes = texts.Select(Hash).ToList();
+        // A missing property list fails the comparison below, for a PDF as for a note, so the PDF's [] is stored once.
+        if (vault.Embeddings.GetValueOrDefault(path) is { } stored && IsCurrent(stored, version, driver, pdf: true)
+            && stored.Chunks.Select(c => (c.StartLine, c.Part, c.Hash)).SequenceEqual(chunks.Select((c, i) => (c.StartLine, c.Part, hashes[i])))
+            && stored.Properties is { } had && had.Select(p => (p.Name, p.Hash)).SequenceEqual(properties.Select((p, i) => (p.Name, hashes[chunks.Count + i]))))
         {
             return;
         }
 
         // Vectors are reused by the hash of their text, but only the current model's: the same text gives
         // another vector under another model. Under another scheme it gives the same, so chunking anew keeps them.
-        var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).Where(c => FitsLength(c, driver)).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
-        var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
+        var known = vault.Embeddings.Values.Where(e => e.Model == model)
+            .SelectMany(e => e.Chunks.Select(c => (c.Hash, c.Vector)).Concat((e.Properties ?? []).Select(p => (p.Hash, p.Vector))))
+            .Where(v => FitsLength(v.Vector, driver)).GroupBy(v => v.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
+        var missing = Enumerable.Range(0, texts.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
         // The chunker keeps every text within the bound; a last check, counted afresh, so that a slip shows in the log.
-        var over = Oversized(Bound, missing.Select(i => chunks[i].Text));
+        var over = Oversized(Bound, missing.Select(i => texts[i]));
         if (over > 0)
         {
             _log.LogWarning("Vault {VaultId}: {Count} chunks of {PathId} exceed the bound {Scheme}; embedded as they are", vault.Id, over, vault.PathId(path), scheme);
@@ -388,7 +400,7 @@ public sealed class SearchIndex : BackgroundService
             var started = Stopwatch.GetTimestamp();
             try
             {
-                vectors = await driver.EmbedAsync([.. batch.Select(i => chunks[i].Text)], query: false, embedding.Token);
+                vectors = await driver.EmbedAsync([.. batch.Select(i => texts[i])], query: false, embedding.Token);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -407,7 +419,8 @@ public sealed class SearchIndex : BackgroundService
             KumbuMetrics.EmbeddingBatchDone(kind, Stopwatch.GetElapsedTime(started));
         }
 
-        var embeddings = new NoteEmbeddings(model, version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]], c.Part))], scheme);
+        var embeddings = new NoteEmbeddings(model, version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]], c.Part))], scheme,
+            [.. properties.Select((p, i) => new EmbeddedProperty(p.Name, hashes[chunks.Count + i], known[hashes[chunks.Count + i]]))]);
         // Again: embedding takes seconds, and meanwhile the owner may have switched the vault's provider
         // or deleted the vault.
         if (_providers.RouteOf(vault) != provider) return;
@@ -446,7 +459,7 @@ public sealed class SearchIndex : BackgroundService
     /// <summary>How many of <paramref name="texts"/> don't fit <paramref name="bound"/> (<see cref="ChunkBound.Fits"/>).</summary>
     internal static int Oversized(ChunkBound bound, IEnumerable<string> texts) => texts.Count(t => !bound.Fits(t));
 
-    private static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..32];
+    internal static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..32];
 
     /// <summary>
     /// A route's queue: the notes of each owner in the order queued, the owners with notes waiting served in turn, one
