@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import "fake-indexeddb/auto";
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useOfflineCopy } from "../../offline/copy";
@@ -120,6 +120,17 @@ describe("Settings: Offline", () => {
     expect(screen.getByRole("checkbox", { name: "All my vaults" })).not.toBeChecked();
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Space for opened attachments" }), "1 GB");
     await waitFor(() => expect(useOfflineCopy.getState().mirror!.choice.budget).toBe(1024 * 1_048_576));
+  });
+
+  it("lists under Kept offline only the vaults the session lists", { timeout: 20_000 }, async () => {
+    await turnedOn();
+    const mirror = useOfflineCopy.getState().mirror!;
+    await act(() => mirror.choose((c) => ({ ...c, kept: { [work.id]: ["Projects"], "v-other": ["Plans"] } })));
+    const kept = await screen.findByRole("list", { name: "Kept offline" });
+    expect(kept).toHaveTextContent("Work / Projects");
+    expect(kept).not.toHaveTextContent("Plans");
+    expect(kept).not.toHaveTextContent("A vault");
+    expect(within(kept).getAllByRole("listitem")).toHaveLength(1);
   });
 
   it("renames a device's copy, this one too, and lists it under the new name", async () => {

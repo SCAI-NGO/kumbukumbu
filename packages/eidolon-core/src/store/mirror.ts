@@ -6,7 +6,7 @@
 // the mirror slot's id and token (the token is kept in the clear by design, §4.6: the server's key needs the user key
 // too), the mirror key wrapped under the password, and the idle limit of the last sign-in. Everything else is sealed
 // (vault.ts). The key is only ever in the tab's memory.
-import { DEFAULT_CHOICE, type OfflineChoice } from "./choice";
+import { DEFAULT_CHOICE, heldOnly, without, type OfflineChoice } from "./choice";
 import { fromBase64Url, toBase64Url, unwrapWithPassword, wrapWithPassword, type PasswordWrap } from "./crypto";
 import type { SlotAnswer, SlotVault, StorePorts, TabMessage } from "./ports";
 import { MirrorLockedError, Records, VaultMirror, type VaultMeta } from "./vault";
@@ -185,6 +185,8 @@ export class SealedMirror {
     }
     mirror.chosen = (await r.openJson<OfflineChoice>(await mirror.choiceKey(), await p.storage.get(await mirror.choiceKey()))) ?? DEFAULT_CHOICE;
     if (vaults !== null) await mirror.align(vaults);
+    const held = new Set(mirror.vaults.keys());
+    if (heldOnly(mirror.chosen, held) !== mirror.chosen) await mirror.choose((c) => heldOnly(c, held));
     mirror.stopListening = r.channel.listen((m) => void mirror.heard(m));
     return mirror;
   }
@@ -281,9 +283,10 @@ export class SealedMirror {
 
   /**
    * Drops one vault's mirror, its unsynced changes too. Returns how many changes went with it. `left`: for the
-   * server's reasons (told, listenRemoved); false for the device's own choice.
+   * server's reasons (told, listenRemoved); false for the device's own choice. `forGood`: its part of the device's
+   * choice goes in the same write; false for a vault re-keyed, which comes again under its new tag.
    */
-  async purge(id: string, left = true): Promise<number> {
+  async purge(id: string, left = true, forGood = true): Promise<number> {
     this.assertOpen();
     const vault = this.vaults.get(id);
     if (vault === undefined) return 0;
@@ -291,7 +294,18 @@ export class SealedMirror {
     vault.drop();
     this.vaults.delete(id);
     await this.onDrop?.(id);
-    await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ remove: [vault.metaKey], removePrefix: [vault.dataPrefix] }));
+    const key = await this.choiceKey();
+    const chosen = await this.p.locks.run(this.r.lockName, async () => {
+      const now = (await this.r.openJson<OfflineChoice>(key, await this.p.storage.get(key))) ?? DEFAULT_CHOICE;
+      const next = forGood ? without(now, id) : now;
+      const put = next === now ? [] : [await this.r.sealJson(key, next)];
+      await this.p.storage.write({ put, remove: [vault.metaKey], removePrefix: [vault.dataPrefix] });
+      return next === now ? null : next;
+    });
+    if (chosen !== null) {
+      this.chosen = chosen;
+      this.r.channel.post({ type: "choice" });
+    }
     this.r.channel.post(left ? { type: "purged", vault: id, left: { lost } } : { type: "purged", vault: id });
     if (left) this.removed({ vaults: 1, lost });
     return lost;
@@ -337,7 +351,7 @@ export class SealedMirror {
       const now = this.listed.get(vault.id);
       // Not listed: access lost, deleted or marked discreet, alike by design. Another tag: re-keyed, synced afresh.
       if (now === undefined || now.tag !== vault.tag) {
-        purged.lost += await this.purge(vault.id);
+        purged.lost += await this.purge(vault.id, true, now === undefined);
         purged.vaults++;
       } else if (now.canWrite !== vault.canWrite) {
         await vault.setMeta({ canWrite: now.canWrite });

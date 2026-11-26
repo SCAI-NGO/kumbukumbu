@@ -50,6 +50,23 @@ describe("the engines of a copy", () => {
     await engines.stop();
   });
 
+  test("a vault unticked and ticked again starts without its old folders", async () => {
+    const { mirror, engines } = await setup();
+    await engines.start();
+    await vi.waitFor(() => expect(mirror.vault(team.id)).toBeDefined());
+    await mirror.choose((c) => ({ ...c, kept: { [team.id]: ["Plans"] }, opened: { [team.id]: { "Plans/b.pdf": 2 } } }));
+
+    await mirror.choose((c) => ({ ...c, all: false, vaults: [work.id] }));
+    await engines.refresh(true);
+    expect(mirror.vault(team.id)).toBeUndefined();
+    await mirror.choose((c) => ({ ...c, vaults: [work.id, team.id] }));
+    await engines.refresh(true);
+    await vi.waitFor(() => expect(mirror.vault(team.id)).toBeDefined());
+    expect(mirror.choice.kept).not.toHaveProperty(team.id);
+    expect(mirror.choice.opened).not.toHaveProperty(team.id);
+    await engines.stop();
+  });
+
   test("never take a vault the contact didn't list", async () => {
     const { mirror, servers, engines } = await setup([work]);
     await servers.get("Team")!.seed("t.md", "team");

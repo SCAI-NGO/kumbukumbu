@@ -260,8 +260,12 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
 function KeptSection({ mirror }: { mirror: SealedMirror }) {
   const vaults = useVaults();
   const choose = useChoose(mirror);
-  const kept = Object.entries(mirror.choice.kept).flatMap(([vault, folders]) => folders.map((folder) => ({ vault, folder })));
-  const name = (id: string) => vaults.data?.find((v) => v.id === id)?.name ?? "A vault";
+  // Only the vaults the session lists: no line hints at one it doesn't show.
+  const names = new Map(vaults.data?.map((v) => [v.id, v.name]));
+  const kept = Object.entries(mirror.choice.kept)
+    .filter(([vault]) => names.has(vault))
+    .flatMap(([vault, folders]) => folders.map((folder) => ({ vault, folder })));
+  const name = (id: string) => names.get(id)!;
   return (
     <Section title="Kept offline">
       <p className="text-text-body">Every attachment in these folders stays on this device, whatever its size. Choose Keep offline in a folder's or vault's menu.</p>

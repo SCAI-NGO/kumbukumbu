@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from "vitest";
 import { SyncEngine } from "../src/engine/engine";
 import { AuthError, OfflineError } from "../src/engine/ports";
 import { versionOf } from "../src/engine/version";
+import type { OfflineChoice } from "../src/store/choice";
 import { MirrorCopies, IDLE_MS, type SealedMirror } from "../src/store/mirror";
 import { IdleLock } from "../src/store/idle";
 import { MirrorLockedError, SMALL_ATTACHMENT_BYTES, type VaultMirror } from "../src/store/vault";
@@ -261,6 +262,60 @@ describe("contact", () => {
     expect(mirror.held()).toEqual([]);
     expect([...browser.storage.records.keys()].filter((k) => k.startsWith("c/"))).toEqual([]);
     expect(browser.slots.contacts.at(-1)?.waiting).toBe(2);
+  });
+
+  test("a vault that leaves for good drops out of kept, opened and vaults under the same lock", async () => {
+    const { browser, copies, mirror } = await setup();
+    await mirror.adopt(work.id);
+    await mirror.adopt(team.id);
+    await mirror.choose((c): OfflineChoice => ({
+      ...c, all: false, vaults: [work.id, team.id],
+      kept: { [work.id]: ["Projects"], [team.id]: ["Plans"] },
+      opened: { [work.id]: { "Projects/a.pdf": 1 }, [team.id]: { "Plans/b.pdf": 2 } },
+    }));
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+
+    browser.slots.vaults = [work];
+    await mirror.contact();
+    const left = { all: false, vaults: [work.id], kept: { [work.id]: ["Projects"] }, opened: { [work.id]: { "Projects/a.pdf": 1 } } };
+    expect(mirror.choice).toMatchObject(left);
+    expect(mirror.choice.kept).not.toHaveProperty(team.id);
+    expect(mirror.choice.opened).not.toHaveProperty(team.id);
+    await delivered();
+    expect(other.choice).toMatchObject(left);
+    mirror.lock();
+    other.lock();
+    const again = (await copies.unlockOffline(mirror.header, signIn.password))!;
+    expect(again.choice).toMatchObject(left);
+    expect(again.choice.kept).not.toHaveProperty(team.id);
+  });
+
+  test("a re-keyed vault keeps its place and its kept folders in the device's choice", async () => {
+    const { browser, mirror } = await setup();
+    await mirror.adopt(work.id);
+    await mirror.adopt(team.id);
+    await mirror.choose((c) => ({ ...c, all: false, vaults: [work.id, team.id], kept: { [team.id]: ["Plans"] }, opened: { [team.id]: { "Plans/b.pdf": 2 } } }));
+
+    browser.slots.vaults = [work, { ...team, tag: "tag-b2" }];
+    expect(await mirror.contact()).toEqual({ vaults: 1, lost: 0 });
+    expect(mirror.vault(team.id)).toBeUndefined();
+    expect(mirror.choice).toMatchObject({ vaults: [work.id, team.id], kept: { [team.id]: ["Plans"] }, opened: { [team.id]: { "Plans/b.pdf": 2 } } });
+  });
+
+  test("an unlock drops kept and opened entries of vaults the copy doesn't hold and keeps a vault ticked but not adopted yet", async () => {
+    const { copies, mirror } = await setup();
+    await mirror.adopt(work.id);
+    await mirror.choose((c): OfflineChoice => ({
+      ...c, all: false, vaults: [work.id, team.id],
+      kept: { [work.id]: ["Projects"], [team.id]: ["Plans"], "vault-gone": ["Old"] },
+      opened: { [work.id]: { "Projects/a.pdf": 1 }, "vault-gone": { "Old/c.pdf": 3 } },
+    }));
+    mirror.lock();
+
+    const again = (await copies.unlockOffline(mirror.header, signIn.password))!;
+    expect(again.choice).toMatchObject({ vaults: [work.id, team.id], kept: { [work.id]: ["Projects"] }, opened: { [work.id]: { "Projects/a.pdf": 1 } } });
+    expect(Object.keys(again.choice.kept)).toEqual([work.id]);
+    expect(Object.keys(again.choice.opened)).toEqual([work.id]);
   });
 
   test("follows a change of rights", async () => {
