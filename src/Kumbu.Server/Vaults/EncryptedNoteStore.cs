@@ -1049,6 +1049,60 @@ public sealed class EncryptedNoteStore(
         return new(Kumbu.Core.Search.SemanticState.Ready, chunks, pending, reason);
     }
 
+    /// <summary>How long a query with meaning waits for its text's vector, each of its two tries (embeddable properties
+    /// design §4); settable for the tests.</summary>
+    internal TimeSpan MeaningTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The text's vector by the vault's provider, under the same rules as a search's query (its consent, the owner's own
+    /// key while she is away), and each note's stored vector of <paramref name="property"/>: of the current model, of the
+    /// note's current text for it (a summary edited and not yet embedded again has none) and of the text's length.
+    /// The provider is asked once, and once more if it doesn't answer within <see cref="MeaningTimeout"/>.
+    /// </summary>
+    public async Task<Kumbu.Core.Search.MeaningResult> MeaningAsync(VaultPath vault, string property, string text, CancellationToken ct)
+    {
+        static Kumbu.Core.Search.MeaningResult Not(Kumbu.Core.Search.SemanticState state, string reason) => new(state, null, new Dictionary<VaultPath, float[]>(), reason);
+
+        if (index is null) return Not(Kumbu.Core.Search.SemanticState.Off, "search by meaning is off on this server");
+        if (!index.TokenizerSettled) return Not(Kumbu.Core.Search.SemanticState.Preparing, "search by meaning is getting ready (the tokenizer is loading)");
+        if (await VaultAsync(vault, ct) is not { } access) return Not(Kumbu.Core.Search.SemanticState.Off, $"there is no vault {vault.Value}");
+        if (!ProviderConsented(access)) return Not(Kumbu.Core.Search.SemanticState.Off, UnconsentedReason(access.Vault.EmbeddingProvider));
+        if (access.Vault.EmbeddingProvider == Search.Byok.Provider && catalog.OwnerInactive(access.Id))
+            return Not(Kumbu.Core.Search.SemanticState.Off, "its owner's account is deactivated, and its owner's own key isn't used meanwhile");
+
+        (Kumbu.Core.Search.SemanticState State, string? Reason, float[]? Vector) embedded = default;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(MeaningTimeout);
+            try
+            {
+                embedded = await EmbedQueryAsync(access.Vault, text, timeout.Token);
+                break;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                embedded = (Kumbu.Core.Search.SemanticState.Off, $"its embedding provider didn't answer within {MeaningTimeout.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds, twice", null);
+            }
+        }
+
+        if (embedded.Vector is not { } query) return Not(embedded.State, embedded.Reason!);
+
+        var model = index.Providers.Resolve(access.Vault)!.Driver.ModelKey;
+        var bound = index.Bound;
+        var vectors = new Dictionary<VaultPath, float[]>();
+        foreach (var (path, (_, note)) in access.Vault.Notes)
+        {
+            if (!access.Vault.Embeddings.TryGetValue(path, out var e) || e.Model != model) continue;
+            if (e.Properties?.FirstOrDefault(p => p.Name == property) is not { } stored || stored.Vector.Length != query.Length) continue;
+            if (Kumbu.Core.Search.PropertyTexts.Of(path, note.Content, bound).FirstOrDefault(p => p.Name == property) is not { Text: { } current }
+                || Search.SearchIndex.Hash(current) != stored.Hash) continue;
+            vectors[access.ToCaller(path)] = stored.Vector;
+        }
+
+        return new(Kumbu.Core.Search.SemanticState.Ready, query, vectors, null);
+    }
+
     /// <summary>Whether the caller's searches may go to the provider of <paramref name="access"/>'s vault: her own vault's
     /// always; a shared one's once she has acknowledged the provider it has now (<c>providerSeen</c>). Fails closed: a
     /// membership without one hasn't.</summary>

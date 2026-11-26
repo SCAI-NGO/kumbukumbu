@@ -4,6 +4,7 @@ using Kumbu.Core.Calendar;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Queries;
+using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Tests.Fakes;
 using Microsoft.Extensions.Time.Testing;
@@ -431,5 +432,129 @@ public class QueryCommandTests
 
         foreach (var entry in Evaluator.FunctionReference.Concat(Evaluator.MethodReference).Concat(Evaluator.FieldReference))
             Assert.Contains(entry.Written, help);
+    }
+
+    private const string Related = """
+        ---
+        type: query
+        params:
+          topic:
+            type: text
+            required: true
+        meaning:
+          property: summary
+          text: topic
+          min: 0.5
+        ---
+        # Related
+
+        The notes whose summary is close to a topic.
+
+        ```base
+        filters:
+          and:
+            - file.inFolder("Notes")
+        views:
+          - type: table
+            name: Closest
+            order: [file.basename, closeness]
+            sort:
+              - property: closeness
+                direction: DESC
+        ```
+        """;
+
+    /// <summary>An index that gives the text's vector [1, 0] and the vectors it was given, and records each call.</summary>
+    private sealed class MeaningIndex(SemanticState state, Dictionary<string, float[]> vectors, string? reason = null) : ISearchIndex
+    {
+        public List<(VaultPath Vault, string Property, string Text)> Calls { get; } = [];
+
+        public Task<SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<MeaningResult> MeaningAsync(VaultPath vault, string property, string text, CancellationToken ct)
+        {
+            Calls.Add((vault, property, text));
+            return Task.FromResult(state == SemanticState.Ready
+                ? new MeaningResult(state, [1, 0], vectors.ToDictionary(v => VaultPath.TryParse(v.Key, out var p) ? p : throw new ArgumentException(v.Key), v => v.Value), null)
+                : new MeaningResult(state, null, new Dictionary<VaultPath, float[]>(), reason));
+        }
+    }
+
+    private static (Shell Shell, InMemoryNoteStore Store) MeaningShell(ISearchIndex? index)
+    {
+        var store = new InMemoryNoteStore(
+            ("/V/Queries/Related.md", Related),
+            ("/V/Notes/Sync.md", "---\nsummary: Offline sync conflicts\n---\n# Sync\n"),
+            ("/V/Notes/Hens.md", "---\nsummary: Hens at night\n---\n# Hens\n"),
+            ("/V/Notes/Plain.md", "# Plain\n"));
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        return (new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)), search: index), store);
+    }
+
+    [Fact]
+    public async Task Execute_ranks_by_meaning()
+    {
+        var index = new MeaningIndex(SemanticState.Ready, new() { ["/V/Notes/Sync.md"] = [1, 0], ["/V/Notes/Hens.md"] = [0.6f, 0.8f], ["/V/Queries/Related.md"] = [0, 1] });
+        var (sh, _) = MeaningShell(index);
+
+        var result = await sh.RunAsync("query execute Related --param \"topic=offline sync\"", CancellationToken.None);
+
+        Assert.Equal(ShellResult.Ok("""
+            Closest: 2 rows
+            | path | file.basename | closeness |
+            | --- | --- | --- |
+            | /V/Notes/Sync.md | Sync | 1 |
+            | /V/Notes/Hens.md | Hens | 0.6 |
+            """), result);
+        Assert.Equal([(VaultPath.TryParse("/V", out var v) ? v : default, "summary", "offline sync")], index.Calls);
+    }
+
+    [Fact]
+    public async Task Execute_without_a_provider_is_meaning_unavailable()
+    {
+        var (sh, _) = MeaningShell(null);
+
+        var result = await sh.RunAsync("query execute Related --param topic=sync", CancellationToken.None);
+
+        Assert.True(result.IsError);
+        Assert.Equal("query: /V/Queries/Related.md: meaning-unavailable: Search by meaning isn't available: search by meaning is off on this server.", result.Output);
+    }
+
+    [Fact]
+    public async Task Inspect_shows_meaning()
+    {
+        var (sh, _) = MeaningShell(null);
+
+        var shown = await sh.RunAsync("query inspect Related", CancellationToken.None);
+
+        Assert.False(shown.IsError, shown.Output);
+        Assert.Contains("\nMeaning: closeness, how close summary is to the parameter topic; at least 0.5\n", shown.Output);
+    }
+
+    [Fact]
+    public async Task Check_warns_when_as_shadows_a_property_below_the_query_folder()
+    {
+        var (sh, store) = MeaningShell(null);
+        store.Put(new StoredNote(VaultPath.TryParse("/V/Queries/Old/Rated.md", out var rated) ? rated : throw new ArgumentException(), "---\ncloseness: high\n---\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], "", Ref: WriterRef.Server));
+        // Outside the query's folder: notes elsewhere may use the word for other things.
+        store.Put(new StoredNote(VaultPath.TryParse("/V/Notes/Rated.md", out var elsewhere) ? elsewhere : throw new ArgumentException(), "---\ncloseness: low\n---\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], "", Ref: WriterRef.Server));
+
+        Assert.Equal(ShellResult.Ok("""
+            /V/Queries/Related.md: ok, 1 view (Closest), 1 parameter (topic); 1 warning
+            warning: meaning: /V/Queries/Old/Rated.md has a property closeness of its own, which the score hides in a run
+            """), await sh.RunAsync("query check Related", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_meaning_text_over_2000_is_param_value()
+    {
+        var index = new MeaningIndex(SemanticState.Ready, []);
+        var (sh, _) = MeaningShell(index);
+
+        var result = await sh.RunAsync($"query execute Related --param topic={new string('a', 2001)}", CancellationToken.None);
+
+        Assert.True(result.IsError);
+        Assert.StartsWith("query: /V/Queries/Related.md: param-value: ", result.Output);
+        Assert.Empty(index.Calls);
     }
 }

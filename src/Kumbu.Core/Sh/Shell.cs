@@ -52,7 +52,7 @@ public sealed class Shell
             new Csv(notes),
             new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks), new Similar(notes, search ?? new Search.NoSearchIndex()),
             new Html(notes), new Xml(notes),
-            new QueryCommand(notes, _now, _zone),
+            new QueryCommand(notes, _now, _zone, search ?? new Search.NoSearchIndex()),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             .. pixels is null || files is null ? Array.Empty<ICommand>() : [new PdfImages(notes, pixels, files, mover.Time)],
             new History(notes, () => writer.Now, labels), new Blame(notes, labels), new DiffCommand(notes, _checkpoints, labels), new Restore(writer, _checkpoints, files),

@@ -98,7 +98,7 @@ public sealed partial class Query
         if (Meaning is { } m)
         {
             MeaningText(self);
-            notes = Scored(m, meaning ?? throw new QueryError("meaning-unavailable", "The query ranks by meaning, and no vectors were given for it.", 0), notes);
+            notes = Scored(m, meaning ?? throw new QueryError("meaning-unavailable", "The query ranks by meaning, and no vectors were given for it.", 0), notes, ct);
         }
 
         var (base_, name) = view is null
@@ -152,11 +152,12 @@ public sealed partial class Query
     // Each note once, its score set as the property named by As (null without a vector), so that one file is one
     // QueryNote for the whole run: the vault's caches key by the instance. A file that isn't a note has no properties
     // and no vector, so it stays as it is, or goes with Min.
-    private static List<QueryNote> Scored(QueryMeaning meaning, MeaningVectors vectors, IEnumerable<QueryNote> notes)
+    private static List<QueryNote> Scored(QueryMeaning meaning, MeaningVectors vectors, IEnumerable<QueryNote> notes, CancellationToken ct)
     {
         var scored = new List<QueryNote>();
         foreach (var note in notes)
         {
+            ct.ThrowIfCancellationRequested();
             var score = note.IsNote && vectors.ByPath.TryGetValue(note.Path, out var vector) ? Cosine(vectors.Query, vector) : null;
             if (meaning.Min is { } min && !(score >= min)) continue;
             if (!note.IsNote)
@@ -319,7 +320,7 @@ public sealed partial class Query
         foreach (var key in map.Children.Keys)
         {
             if (key is not YamlScalarNode { Value: "property" or "text" or "min" or "as" })
-                throw Wrong($"meaning has '{key}', which is none of property, text, min and as.");
+                throw Wrong($"meaning has '{(key as YamlScalarNode)?.Value ?? ""}', which is none of property, text, min and as.");
         }
 
         YamlScalarNode? Scalar(string key) => map.Children.TryGetValue(key, out var node)

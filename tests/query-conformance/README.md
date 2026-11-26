@@ -106,6 +106,8 @@ offline:             # optional: what the offline engine gives for every run ins
   error: meaning-offline
 ```
 
+A score is the cosine rounded to six decimals, in both engines. `text` names a parameter when it is a plain scalar, and that parameter must be of type text; any other scalar (quoted, or a block) is the literal text.
+
 The server's runner passes `vectors` to every run, and the offline runner holds every run to `offline` when the case has it. A query whose `meaning:` can't be read fails at reading on both engines, so a case of such errors needs no `offline`.
 
 `source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian. Where Obsidian gives another result, the case takes Obsidian's ([ADR 0039](../../docs/adr/0039-bases-follow-obsidian.md)).

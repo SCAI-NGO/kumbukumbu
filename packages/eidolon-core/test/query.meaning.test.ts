@@ -25,3 +25,11 @@ test("a query with meaning reads it, gives its text, and checks without vectors"
   expect(codeOf(() => query.meaningText(new Map([["year", ["1980"]]])))).toBe("unknown-param");
   expect(query.check("2026-01-01T12:00:00")).toEqual([]);
 });
+
+test("a blank text is param-value, and a literal text is the text whatever the arguments", () => {
+  expect(codeOf(() => query.meaningText(new Map([["topic", ["   "]]])))).toBe("param-value");
+  const literal = "---\ntype: query\nmeaning:\n  property: description\n  text: \"offline sync\"\n---\n```base\n```\n";
+  const fixed = Query.read(new QueryNote("L.md", literal, Properties.read(literal)));
+  expect(fixed.meaning).toEqual({ property: "description", param: null, text: "offline sync", min: null, as: "closeness" });
+  expect(fixed.meaningText(new Map())).toBe("offline sync");
+});

@@ -389,14 +389,14 @@ public class SkillsCommandTests
         Assert.False(result.IsError, result.Output);
         Assert.Equal(
             [
-                // Words over name and description, words over the body ("# Notes"): first in both, below 2/61 as the system skills that also
-                // say "notes" share the lower ranks, so 0.0484.
-                "1. release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.  score 0.0484",
+                // Words over name and description first, words over the body ("# Notes") second, after create-query, which says
+                // "notes" more often; below 1/61 + 1/62 as the system skills that also say "notes" share the lower ranks, so 0.0482.
+                "1. release-notes (/Work/_skills/release-notes, last changed by claude): Drafts release notes.  score 0.0482",
                 // The system skills say "notes" in their descriptions, some more often than others.
                 "2. ingest-attachments (system): " + Description("ingest-attachments") + "  score 0.0481",
                 "3. synthesize-knowledge (system): " + Description("synthesize-knowledge") + "  score 0.0479",
                 "4. project-memory (system): " + Description("project-memory") + "  score 0.0472",
-                "5. create-query (system): " + Description("create-query") + "  score 0.0466",
+                "5. create-query (system): " + Description("create-query") + "  score 0.0469",
                 "6. kumbu-binary-upload (system): " + Description("kumbu-binary-upload") + "  score 0.0455",
                 // Meaning alone, first in the vault Skills: 1/61.
                 "7. write-as-alice (/Skills/write-as-alice, last changed by claude): Writes posts in Alice's voice.  score 0.0164",
