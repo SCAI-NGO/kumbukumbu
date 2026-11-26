@@ -498,7 +498,8 @@ test("graph --without-tag: a tagged note leaves the local graph, the paths and t
     isError: false,
   });
   expect(await mcp.sh(`graph --orphans /Work/${folder}`)).toEqual({ text: p("Lone"), isError: false });
-  expect(await mcp.sh(`graph --orphans /Work/${folder} --without-tag synthesis`)).toEqual({ text: "(no notes without links)", isError: false });
+  // T is linked only by the tagged H: under the filter it is an orphan, as --hubs counts it (ADR 0032).
+  expect(await mcp.sh(`graph --orphans /Work/${folder} --without-tag synthesis`)).toEqual({ text: p("T"), isError: false });
   expect(await mcp.sh(`graph --hubs /Work/${folder}`)).toEqual({
     text: [`3  ${p("H")}  (1 in, 2 out)`, `2  ${p("S")}  (0 in, 2 out)`, `1  ${p("B")}  (1 in, 0 out)`, `1  ${p("T")}  (1 in, 0 out)`, `0  ${p("Lone")}  (0 in, 0 out)`].join("\n"),
     isError: false,
@@ -533,10 +534,12 @@ test("synthesize-knowledge: a system skill in the handshake and skills ls, read 
   expect(text).toContain("`graph --path <A> <C> --without-tag synthesis/hypothesis`");
   expect(text).toContain("Explore: `similar <A> --unlinked --outside <A's silo> --without-tag synthesis/hypothesis`");
   expect(text).toContain("`semsearch --outside <A's silo> --without-tag synthesis/hypothesis <B term>`");
-  // At most five, each with why it could be wrong; one report note, tagged and dated; the inference marked; A and C kept.
+  // At most five, each with why it could be wrong; nothing found, no note unless the user wants one; else one report
+  // note, tagged and dated; the inference marked; A and C kept.
   expect(text).toContain("Keep at most five hypotheses");
   expect(text).toContain("say why it could be wrong");
-  expect(text).toContain("Write one report note");
+  expect(text).toContain("Then write no report note, but offer to keep the result as one: the user decides.");
+  expect(text).toContain("With at least one hypothesis, or when the user asked for it, write one report note");
   expect(text).toContain("`source: synthesized` and `tags: [synthesis/hypothesis]`");
   expect(text).toContain("a review date two weeks out");
   expect(text).toContain("> [!inferred]");
