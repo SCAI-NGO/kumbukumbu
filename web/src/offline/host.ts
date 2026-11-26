@@ -48,6 +48,8 @@ export function runOfflineHost(queryClient: QueryClient): () => void {
     useOfflineMode.subscribe(() => follow(queryClient)),
     useOfflineCopy.subscribe((s, before) => {
       follow(queryClient);
+      // Locked: what the app read from it (or online, in the session it stood for) goes from memory too.
+      if (s.mirror === null && before.mirror !== null) queryClient.clear();
       // Removed or wiped: another user's copy may still be here.
       if (s.header === null && before.header !== null) lookForCopies();
     }),

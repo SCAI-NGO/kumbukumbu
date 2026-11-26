@@ -11,6 +11,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { json, noContent, renderApp } from "../test/app";
 import { useOfflineCopy } from "./copy";
+import { runOfflineHost } from "./host";
 import { lockCopy, onBeforeLock, useOfflineMode } from "./mode";
 import { browserPorts } from "./ports";
 import { endPendingSignOut, signOutOffline, signOutPending, unlockOffline } from "./unlock";
@@ -105,6 +106,17 @@ describe("an offline sign-in after a session ended in the tab", () => {
     expect(queryClient.getQueryData(["note", "/Home/Diary.md"])).toBeUndefined();
     expect(useEditor.getState().draft).not.toBeNull();
   });
+});
+
+test("locking the copy forgets what the app read", async () => {
+  await adasCopy();
+  const queryClient = new QueryClient();
+  const stop = runOfflineHost(queryClient);
+  expect(await unlockOffline("ada", "pw")).toBe(true);
+  queryClient.setQueryData(["tree", "Home"], [{ path: "/Home/Diary.md" }]);
+  await lockCopy();
+  expect(queryClient.getQueryData(["tree", "Home"])).toBeUndefined();
+  stop();
 });
 
 test("an offline unlock locks after the idle limit; the editor's text goes into the copy first", async () => {
