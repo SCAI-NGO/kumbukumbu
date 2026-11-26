@@ -47,7 +47,8 @@ Records are public. A security decision says what we do and why, never which con
 | [0036](0036-meaning-enters-a-query-through-its-frontmatter.md) | Meaning enters a query through its frontmatter, as a score the base can read | Accepted |
 | [0037](0037-eidolon-is-published-from-the-kumbu-repository.md) | Eidolon is published from the Kumbu² repository, under the LGPL | Proposed |
 | [0038](0038-what-1-0-promises.md) | What Kumbu² 1.0 promises | Accepted |
-| [0039](0039-bases-follow-obsidian.md) | Bases follow Obsidian's semantics; Kumbu² only adds diagnostics | Accepted |
+| [0039](0039-bases-follow-obsidian.md) | Bases follow Obsidian's semantics; Kumbu² only adds diagnostics | Superseded in part by [0041](0041-kumbu-doesnt-copy-obsidians-bugs.md) |
 | [0040](0040-query-work-is-bounded-and-regexes-are-a-common-subset.md) | A query's work is bounded, and its regular expressions are a common subset | Accepted |
+| [0041](0041-kumbu-doesnt-copy-obsidians-bugs.md) | Kumbu² doesn't copy Obsidian's bugs | Accepted |
 
 0002 to 0016 were recorded after the fact, on 2026-11-23, from the decisions of the 0.7.0 weekend; their dates are the days they were taken.

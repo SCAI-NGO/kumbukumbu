@@ -4,6 +4,8 @@ Date: 2026-11-25. Status: decided for 0.8.0 on `release/0.8.0`, under the mainta
 
 The source is an automated run of the conformance cases against Obsidian 1.15.1, which read Obsidian's own Bases API over CDP (Kumbu² note `/SWE/Kumbu/0.8.0/Obsidian cross-checks.md`). It is completed by Obsidian's reference: obsidian.md/help/bases/functions and /syntax. Points the run hasn't settled yet are marked **probe** and listed in `/SWE/Kumbu/0.8.0/Obsidian probes 2026-11-25.md`. Until a probe answers one, the reading given here holds and its case stays `source: spec`.
 
+Decisions 5, 6, 11 and 19 are *changed* by [Bases without Obsidian's bugs](2026-11-26-bases-without-obsidian-bugs-design.md) (2026-11-26, ADR 0041): Kumbu² doesn't copy what is plainly an Obsidian bug.
+
 This changes the queries spec of 2026-11-24 in §2 decision 6 (one rule for failures), §3 (values and types), §4 (the language and its limits) and §7 (which files a query runs over). Those sections now point here.
 
 ## 1. Rows
