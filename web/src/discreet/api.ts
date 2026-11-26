@@ -2,6 +2,8 @@
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, call } from "../api/client";
 import { vaultOf } from "../api/paths";
+import { enginesReconnected } from "../offline/engines";
+import { contact } from "../offline/mode";
 import { forgetLastNote, lastNote } from "../shell/lastNote";
 import { useSession } from "../state/session";
 import { useDiscreet } from "./state";
@@ -63,6 +65,13 @@ export function useMarkDiscreet() {
       const userId = useSession.getState().user?.id;
       const kept = userId ? lastNote(userId) : null;
       if (discreet && kept && vaultOf(kept) === vault) forgetLastNote(userId);
+    },
+    // This tab's socket stays open through its own mark, so no reconnect brings the copy in line: the contact's
+    // answer no longer lists the vault, and its copy goes now (offline mode design §4.6), the engines after it.
+    onSuccess: async (_view, { discreet }) => {
+      if (!discreet) return;
+      await contact();
+      enginesReconnected();
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["vaults"] }),
   });
