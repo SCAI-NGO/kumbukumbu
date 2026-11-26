@@ -3,6 +3,8 @@ import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SealedMirror } from "eidolon-core/store/mirror";
+import { useOfflineCopy } from "../offline/copy";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 import { safeNext } from "./SignIn";
@@ -41,6 +43,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useOfflineCopy.getState().clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   useSession.getState().reset();
@@ -204,6 +207,21 @@ describe("Consent", () => {
     await waitFor(() => expect(path(router)).toBe("/signin?next=%2Fconsent%3Frequest%3Dr1"));
     expect(fetch.mock.calls.some(([r]) => (r as Request).method === "DELETE" && (r as Request).url.endsWith("/api/session"))).toBe(true);
     expect(localStorage.getItem("kumbu.lastNote.u1")).toBeNull();
+  });
+
+  it("its sign-out locks the offline copy in every tab", async () => {
+    const mirror = { header: { copy: "c1", slot: { id: "s1", token: "tok-ada" } }, locked: false, lock: vi.fn(), lockEverywhere: vi.fn() };
+    useOfflineCopy.getState().set(mirror.header as never, mirror as unknown as SealedMirror);
+    let signedOut = false;
+    api({
+      "GET /api/oauth/requests/r1": () => json(404, { error: otherAccount, type: "other-account" }),
+      "GET /api/session": () => (signedOut ? json(401, { error: "Sign in first." }) : json(200, { user, previousSignInAt: null })),
+      "DELETE /api/session": () => ((signedOut = true), noContent()),
+    });
+    renderApp("/consent?request=r1");
+    await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(mirror.lockEverywhere).toHaveBeenCalled());
+    expect(useOfflineCopy.getState().mirror).toBeNull();
   });
 
   it("an expired request offers no sign-out", async () => {
