@@ -71,22 +71,24 @@ export default function SignIn() {
       }
     },
     onSuccess: (view) => {
-      if (view === "offline") {
-        // Who signed in is all this device knows offline; the session view comes once it is back online.
-        signedIn({ user: { id: "", username, display: username, role: "user" }, previousSignInAt: null });
-        navigate(safeNext(params.get("next")), { replace: true });
-        return;
-      }
       // Nothing cached from an earlier session (maybe another user's) outlives this sign-in.
       queryClient.clear();
-      queryClient.setQueryData(["session"], view);
       let next = safeNext(params.get("next"));
       // Someone else than the user whose session ended here: their notes, unsaved text and paths (content too) go.
+      // Offline the name is as typed; usernames don't differ by case alone.
       const previous = useSession.getState().previousUser;
-      if (previous && previous !== view.user.username) {
+      const who = view === "offline" ? username : view.user.username;
+      if (previous && previous.toLowerCase() !== who.toLowerCase()) {
         useEditor.getState().reset();
         if (next.startsWith("/notes/") || next.startsWith("/n/")) next = "/";
       }
+      if (view === "offline") {
+        // Who signed in is all this device knows offline; the session view comes once it is back online.
+        signedIn({ user: { id: "", username, display: username, role: "user" }, previousSignInAt: null });
+        navigate(next, { replace: true });
+        return;
+      }
+      queryClient.setQueryData(["session"], view);
       // The offline copy's idle limit follows it (offline mode design §3a).
       rememberSignIn(remember);
       signedIn(view);

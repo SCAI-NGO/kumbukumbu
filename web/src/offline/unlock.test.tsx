@@ -2,10 +2,12 @@
 // Unlocking and locking the offline copy (offline mode design §3a): the sign-in form offline, the idle lock, and a
 // sign-out offline that the server hears of later.
 import "fake-indexeddb/auto";
-import { screen } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MirrorCopies } from "eidolon-core/store/mirror";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { json, noContent, renderApp } from "../test/app";
 import { useOfflineCopy } from "./copy";
@@ -17,10 +19,10 @@ const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("ba
 const vaults = [{ id: "v1", tag: "t1", canWrite: true, pending: false }];
 
 /** A copy of Ada's in this browser's IndexedDB, as turning offline on leaves it; locked again. */
-async function adasCopy(idleMs = 60_000) {
+async function adasCopy(idleMs = 60_000, username = "Ada", userId = "u1") {
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s1", token: "tok", key, vaults }))));
   const copies = new MirrorCopies(await browserPorts());
-  const mirror = await copies.create({ userId: "u1", username: "Ada", password: "pw", label: "Test", idleMs });
+  const mirror = await copies.create({ userId, username, password: "pw", label: "Test", idleMs });
   mirror.lock();
   vi.unstubAllGlobals();
 }
@@ -31,6 +33,7 @@ afterEach(async () => {
   await lockCopy();
   useOfflineCopy.getState().clear();
   useSession.getState().reset();
+  useEditor.getState().reset();
   localStorage.clear();
   const ports = await browserPorts();
   await ports.storage.write({ removePrefix: [""] });
@@ -60,6 +63,47 @@ describe("the sign-in form offline", () => {
     await userEvent.type(screen.getByLabelText("Password"), "nope");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("The username or password is wrong, or this device keeps no notes of this user.")).toBeInTheDocument();
+  });
+});
+
+describe("an offline sign-in after a session ended in the tab", () => {
+  /** Alice's session ended here (her copy locked when idle), with her note read and unsaved text; Bob's copy is on the device. */
+  async function aliceWasHere() {
+    await adasCopy(60_000, "Bob", "u2");
+    useSession.getState().signedIn({ user: { id: "u1", username: "alice", display: "Alice", role: "user" }, previousSignInAt: null });
+    useSession.getState().end();
+    useEditor.getState().setDraft({ username: "alice", path: "/Home/Diary.md", text: "Dear diary", version: "v1" });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["note", "/Home/Diary.md"], { path: "/Home/Diary.md", content: "Dear diary" });
+    useOfflineMode.getState().failed();
+    return queryClient;
+  }
+
+  async function signsInOffline(username: string, queryClient: QueryClient) {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    const router = renderApp("/signin?next=%2Fnotes%2FHome%2FDiary.md", queryClient);
+    await userEvent.type(await screen.findByLabelText("Username"), username);
+    await userEvent.type(screen.getByLabelText("Password"), "pw");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(useSession.getState().user?.username).toBe(username));
+    return router;
+  }
+
+  test("someone else starts afresh: nothing the app read, no unsaved text, not the note they were on", async () => {
+    const queryClient = await aliceWasHere();
+    const router = await signsInOffline("bob", queryClient);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(queryClient.getQueryData(["note", "/Home/Diary.md"])).toBeUndefined();
+    expect(useEditor.getState().draft).toBeNull();
+  });
+
+  test("the same person comes back to the note they were on", async () => {
+    const queryClient = await aliceWasHere();
+    useSession.setState({ previousUser: "bob" });
+    const router = await signsInOffline("Bob", queryClient);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Diary.md"));
+    expect(queryClient.getQueryData(["note", "/Home/Diary.md"])).toBeUndefined();
+    expect(useEditor.getState().draft).not.toBeNull();
   });
 });
 
