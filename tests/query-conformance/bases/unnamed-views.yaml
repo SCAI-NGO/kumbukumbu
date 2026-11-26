@@ -1,6 +1,5 @@
 description: A view without a name makes the whole base an error, its named views too.
 source: obsidian 1.15.1
-pending: [cs, ts]
 notes:
   Ann.md: |
     ---
@@ -18,5 +17,10 @@ base: |
       order: [file.basename, age]
       sort:
         - property: age
+    - type: table
+      name: Named
+      order: [file.basename]
 runs:
   - error: base
+  - view: Named
+    error: base

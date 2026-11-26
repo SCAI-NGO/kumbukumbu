@@ -1,0 +1,15 @@
+description: A group in the base's own filters that holds more than one of and, or and not makes the whole base an error.
+source: obsidian 1.15.1
+notes:
+  a.md: ""
+base: |
+  filters:
+    and: [file.name == "a.md"]
+    or: [true]
+  views:
+    - type: table
+      name: Fine
+      order: [file.name]
+runs:
+  - view: Fine
+    error: base

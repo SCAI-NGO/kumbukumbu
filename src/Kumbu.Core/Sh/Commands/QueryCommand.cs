@@ -76,7 +76,10 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           ```
         The base block is Obsidian's Bases, unchanged: a parameter is read as this.<name>, so the
         query renders in Obsidian too. Filters: an expression, or and/or/not with a list; views:
-        order (the columns), sort, limit. Columns: file.<field>, formula.<name>, or a property.
+        order (the columns), sort, limit. Columns: file.<field>, formula.<name>, or a property. Every
+        view needs a name, or the whole base is an error; a filter group has exactly one of and, or,
+        not. A sort key sorts only with direction ASC or DESC, in capitals: without one, or with asc,
+        it sorts nothing, as in Obsidian, and query check warns.
 
         The language (JavaScript's operators: == != < <= > >= + - * / % && || !). && || and ! give
         true or false; a text that reads as a number compares as that number, and - * / % read it

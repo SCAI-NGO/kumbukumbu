@@ -1,0 +1,24 @@
+description: A view without a name in one of a query note's base blocks makes the query an error, whichever view runs.
+source: obsidian 1.15.1
+query: Queries/People.md
+notes:
+  Queries/People.md: |
+    ---
+    type: query
+    ---
+    ```base
+    views:
+      - type: table
+        name: Names
+        order: [file.basename]
+    ```
+
+    ```base
+    views:
+      - type: table
+        order: [file.basename]
+    ```
+runs:
+  - error: base
+  - view: Names
+    error: base

@@ -170,7 +170,7 @@ test("a long cycle gives an error value at once", () => {
 const notes = (count: number) => Array.from({ length: count }, (_, i) => new QueryNote(`n${String(i).padStart(3, "0")}.md`, "", Properties.read("")));
 
 test("a sort by random() orders the rows by the number each shows", () => {
-  const yaml = "formulas:\n  r: random()\nviews:\n  - type: table\n    order: [formula.r]\n    sort:\n      - property: formula.r\n";
+  const yaml = "formulas:\n  r: random()\nviews:\n  - type: table\n    name: Random\n    order: [formula.r]\n    sort:\n      - { property: formula.r, direction: ASC }\n";
   const shown = Base.parse(yaml).run(null, notes(50), null, NOW).rows.map((r) => (r.cells[0] as { number: number }).number);
   expect(shown).toEqual([...shown].sort((a, b) => a - b));
 });
@@ -191,7 +191,7 @@ test("a run whose notes each stay within their steps still ends at the steps of 
 });
 
 test("a run whose cells each stay within their size still ends at the size of the run", () => {
-  const yaml = `formulas:\n  big: '"x".repeat(900000)'\nviews:\n  - type: table\n    order: [formula.big]\n`;
+  const yaml = `formulas:\n  big: '"x".repeat(900000)'\nviews:\n  - type: table\n    name: Big\n    order: [formula.big]\n`;
   expect(Base.parse(yaml).run(null, notes(1), null, NOW).rows).toHaveLength(1);
   expect(thrown(() => Base.parse(yaml).run(null, notes(12), null, NOW))).toMatchObject({ code: "too-large", message: expect.stringContaining("over its notes") });
 });
@@ -217,4 +217,10 @@ test("a lambda that asks for a long list of tags again for each takes no longer 
   expect(value).toEqual({ kind: "number", number: 20_000 });
   // 25.8 s when each access built the list again; a pass of 20,000 items takes milliseconds.
   expect(performance.now() - started).toBeLessThan(5000);
+});
+
+test("a sort direction that sorts nothing is a warning, and the query still runs", () => {
+  const yaml = "views:\n  - type: table\n    name: Sorts\n    sort:\n      - { property: file.name, direction: asc }\n";
+  const { warnings } = Base.parse(yaml).run(null, [note], null, NOW);
+  expect(warnings).toEqual([{ code: "sort-direction", message: 'sort direction "asc" sorts nothing; use ASC or DESC', expression: "file.name", position: 0 }]);
 });

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A base in Obsidian's format (a .base file, or a ```base block of a query note): filters, formulas and views with their
-// columns, sort and limit (Kumbu.Core Queries/Base). A view is checked when it runs, so one broken view or formula doesn't
-// take the others down. The cases are in tests/query-conformance/bases.
+// columns, sort and limit (Kumbu.Core Queries/Base). A view without a name or a filter group that isn't one makes the whole
+// base an error (as in Obsidian); any other fault is found when a view runs, so one broken view or formula doesn't take
+// the others down. The cases are in tests/query-conformance/bases.
 import { Evaluator, order as ordered, truthy, type Scope } from "./evaluator";
 import { QueryError, inExpression, type QueryWarning } from "./errors";
 import type { Expr } from "./expr";
@@ -51,7 +52,7 @@ export class Base {
   ) {}
 
   get viewNames(): string[] {
-    return this.views.map((v, i) => scalarOf(v, "name") ?? `View ${i + 1}`);
+    return this.views.map((v) => scalarOf(v, "name")!);
   }
 
   /** Reads a base; throws `QueryError` (code `base`) when it isn't one. */
@@ -74,12 +75,23 @@ export class Base {
     const viewsNode = child(root, "views");
     if (viewsNode !== undefined && !(viewsNode.kind === "seq" && viewsNode.items.every((v) => v.kind === "map")))
       throw invalid("views is not a list of views.");
-    return new Base(child(root, "filters"), formulas, (viewsNode?.items ?? []) as YamlMap[]);
+    const views = (viewsNode?.items ?? []) as YamlMap[];
+    views.forEach((v, i) => {
+      if ((scalarOf(v, "name") ?? "") === "") throw invalid(`Missing or invalid "name" in view ${i + 1}`);
+    });
+
+    const all = child(root, "filters");
+    if (all !== undefined) checkGroups(all, 0);
+    for (const view of views) {
+      const own = child(view, "filters");
+      if (own !== undefined) checkGroups(own, 0);
+    }
+
+    return new Base(all, formulas, views);
   }
 
   /** Runs a view (by name; the first when null) over the notes; `now` is "yyyy-MM-ddTHH:mm:ss". */
   run(viewName: string | null, notes: Iterable<QueryNote>, self: QueryNote | null, now: string): QueryResult {
-    // A view without a name is called by the name viewNames gives it.
     const names = this.viewNames;
     const index = viewName === null ? 0 : names.indexOf(viewName);
     if (index < 0) throw new QueryError("unknown-view", `The base has no view '${viewName}'.`, 0);
@@ -96,12 +108,21 @@ export class Base {
     const columns = orderNode?.kind === "seq" ? orderNode.items.map(textOf) : ["file.name"];
     const cells = columns.map((c) => column(c, evaluator));
     const sortNode = view === null ? undefined : child(view, "sort");
+    const sortWarnings: QueryWarning[] = [];
+    // Only ASC and DESC sort; a key with another direction, or none, is skipped as Obsidian skips it.
     const sort = sortNode?.kind === "seq"
-      ? sortNode.items.map((k) => {
-        const property = k.kind === "map" ? scalarOf(k, "property") : null;
-        if (k.kind !== "map" || property === null) throw invalid("A sort key needs a property.");
-        return { expr: column(property, evaluator), descending: scalarOf(k, "direction")?.toUpperCase() === "DESC" };
-      })
+      ? sortNode.items
+        .map((k) => {
+          const property = k.kind === "map" ? scalarOf(k, "property") : null;
+          if (k.kind !== "map" || property === null) throw invalid("A sort key needs a property.");
+          return { property, direction: scalarOf(k, "direction") };
+        })
+        .filter((k) => {
+          if (k.direction === "ASC" || k.direction === "DESC") return true;
+          if (k.direction !== null) sortWarnings.push({ code: "sort-direction", message: `sort direction "${k.direction}" sorts nothing; use ASC or DESC`, expression: k.property, position: 0 });
+          return false;
+        })
+        .map((k) => ({ expr: column(k.property, evaluator), descending: k.direction === "DESC" }))
       : [];
     const limitText = view === null ? null : scalarOf(view, "limit");
     let limit = Number.POSITIVE_INFINITY;
@@ -125,12 +146,22 @@ export class Base {
       view: name,
       columns,
       rows: rows.slice(0, limit).map((r) => ({ note: r.scope.note, cells: cells.map((c) => evaluator.evaluate(c, r.scope)) })),
-      warnings: evaluator.warnings,
+      warnings: [...evaluator.warnings, ...sortWarnings],
     };
   }
 }
 
-// A filter is an expression, or a group: and (all), or (one), not (none of its items). Null is an error, which drops the
+// A filter is an expression or a group of exactly one of and, or and not, whose items are filters, as Obsidian reads it.
+function checkGroups(node: YamlNode, depth: number): void {
+  if (depth > ExpressionParser.MAX_DEPTH) throw invalid("The filters are nested too deeply.");
+  if (node.kind === "scalar") return;
+  const entry = node.kind === "map" && node.entries.length === 1 ? node.entries[0]! : null;
+  if (entry === null || entry[0].kind !== "scalar" || !["and", "or", "not"].includes(entry[0].value) || entry[1].kind !== "seq")
+    throw invalid('"filters" may only have one of an "and", "or", or "not" keys');
+  for (const item of entry[1].items) checkGroups(item, depth + 1);
+}
+
+// A filter is an expression, or a group (Base.parse has checked its shape): and (all), or (one), not (none of its items). Null is an error, which drops the
 // row whatever the group, as && and || pass an error on; the items are read in order, as they read theirs.
 function compileFilter(node: YamlNode, evaluator: Evaluator, depth: number): (scope: Scope) => boolean | null {
   if (depth > ExpressionParser.MAX_DEPTH) throw invalid("The filters are nested too deeply.");
@@ -143,13 +174,9 @@ function compileFilter(node: YamlNode, evaluator: Evaluator, depth: number): (sc
     };
   }
 
-  const entry = node.kind === "map" && node.entries.length === 1 ? node.entries[0]! : null;
-  if (entry === null || entry[0].kind !== "scalar" || entry[1].kind !== "seq")
-    throw invalid("A filter group is and, or or not, with a list of filters.");
-
-  const kind = entry[0].value;
-  const parts = entry[1].items.map((i) => compileFilter(i, evaluator, depth + 1));
-  if (kind !== "and" && kind !== "or" && kind !== "not") throw invalid(`'${kind}' is no filter group: use and, or or not.`);
+  const [key, value] = (node as YamlMap).entries[0]!;
+  const kind = (key as Extract<YamlNode, { kind: "scalar" }>).value;
+  const parts = (value as Extract<YamlNode, { kind: "seq" }>).items.map((i) => compileFilter(i, evaluator, depth + 1));
 
   // and is settled by the first item that fails, or and not by the first that holds.
   const settles = kind !== "and";

@@ -30,7 +30,7 @@ public class BaseTests
     [Fact]
     public void A_sort_by_random_orders_the_rows_by_the_number_each_shows()
     {
-        var yaml = "formulas:\n  r: random()\nviews:\n  - type: table\n    order: [formula.r]\n    sort:\n      - property: formula.r\n";
+        var yaml = "formulas:\n  r: random()\nviews:\n  - type: table\n    name: Random\n    order: [formula.r]\n    sort:\n      - { property: formula.r, direction: ASC }\n";
 
         var shown = Base.Parse(yaml).Run(null, Notes(50), null, DateTime.UnixEpoch, TestContext.Current.CancellationToken).Rows.Select(r => ((NumberValue)r.Cells[0]).Number).ToList();
 
@@ -52,7 +52,7 @@ public class BaseTests
     [Fact]
     public void A_run_whose_cells_each_stay_within_their_size_still_ends_at_the_size_of_the_run()
     {
-        var yaml = "formulas:\n  big: '\"x\".repeat(900000)'\nviews:\n  - type: table\n    order: [formula.big]\n";
+        var yaml = "formulas:\n  big: '\"x\".repeat(900000)'\nviews:\n  - type: table\n    name: Big\n    order: [formula.big]\n";
 
         Assert.Single(Base.Parse(yaml).Run(null, Notes(1), null, DateTime.UnixEpoch, TestContext.Current.CancellationToken).Rows);
         var e = Assert.Throws<QueryError>(() => Base.Parse(yaml).Run(null, Notes(12), null, DateTime.UnixEpoch, TestContext.Current.CancellationToken));

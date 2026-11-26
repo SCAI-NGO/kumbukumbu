@@ -12,7 +12,8 @@ public sealed record QueryRow(QueryNote Note, IReadOnlyList<Value> Cells);
 public sealed record QueryResult(string View, IReadOnlyList<string> Columns, IReadOnlyList<QueryRow> Rows, IReadOnlyList<QueryWarning> Warnings);
 
 /// <summary>A base in Obsidian's format (a <c>.base</c> file, or a <c>```base</c> block of a query note): filters,
-/// formulas and views with their columns, sort and limit. A view is checked when it runs, so one broken view or formula
+/// formulas and views with their columns, sort and limit. A view without a name or a filter group that isn't one makes the
+/// whole base an error (as in Obsidian); any other fault is found when a view runs, so one broken view or formula
 /// doesn't take the others down. The cases are in <c>tests/query-conformance/bases</c>.</summary>
 public sealed class Base
 {
@@ -54,7 +55,7 @@ public sealed class Base
         return false;
     }
 
-    public IReadOnlyList<string> ViewNames => views.Select((v, i) => Scalar(v, "name") ?? $"View {i + 1}").ToList();
+    public IReadOnlyList<string> ViewNames => views.Select(v => Scalar(v, "name")!).ToList();
 
     /// <summary>Reads a base; throws <see cref="QueryError"/> (code <c>base</c>) when it isn't one.</summary>
     public static Base Parse(string yaml)
@@ -87,13 +88,34 @@ public sealed class Base
             YamlSequenceNode v when v.Children.All(c => c is YamlMappingNode) => v.Children.Cast<YamlMappingNode>().ToList(),
             _ => throw Invalid("views is not a list of views."),
         };
+        for (var i = 0; i < views.Count; i++)
+        {
+            if (Scalar(views[i], "name") is not { Length: > 0 }) throw Invalid($"Missing or invalid \"name\" in view {i + 1}");
+        }
+
+        if (Child(map, "filters") is { } all) CheckGroups(all, 0);
+        foreach (var view in views)
+        {
+            if (Child(view, "filters") is { } own) CheckGroups(own, 0);
+        }
+
         return new Base(map, Child(map, "filters"), formulas, views);
+    }
+
+    // A filter is an expression or a group of exactly one of and, or and not, whose items are filters, as Obsidian reads it.
+    private static void CheckGroups(YamlNode node, int depth)
+    {
+        if (depth > ExpressionParser.MaxDepth) throw Invalid("The filters are nested too deeply.");
+        if (node is YamlScalarNode) return;
+        if (node is not YamlMappingNode { Children.Count: 1 } group
+            || group.Children.Single() is not (YamlScalarNode { Value: "and" or "or" or "not" }, YamlSequenceNode items))
+            throw Invalid("\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys");
+        foreach (var item in items.Children) CheckGroups(item, depth + 1);
     }
 
     /// <summary>Runs a view (by name; the first when null) over the notes; a cancelled token stops it at the next row.</summary>
     public QueryResult Run(string? viewName, IEnumerable<QueryNote> notes, QueryNote? self, DateTime now, CancellationToken ct = default)
     {
-        // A view without a name is called by the name ViewNames gives it.
         var index = viewName is null ? 0 : ViewNames.ToList().IndexOf(viewName);
         if (index < 0) throw new QueryError("unknown-view", $"The base has no view '{viewName}'.", 0);
         var view = views.Count > 0 ? views[index] : null;
@@ -106,10 +128,19 @@ public sealed class Base
 
         var columns = view is not null && Child(view, "order") is YamlSequenceNode order ? order.Children.Select(Text).ToList() : ["file.name"];
         var cells = columns.Select(c => Column(c, evaluator)).ToList();
+        var sortWarnings = new List<QueryWarning>();
+        // Only ASC and DESC sort; a key with another direction, or none, is skipped as Obsidian skips it.
         var sort = view is not null && Child(view, "sort") is YamlSequenceNode keys
             ? keys.Children.Select(k => k is YamlMappingNode m && Scalar(m, "property") is { } p
-                ? (Expr: Column(p, evaluator), Descending: string.Equals(Scalar(m, "direction"), "DESC", StringComparison.OrdinalIgnoreCase))
-                : throw Invalid("A sort key needs a property.")).ToList()
+                    ? (Property: p, Direction: Scalar(m, "direction"))
+                    : throw Invalid("A sort key needs a property."))
+                .Where(k =>
+                {
+                    if (k.Direction is "ASC" or "DESC") return true;
+                    if (k.Direction is not null) sortWarnings.Add(new QueryWarning("sort-direction", $"sort direction \"{k.Direction}\" sorts nothing; use ASC or DESC", k.Property, 0));
+                    return false;
+                })
+                .Select(k => (Expr: Column(k.Property, evaluator), Descending: k.Direction == "DESC")).ToList()
             : [];
         var limit = view is not null && Scalar(view, "limit") is { } l
             ? int.TryParse(l, out var n) && n >= 0 ? n : throw Invalid("limit is not a whole number.")
@@ -137,10 +168,10 @@ public sealed class Base
                 ct.ThrowIfCancellationRequested();
                 return new QueryRow(r.Scope.Note, cells.Select(c => evaluator.Evaluate(c, r.Scope)).ToList());
             })
-            .ToList(), evaluator.Warnings);
+            .ToList(), [.. evaluator.Warnings, .. sortWarnings]);
     }
 
-    // A filter is an expression, or a group: and (all), or (one), not (none of its items). Null is an error, which
+    // A filter is an expression, or a group (Parse has checked its shape): and (all), or (one), not (none of its items). Null is an error, which
     // drops the row whatever the group, as && and || pass an error on; the items are read in order, as they read theirs.
     private static Func<Scope, bool?> Filter(YamlNode node, Evaluator evaluator, int depth)
     {
@@ -152,12 +183,9 @@ public sealed class Base
             return scope => evaluator.Evaluate(expr, scope) is var value and not ErrorValue ? Evaluator.Truthy(value) : null;
         }
 
-        if (node is not YamlMappingNode { Children.Count: 1 } group
-            || group.Children.Single() is not (YamlScalarNode { Value: var kind }, YamlSequenceNode items))
-            throw Invalid("A filter group is and, or or not, with a list of filters.");
-
-        var parts = items.Children.Select(i => Filter(i, evaluator, depth + 1)).ToList();
-        if (kind is not ("and" or "or" or "not")) throw Invalid($"'{kind}' is no filter group: use and, or or not.");
+        var (key, value) = ((YamlMappingNode)node).Children.Single();
+        var kind = ((YamlScalarNode)key).Value;
+        var parts = ((YamlSequenceNode)value).Children.Select(i => Filter(i, evaluator, depth + 1)).ToList();
 
         // and is settled by the first item that fails, or and not by the first that holds.
         var settles = kind != "and";

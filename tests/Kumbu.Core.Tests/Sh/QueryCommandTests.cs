@@ -316,6 +316,27 @@ public class QueryCommandTests
     }
 
     [Fact]
+    public async Task Check_warns_of_a_sort_direction_that_sorts_nothing_and_the_query_still_runs()
+    {
+        _store.AddTextFile("/V/Sorts.base", "views:\n  - type: table\n    name: Sorts\n    order: [file.name]\n    sort:\n      - { property: file.name, direction: asc }\n");
+
+        Assert.Equal(ShellResult.Ok("""
+            /V/Sorts.base: ok, 1 view (Sorts), 0 parameters; 1 warning
+            warning: view Sorts: sort-direction in 'file.name' at 0: sort direction "asc" sorts nothing; use ASC or DESC
+            """), await Run("query check /V/Sorts.base"));
+        Assert.False((await Run("query execute /V/Sorts.base")).IsError);
+    }
+
+    [Fact]
+    public async Task A_view_without_a_name_makes_the_whole_base_an_error()
+    {
+        _store.AddTextFile("/V/Unnamed.base", "views:\n  - type: table\n    name: Named\n  - type: table\n");
+
+        Assert.Equal("query: /V/Unnamed.base: base: Missing or invalid \"name\" in view 2", (await Run("query check /V/Unnamed.base")).Output);
+        Assert.Equal("query: /V/Unnamed.base: base: Missing or invalid \"name\" in view 2", (await Run("query execute /V/Unnamed.base")).Output);
+    }
+
+    [Fact]
     public async Task Check_gives_the_warnings_beside_the_errors_of_a_query_that_can_t_run()
     {
         _store.AddTextFile("/V/Both.base", "formulas:\n  loud: name.shout()\nviews:\n  - type: table\n    name: Loud\n    order: [formula.loud]\n  - type: table\n    name: Broken\n    filters: \"a &\"\n");
