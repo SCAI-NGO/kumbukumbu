@@ -1,4 +1,4 @@
-description: A declared list reads a single value as a list of one, and so do aliases in every vault; a list stays the list, its items keeping their own types.
+description: A declared list reads a single value as a list of one, an empty quoted text too, and so do tags (with their '#'), aliases and cssclasses in every vault; a list stays the list, its items keeping their own types.
 source: kumbu
 reason: Obsidian 1.15.1 doesn't make a single value a list (finding 13), so aliases Annie is a text and contains() looks inside its letters; a list property means a list (ADR 0041).
 types:
@@ -8,15 +8,25 @@ notes:
     ---
     aliases: Annie
     related: Brita
+    tags: person
+    cssclasses: wide
     ---
   Brita.md: |
     ---
     related: [Ann, 42]
+    ---
+  Cleo.md: |
+    ---
+    related: ""
     ---
 expect:
   properties:
     Ann.md:
       aliases: [text Annie]
       related: [text Brita]
+      tags: ['text #person']
+      cssclasses: [text wide]
     Brita.md:
       related: [text Ann, number 42]
+    Cleo.md:
+      related: [text]

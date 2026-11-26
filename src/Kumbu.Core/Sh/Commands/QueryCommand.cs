@@ -92,7 +92,8 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         "1e3"), a checkbox the text true or false in any case, a date or datetime an ISO date, a
         text a number or date as it is written (01010 keeps its zero), a list (multitext) a single
         value, as a list of one. tags, aliases and cssclasses are lists in every vault. Any other
-        value keeps its own, and query check warns of it.
+        value keeps its own, and query check warns of it. this.<name> reads the query note's own
+        properties as they are written, without the declared types.
 
         The language (JavaScript's operators: == != < <= > >= + - * / % && || !; a single = is a
         syntax error). && and || give an operand, as in JavaScript: a || b is a when it is truthy,

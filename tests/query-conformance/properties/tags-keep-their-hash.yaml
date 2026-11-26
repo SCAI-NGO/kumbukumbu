@@ -1,11 +1,6 @@
-description: A tags property gives its tags with their '#', a '#' already written kept once; tags and cssclasses are lists in every vault, a single one a list of one.
+description: A tags property gives its tags with their '#', a '#' already written kept once; other properties are left as written.
 source: spec
 notes:
-  Ann.md: |
-    ---
-    tags: person
-    cssclasses: wide
-    ---
   Brita.md: |
     ---
     tags: [person, "#friend"]
@@ -13,9 +8,6 @@ notes:
     ---
 expect:
   properties:
-    Ann.md:
-      tags: ['text #person']
-      cssclasses: [text wide]
     Brita.md:
       tags: ['text #person', 'text #friend']
       cssclasses: [text wide]

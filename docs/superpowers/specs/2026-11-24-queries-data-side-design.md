@@ -20,7 +20,7 @@ Notes carry typed properties (a person's `birthday`, a task's `status`), and Obs
 
 *Changed* by [Bases follow Obsidian](2026-11-25-bases-follow-obsidian-design.md) §2: declared types don't change a base's values, and there is one date type. *Restored* by [Bases without Obsidian's bugs](2026-11-26-bases-without-obsidian-bugs-design.md) §2 item 4: a declared type converts a value that converts cleanly, and `query check` warns about the values that don't (one date type stays).
 
-A property's type comes from the vault's `.obsidian/types.json` where it declares one (`birthday: date`), else from how the value is written (a plain `11` is a number, a quoted `"11"` text). `tags`, `aliases` and `cssclasses` are lists of text in every vault. A value that doesn't fit its declared type stays the text it is. Types: text, multitext (a list of text), number, checkbox, date, datetime (without a zone, as Obsidian keeps it). Cases: `properties/`.
+A property's type comes from the vault's `.obsidian/types.json` where it declares one (`birthday: date`), else from how the value is written (a plain `11` is a number, a quoted `"11"` text). `tags`, `aliases` and `cssclasses` are lists of text in every vault. A value that doesn't fit its declared type keeps its own value. Types: text, multitext (a list of text), number, checkbox, date, datetime (without a zone, as Obsidian keeps it). Cases: `properties/`.
 
 ## 4. The language
 
