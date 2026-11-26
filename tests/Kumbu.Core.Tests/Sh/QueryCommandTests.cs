@@ -510,6 +510,19 @@ public class QueryCommandTests
     }
 
     [Fact]
+    public async Task An_unknown_view_sends_no_text()
+    {
+        var index = new MeaningIndex(SemanticState.Ready, []);
+        var (sh, _) = MeaningShell(index);
+
+        var result = await sh.RunAsync("query execute Related --view Nope --param topic=sync", CancellationToken.None);
+
+        Assert.True(result.IsError);
+        Assert.Contains("unknown-view", result.Output);
+        Assert.Empty(index.Calls);
+    }
+
+    [Fact]
     public async Task Execute_without_a_provider_is_meaning_unavailable()
     {
         var (sh, _) = MeaningShell(null);

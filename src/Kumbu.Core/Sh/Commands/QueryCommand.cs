@@ -120,7 +120,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         property named by as, which the base filters, sorts and shows as any property:
         sort by closeness DESC. The score hides a note's own property of that name for the run,
         and query check warns of the notes in the query's folder that have one. When the provider
-        can't be reached, or doesn't answer (5 seconds, one retry), the query fails with
+        can't be reached, or doesn't answer (5 seconds, one retry after a timeout), the query fails with
         meaning-unavailable; offline it fails with meaning-offline. In Obsidian the same note
         renders, unranked.
 
@@ -225,6 +225,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             var given = arguments.ToDictionary(a => a.Key, a => (IReadOnlyList<string>)a.Value);
             // Before anything is read or sent: a text that may not go to the provider fails here.
             var text = query.Meaning is null ? null : query.MeaningText(given);
+            query.CheckView(options.Value("view"));
             vault = await VaultAsync(path, query.Mentions("ctime") || query.Mentions("mtime"), ct);
             // The query note as this, with its size and times as its row has them.
             if (vault.Keys.FirstOrDefault(n => n.Path == note.Path) is { } row)

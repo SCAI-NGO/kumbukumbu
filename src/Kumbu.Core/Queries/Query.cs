@@ -101,11 +101,17 @@ public sealed partial class Query
             notes = Scored(m, meaning ?? throw new QueryError("meaning-unavailable", "The query ranks by meaning, and no vectors were given for it.", 0), notes, ct);
         }
 
-        var (base_, name) = view is null
-            ? views[0]
-            : views.FirstOrDefault(v => v.View == view) is { Base: not null } found ? found : throw new QueryError("unknown-view", $"The query has no view '{view}'.", 0);
+        var (base_, name) = ResolveView(view);
         return base_.Run(name, notes, self, now, ct);
     }
+
+    /// <summary>Throws <c>unknown-view</c> when the query has no view of that name (the first when null), before anything is sent or read.</summary>
+    public void CheckView(string? view) => ResolveView(view);
+
+    private (Base Base, string? View) ResolveView(string? view) =>
+        view is null
+            ? views[0]
+            : views.FirstOrDefault(v => v.View == view) is { Base: not null } found ? found : throw new QueryError("unknown-view", $"The query has no view '{view}'.", 0);
 
     /// <summary>Compiles every view without running it (no note is read, no argument needed): by view, in order, the
     /// error of each view that can't run, or the warnings of one that runs with them; empty when all run without.</summary>

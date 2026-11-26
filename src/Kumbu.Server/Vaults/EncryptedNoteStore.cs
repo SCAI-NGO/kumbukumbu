@@ -1100,8 +1100,10 @@ public sealed class EncryptedNoteStore(
         {
             if (!access.Vault.Embeddings.TryGetValue(path, out var e) || e.Model != model) continue;
             if (e.Properties?.FirstOrDefault(p => p.Name == property) is not { } stored || stored.Vector.Length != query.Length) continue;
-            if (Kumbu.Core.Search.PropertyTexts.Of(path, note.Content, bound).FirstOrDefault(p => p.Name == property) is not { Text: { } current }
-                || Search.SearchIndex.Hash(current) != stored.Hash) continue;
+            // The same version and chunking scheme as were embedded: the stored hash is current by construction, so the note isn't parsed again.
+            if (!(e.Version == note.Version && e.Scheme == bound.Scheme)
+                && (Kumbu.Core.Search.PropertyTexts.Of(path, note.Content, bound).FirstOrDefault(p => p.Name == property) is not { Text: { } current }
+                    || Search.SearchIndex.Hash(current) != stored.Hash)) continue;
             vectors[access.ToCaller(path)] = stored.Vector;
         }
 
