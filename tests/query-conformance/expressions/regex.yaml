@@ -17,14 +17,20 @@ cases:
   # A regular expression shows as JavaScript writes it: the pattern, then its flags in their own order.
   - { expression: /a+b/.toString(), values: { Ann.md: text /a+b/ } }
   - { expression: /a+b/ig.toString(), values: { Ann.md: text /a+b/gi } }
-  # What a pattern's counts expand to is bounded before it runs, as RE2 bounds a count to 1,000 (alone, or multiplied
-  # through nesting): a pattern past either is null, as one RE2 can't run is.
-  - { expression: '/x{0,200}/.matches("x")', values: { Ann.md: boolean true } }
-  - { expression: '/x{0,201}/.matches("x")', values: { Ann.md: null } }
-  - { expression: '/(?:a|aa|aaa|aaaa){0,20}c/.matches("a".repeat(1000))', values: { Ann.md: boolean false } }
+  # A pattern's size, every position written out (an atom, a class or an anchor one, an alternation its branches added,
+  # a count its body multiplied, ?, * and + their body once), is bounded before it runs, as RE2 bounds a count to 1,000
+  # (alone, or multiplied through nesting): a pattern past either is null, as one RE2 can't run is.
+  - { expression: '/x{0,64}/.matches("x")', values: { Ann.md: boolean true } }
+  - { expression: '/x{0,65}/.matches("x")', values: { Ann.md: null } }
+  - { expression: '/(?:a|aa|aaa|aaaa){0,6}c/.matches("a".repeat(1000))', values: { Ann.md: boolean false } }
   - { expression: '/(?:a|aa|aaa|aaaa){0,300}c/.matches("a".repeat(1000))', values: { Ann.md: null } }
   - { expression: '/(?:a|aa){0,1000}c/.matches("a".repeat(10000))', values: { Ann.md: null } }
+  - { expression: '/(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?(?:a|aa|aaa|aaaa)?c/.matches("a".repeat(1000))', values: { Ann.md: null } }
   - { expression: '/a{1001}/.matches("a")', values: { Ann.md: null } }
   - { expression: '/(?:(?:){100}){100}/.matches("a")', values: { Ann.md: null } }
+  # What patterns are written for still runs: a date, a time, an address, a line end, a word of up to 64 letters.
   - { expression: '/\d{4}-\d{2}-\d{2}/.matches("on 2026-11-26")', values: { Ann.md: boolean true } }
-
+  - { expression: '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.matches("2026-11-26T09:30")', values: { Ann.md: boolean true } }
+  - { expression: '/^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.matches("ann@example.org")', values: { Ann.md: boolean true } }
+  - { expression: '/\r?\n/.matches("a\r\nb")', values: { Ann.md: boolean true } }
+  - { expression: '/[a-z]{1,64}/i.matches("Kumbu")', values: { Ann.md: boolean true } }

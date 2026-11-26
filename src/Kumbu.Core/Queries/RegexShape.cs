@@ -2,17 +2,18 @@
 namespace Kumbu.Core.Queries;
 
 /// <summary>What a regular expression's text says about its cost before it runs (bases spec 2026-11-25 decision 15):
-/// how many parts its counted repetitions expand to (<c>\d{4}</c> four, <c>(?:a|aa){0,10}</c> thirty), whether a count
-/// passes RE2's bound of 1,000 (alone, or multiplied through nesting), and the longest text a match can be, if there is
-/// one. The offline engine reads a pattern the same way (src/query/regexShape.ts), so the same patterns are null in both.
+/// its size, every position written out (an atom, a class or an anchor is one, an alternation adds its branches, a count
+/// multiplies its body, ?, * and + count it once: <c>\d{4}-\d{2}</c> is seven, <c>(?:a|aa){0,10}</c> thirty), whether a
+/// count passes RE2's bound of 1,000 (alone, or multiplied through nesting), and the longest text a match can be, if
+/// there is one. The offline engine reads a pattern the same way (src/query/regexShape.ts), so the same patterns are null in both.
 /// It reads the syntax only as far as these need: a pattern that doesn't compile fails later anyway.</summary>
 public static class RegexShape
 {
-    /// <summary>How many parts the counted repetitions of a pattern that runs may expand to. .NET's linear engine builds
-    /// its states as it matches, and for overlapping alternatives in a count they grow with the square of the expansion:
-    /// measured on 1,000,000 characters, (?:a|aa|aaa|aaaa){0,20} (200) takes 140 ms the first time, {0,40} (400) 340 ms on
-    /// a tenth of that, {0,100} (1,000) 1.7 s on 1,000 characters and {0,300} 12 s.</summary>
-    public const int MaxExpanded = 200;
+    /// <summary>How large a pattern that runs may be. .NET's linear engine builds its states as it matches, without
+    /// looking at its timeout, and for optional groups of overlapping branches they grow steeply with the size: the
+    /// first search of 1,000,000 characters by (?i) and 21 groups (?:a|aa)? (63) takes 380 ms, by 25 (75) 660 ms, by 33
+    /// (99) 5.5 s. At 64 the costliest pattern found takes under 400 ms (task 5 report, fix round 3).</summary>
+    public const int MaxSize = 64;
 
     /// <summary>RE2's bound on a count, alone and multiplied through nesting.</summary>
     public const int MaxCount = 1000;
@@ -20,9 +21,9 @@ public static class RegexShape
     // Large enough to pass every bound, small enough that products stay far from overflowing.
     private const long Cap = 1_000_000_000;
 
-    public sealed record Shape(long Expanded, long? Longest, bool CountTooLarge)
+    public sealed record Shape(long Size, long? Longest, bool CountTooLarge)
     {
-        public bool Runs => !CountTooLarge && Expanded <= MaxExpanded;
+        public bool Runs => !CountTooLarge && Size <= MaxSize;
     }
 
     public static Shape Of(string pattern)
@@ -36,20 +37,20 @@ public static class RegexShape
             part = part.Or(reader.Alternation());
         }
 
-        return new Shape(part.Expanded, part.Longest, reader.CountTooLarge);
+        return new Shape(part.Size, part.Longest, reader.CountTooLarge);
     }
 
-    // Size: the parts it stands for, its counts multiplied out; Expanded: the parts that come from counts; Longest: the
-    // longest text it matches, null when unbounded; Product: its counts multiplied through nesting.
-    private readonly record struct Part(long Size, long Expanded, long? Longest, long Product)
+    // Size: the positions it stands for, its counts multiplied out; Longest: the longest text it matches, null when
+    // unbounded; Product: its counts multiplied through nesting.
+    private readonly record struct Part(long Size, long? Longest, long Product)
     {
-        public static readonly Part Empty = new(0, 0, 0, 1);
-        public static readonly Part One = new(1, 0, 1, 1);
+        public static readonly Part Empty = new(0, 0, 1);
+        public static readonly Part One = new(1, 1, 1);
 
-        public Part Then(Part next) => new(Add(Size, next.Size), Add(Expanded, next.Expanded),
+        public Part Then(Part next) => new(Add(Size, next.Size),
             Longest is { } a && next.Longest is { } b ? Add(a, b) : null, Math.Max(Product, next.Product));
 
-        public Part Or(Part other) => new(Add(Size, other.Size), Add(Expanded, other.Expanded),
+        public Part Or(Part other) => new(Add(Size, other.Size),
             Longest is { } a && other.Longest is { } b ? Math.Max(a, b) : null, Math.Max(Product, other.Product));
     }
 
@@ -100,9 +101,8 @@ public static class RegexShape
                     var times = most ?? least;
                     var product = Times(atom.Product, Math.Max(times, 1));
                     if (least > MaxCount || most > MaxCount || product > MaxCount) CountTooLarge = true;
-                    // The whole repetition is expansion: its body, inner counts included, written out so many times.
-                    var size = Times(atom.Size, times);
-                    return new Part(size, size, most is { } m && atom.Longest is { } longest ? Times(longest, m) : null, product);
+                    // Its body, inner counts included, written out so many times.
+                    return new Part(Times(atom.Size, times), most is { } m && atom.Longest is { } longest ? Times(longest, m) : null, product);
                 default:
                     return atom;
             }

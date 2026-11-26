@@ -17,7 +17,7 @@ import {
   NULL, asMilliseconds, booleanValue, dateValue, durationValue, errorValue, fileValue, formatNumber, linkValue, listValue,
   noteRefValue, numberValue, objectValue, regexValue, textValue, type Value,
 } from "./value";
-import { MAX_COUNT, MAX_EXPANDED, regexShape, runs } from "./regexShape";
+import { MAX_COUNT, MAX_SIZE as MAX_PATTERN_SIZE, regexShape, runs } from "./regexShape";
 import { trimSlashes } from "./tags";
 import { QueryVault } from "./vault";
 
@@ -311,7 +311,7 @@ export class Evaluator {
   private readonly search: Search = (r, m, text, from, at) => {
     if (!this.searchedInRun.has(r)) {
       this.searchedInRun.add(r);
-      this.step(10 * r.expanded * r.expanded, at);
+      this.step(128 * r.size * r.size, at);
     }
     const found = m.find(from);
     const read = found && r.longest !== null ? Math.min(m.end() - from + r.longest, text.length - from) : text.length - from;
@@ -567,7 +567,7 @@ export class Evaluator {
     if (!runs(shape)) {
       this.warn("regex", shape.countTooLarge
         ? `The regular expression counts a repetition more than ${MAX_COUNT} times (alone or multiplied through nesting), which RE2 doesn't run, so it is null.`
-        : `The regular expression's counted repetitions expand to ${shape.expanded} parts, more than the ${MAX_EXPANDED} that run in time, so it is null.`, position);
+        : `The regular expression is ${shape.size} positions written out, more than the ${MAX_PATTERN_SIZE} that run in time, so it is null.`, position);
       return null;
     }
     // As JavaScript's toString: the pattern, then the flags in their own order.
@@ -579,7 +579,7 @@ export class Evaluator {
     if (flags.includes("m")) options |= RE2JS.MULTILINE;
     if (flags.includes("s")) options |= RE2JS.DOTALL;
     try {
-      const value = regexValue(RE2JS.compile(pattern, options), flags.includes("g"), written, shape.longest, shape.expanded) as RegexOf;
+      const value = regexValue(RE2JS.compile(pattern, options), flags.includes("g"), written, shape.longest, shape.size) as RegexOf;
       this.regexesOfRun.set(written, value);
       return value;
     } catch (e) {

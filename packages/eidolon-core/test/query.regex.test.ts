@@ -39,7 +39,8 @@ test("what RE2 can't do is null, with a warning: lookaround, backreferences, a b
 
 test("a pattern whose counts expand too far is null, with a warning that says why, as on the server", () => {
   const cases: Array<[string, string]> = [
-    ["/(?:a|aa|aaa|aaaa){0,300}c/", "The regular expression's counted repetitions expand to 3000 parts, more than the 200 that run in time, so it is null."],
+    ["/(?:a|aa|aaa|aaaa){0,300}c/", "The regular expression is 3001 positions written out, more than the 64 that run in time, so it is null."],
+    ["/(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?(?:a|aa)?c/i", "The regular expression is 67 positions written out, more than the 64 that run in time, so it is null."],
     ["/(?:(?:){100}){100}/", "The regular expression counts a repetition more than 1000 times (alone or multiplied through nesting), which RE2 doesn't run, so it is null."],
   ];
   for (const [pattern, message] of cases) {
@@ -48,4 +49,14 @@ test("a pattern whose counts expand too far is null, with a warning that says wh
     expect(evaluator.evaluate(expr, { note, this: null, now: "2026-01-01T12:00:00" }), pattern).toEqual({ kind: "null" });
     expect(evaluator.warnings.map((w) => w.message), pattern).toEqual([message]);
   }
+});
+
+// re2js has no DFA here: it scans about 2 µs a character at this size (2.3 s on a fast machine), so the bound is generous.
+test("the costliest pattern of the largest size that runs searches a long text in time", { timeout: 20000 }, () => {
+  const evaluator = new Evaluator();
+  const started = performance.now();
+  const expr = evaluator.compile(`/${"(?:a|aa)?".repeat(21)}c/i.matches("a".repeat(999999))`);
+  expect(evaluator.evaluate(expr, { note, this: null, now: "2026-01-01T12:00:00" })).toEqual({ kind: "boolean", boolean: false });
+  expect(evaluator.warnings).toEqual([]);
+  expect(performance.now() - started).toBeLessThan(15000);
 });

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -133,14 +132,13 @@ public sealed partial class Evaluator
     private readonly HashSet<RegexValue> searchedInRun = new(ReferenceEqualityComparer.Instance);
 
     // Compiled patterns, shared by runs: .NET's linear engine builds its states as it matches and keeps them, so a row, or
-    // the query run again, finds them built. Emptied when full, so a stream of patterns can't fill the memory.
-    private static readonly ConcurrentDictionary<(string Pattern, RegexOptions Options), Regex> Compiled = new();
+    // the query run again, finds them built. Their states grow with their size (the costliest of size 64 holds 4 MB after
+    // a search of 1,000,000 characters), so the cache is bounded by the sizes added up, and by the count: emptied when
+    // either is full, it holds some 70 MB at worst.
+    private static readonly Dictionary<(string Pattern, RegexOptions Options), Regex> Compiled = [];
+    private static long compiledSize;
     private const int MaxCompiled = 256;
-
-    /// <summary>How long one search of a regular expression may take before the query fails (too-large): the net under
-    /// <see cref="RegexShape"/>. The costliest pattern it lets run takes 0.2 s the first time on a text of 1,000,000
-    /// characters, and a search of an ordinary one milliseconds, so a second fails nothing that ought to run.</summary>
-    public static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+    private const int MaxCompiledSize = 1024;
     private readonly Dictionary<string, int> checkedLevels = new(StringComparer.Ordinal);
     private int deepest;
     private readonly List<QueryWarning> warnings = [];
@@ -284,21 +282,12 @@ public sealed partial class Evaluator
     // One search of a regular expression from a place. It counts what it may read, one step for each 16 characters: up to
     // the match's end and on by the longest match, or, when it fails or a match has no longest, the rest of the text
     // (/(?:a*c)?/ on "aaa…" reads it for each match), so a global replace or split can't take quadratic time. The first
-    // search of a pattern in a run also counts the states .NET builds for it, which grow with the square of its counts'
-    // expansion (RegexShape): 10 × 200² steps, 0.2 s, for the largest that runs. The timeout is the net under both.
+    // search of a pattern in a run also counts the states .NET builds for it, which grow with the square of its size
+    // (RegexShape): 128 × 64² steps, about 0.25 s, for the largest that runs, so a run holds no more than nine of those.
     private Match Search(RegexValue r, string text, int from, Expr at)
     {
-        if (searchedInRun.Add(r)) Step(10 * r.Expanded * r.Expanded, at);
-        Match m;
-        try
-        {
-            m = r.Regex.Match(text, from);
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            throw new QueryError("too-large", $"A regular expression takes more than {RegexTimeout.TotalSeconds:0} second for one search.", at.Position);
-        }
-
+        if (searchedInRun.Add(r)) Step(128 * r.Size * r.Size, at);
+        var m = r.Regex.Match(text, from);
         var read = m.Success && r.Longest is { } longest ? Math.Min(m.Index + m.Length - from + longest, text.Length - from) : text.Length - from;
         Step(1 + read / 16, at);
         return m;
@@ -607,7 +596,7 @@ public sealed partial class Evaluator
         {
             Warn("regex", shape.CountTooLarge
                 ? $"The regular expression counts a repetition more than {RegexShape.MaxCount} times (alone or multiplied through nesting), which RE2 doesn't run, so it is null."
-                : $"The regular expression's counted repetitions expand to {shape.Expanded} parts, more than the {RegexShape.MaxExpanded} that run in time, so it is null.", r.Position);
+                : $"The regular expression is {shape.Size} positions written out, more than the {RegexShape.MaxSize} that run in time, so it is null.", r.Position);
             return null;
         }
 
@@ -620,14 +609,23 @@ public sealed partial class Evaluator
         if (r.Flags.Contains('s')) options |= RegexOptions.Singleline;
         try
         {
-            if (!Compiled.TryGetValue((r.Pattern, options), out var regex))
+            Regex? regex;
+            lock (Compiled)
             {
-                regex = new Regex(r.Pattern, options, RegexTimeout);
-                if (Compiled.Count >= MaxCompiled) Compiled.Clear();
-                Compiled[(r.Pattern, options)] = regex;
+                if (!Compiled.TryGetValue((r.Pattern, options), out regex))
+                {
+                    regex = new Regex(r.Pattern, options);
+                    if (Compiled.Count >= MaxCompiled || compiledSize + shape.Size > MaxCompiledSize)
+                    {
+                        Compiled.Clear();
+                        compiledSize = 0;
+                    }
+                    Compiled[(r.Pattern, options)] = regex;
+                    compiledSize += shape.Size;
+                }
             }
 
-            return regexesOfRun[written] = new RegexValue(regex, r.Flags.Contains('g'), written, shape.Longest, shape.Expanded);
+            return regexesOfRun[written] = new RegexValue(regex, r.Flags.Contains('g'), written, shape.Longest, shape.Size);
         }
         catch (Exception e) when (e is ArgumentException or NotSupportedException)
         {
