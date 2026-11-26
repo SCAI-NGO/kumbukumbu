@@ -113,7 +113,8 @@ export class Base {
     const cells = columns.map((c) => column(c, evaluator));
     const sortNode = view === null ? undefined : child(view, "sort");
     const sortWarnings: QueryWarning[] = [];
-    // Only ASC and DESC sort; a key with another direction, or none, is skipped as Obsidian skips it.
+    // A key without a direction sorts ascending, and the direction ignores case; Obsidian sorts nothing for either (finding 20).
+    // A direction that is neither warns, and the key sorts ascending.
     const sort = sortNode?.kind === "seq"
       ? sortNode.items
         .map((k) => {
@@ -121,12 +122,11 @@ export class Base {
           if (k.kind !== "map" || property === null) throw invalid("A sort key needs a property.");
           return { property, direction: scalarOf(k, "direction") };
         })
-        .filter((k) => {
-          if (k.direction === "ASC" || k.direction === "DESC") return true;
-          if (k.direction !== null) sortWarnings.push({ code: "sort-direction", message: `sort direction "${k.direction}" sorts nothing; use ASC or DESC`, expression: k.property, position: 0 });
-          return false;
+        .map((k) => {
+          const direction = k.direction?.toUpperCase() ?? "ASC";
+          if (direction !== "ASC" && direction !== "DESC") sortWarnings.push({ code: "sort-direction", message: `sort direction "${k.direction}" is neither ASC nor DESC; sorting ascending`, expression: k.property, position: 0 });
+          return { expr: column(k.property, evaluator), descending: direction === "DESC" };
         })
-        .map((k) => ({ expr: column(k.property, evaluator), descending: k.direction === "DESC" }))
       : [];
     const limitText = view === null ? null : scalarOf(view, "limit");
     let limit = Number.POSITIVE_INFINITY;

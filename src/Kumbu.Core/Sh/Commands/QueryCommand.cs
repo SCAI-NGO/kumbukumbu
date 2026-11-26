@@ -43,7 +43,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           Compiles every view without running it and needing no arguments: ok, or each error with
           its code, the expression it is in and the position there. A function, method or formula
           that doesn't exist, formulas that use each other in a circle, a regular expression that is
-          null and a sort direction that sorts nothing are warnings: the query runs, with an error
+          null and a sort direction that is neither ASC nor DESC are warnings: the query runs, with an error
           value (or null) in the cells they touch.
         query properties [path]
           The properties of the notes below a path (default: every vault): each with the types of
@@ -80,11 +80,11 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         query renders in Obsidian too. Filters: an expression, or and/or/not with a list; views:
         order (the columns), sort, limit. Columns: file.<field>, formula.<name>, or a property. Every
         view needs a name, or the whole base is an error; a filter group has exactly one of and, or,
-        not. A sort key sorts only with direction ASC or DESC, in capitals: without one, or with asc,
-        it sorts nothing, as in Obsidian, and query check warns.
+        not. A sort key's direction is ASC or DESC in any case; without one the key sorts ascending.
+        Any other direction sorts ascending too, and query check warns.
 
         The language (JavaScript's operators: == != < <= > >= + - * / % && || !; a single = is a
-        syntax error). && and || give an operand, as in JavaScript: a || b is a when it is true,
+        syntax error). && and || give an operand, as in JavaScript: a || b is a when it is truthy,
         else b, so nick || "none" is a fallback (Obsidian gives true or false); ! gives true or
         false. A text that reads as a number compares as that number, and - * / % read it
         as one; a date plus or minus "1d", "2 hours" or "1y 2M" is a date (units y M w d h m s, or

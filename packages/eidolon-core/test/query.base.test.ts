@@ -219,8 +219,8 @@ test("a lambda that asks for a long list of tags again for each takes no longer 
   expect(performance.now() - started).toBeLessThan(5000);
 });
 
-test("a sort direction that sorts nothing is a warning, and the query still runs", () => {
-  const yaml = "views:\n  - type: table\n    name: Sorts\n    sort:\n      - { property: file.name, direction: asc }\n";
+test("a sort direction that is neither ASC nor DESC is a warning, and the key sorts ascending", () => {
+  const yaml = "views:\n  - type: table\n    name: Sorts\n    sort:\n      - { property: file.name, direction: up }\n";
   const { warnings } = Base.parse(yaml).run(null, [note], null, NOW);
-  expect(warnings).toEqual([{ code: "sort-direction", message: 'sort direction "asc" sorts nothing; use ASC or DESC', expression: "file.name", position: 0 }]);
+  expect(warnings).toEqual([{ code: "sort-direction", message: 'sort direction "up" is neither ASC nor DESC; sorting ascending', expression: "file.name", position: 0 }]);
 });

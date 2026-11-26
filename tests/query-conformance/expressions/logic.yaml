@@ -18,3 +18,5 @@ cases:
   - { expression: formula.bad || "x", values: { Ann.md: error Invalid operator between String and Number } }
   - { expression: nick || formula.bad, values: { Ann.md: text N } }
   - { expression: false && formula.bad, values: { Ann.md: boolean false } }
+  - { expression: missing || formula.bad, values: { Ann.md: error Invalid operator between String and Number } }
+  - { expression: true && formula.bad, values: { Ann.md: error Invalid operator between String and Number } }

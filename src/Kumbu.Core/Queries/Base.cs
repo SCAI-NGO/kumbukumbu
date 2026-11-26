@@ -137,18 +137,18 @@ public sealed partial class Base
         var columns = view is not null && Child(view, "order") is YamlSequenceNode order ? order.Children.Select(Text).ToList() : ["file.name"];
         var cells = columns.Select(c => Column(c, evaluator)).ToList();
         var sortWarnings = new List<QueryWarning>();
-        // Only ASC and DESC sort; a key with another direction, or none, is skipped as Obsidian skips it.
+        // A key without a direction sorts ascending, and the direction ignores case; Obsidian sorts nothing for either (finding 20).
+        // A direction that is neither warns, and the key sorts ascending.
         var sort = view is not null && Child(view, "sort") is YamlSequenceNode keys
             ? keys.Children.Select(k => k is YamlMappingNode m && Scalar(m, "property") is { } p
                     ? (Property: p, Direction: Scalar(m, "direction"))
                     : throw Invalid("A sort key needs a property."))
-                .Where(k =>
+                .Select(k =>
                 {
-                    if (k.Direction is "ASC" or "DESC") return true;
-                    if (k.Direction is not null) sortWarnings.Add(new QueryWarning("sort-direction", $"sort direction \"{k.Direction}\" sorts nothing; use ASC or DESC", k.Property, 0));
-                    return false;
-                })
-                .Select(k => (Expr: Column(k.Property, evaluator), Descending: k.Direction == "DESC")).ToList()
+                    if (k.Direction is not null && !k.Direction.Equals("ASC", StringComparison.OrdinalIgnoreCase) && !k.Direction.Equals("DESC", StringComparison.OrdinalIgnoreCase))
+                        sortWarnings.Add(new QueryWarning("sort-direction", $"sort direction \"{k.Direction}\" is neither ASC nor DESC; sorting ascending", k.Property, 0));
+                    return (Expr: Column(k.Property, evaluator), Descending: string.Equals(k.Direction, "DESC", StringComparison.OrdinalIgnoreCase));
+                }).ToList()
             : [];
         var limit = view is not null && Scalar(view, "limit") is { } l
             ? int.TryParse(l, out var n) && n >= 0 ? n : throw Invalid("limit is not a whole number.")

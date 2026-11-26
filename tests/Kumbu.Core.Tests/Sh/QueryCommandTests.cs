@@ -379,13 +379,13 @@ public class QueryCommandTests
     }
 
     [Fact]
-    public async Task Check_warns_of_a_sort_direction_that_sorts_nothing_and_the_query_still_runs()
+    public async Task Check_warns_of_a_sort_direction_that_is_neither_ASC_nor_DESC_and_the_query_still_runs()
     {
-        _store.AddTextFile("/V/Sorts.base", "views:\n  - type: table\n    name: Sorts\n    order: [file.name]\n    sort:\n      - { property: file.name, direction: asc }\n");
+        _store.AddTextFile("/V/Sorts.base", "views:\n  - type: table\n    name: Sorts\n    order: [file.name]\n    sort:\n      - { property: file.name, direction: up }\n");
 
         Assert.Equal(ShellResult.Ok("""
             /V/Sorts.base: ok, 1 view (Sorts), 0 parameters; 1 warning
-            warning: view Sorts: sort-direction in 'file.name' at 0: sort direction "asc" sorts nothing; use ASC or DESC
+            warning: view Sorts: sort-direction in 'file.name' at 0: sort direction "up" is neither ASC nor DESC; sorting ascending
             """), await Run("query check /V/Sorts.base"));
         Assert.False((await Run("query execute /V/Sorts.base")).IsError);
     }
