@@ -1,0 +1,13 @@
+description: A declaration in another case than the property's doesn't change its value either.
+source: spec
+types:
+  Birthday: text
+notes:
+  Ann.md: |
+    ---
+    birthday: 1980-11-03
+    ---
+expect:
+  properties:
+    Ann.md:
+      birthday: date 1980-11-03

@@ -1,0 +1,42 @@
+description: A date formats in Moment's tokens, in English, gives its time as HH:mm:ss and its distance from now as Moment's fromNow() does; it has a millisecond too.
+source: spec
+now: 2026-11-23T14:30:00
+notes:
+  Ann.md: |
+    ---
+    d: 2025-05-27T09:05:03
+    b: 1980-11-03
+    ---
+cases:
+  - { expression: 'd.format("YYYY-MM-DD")', values: { Ann.md: text 2025-05-27 } }
+  - { expression: 'd.format("YY M D")', values: { Ann.md: text 25 5 27 } }
+  - { expression: 'd.format("MMMM MMM Do")', values: { Ann.md: text May May 27th } }
+  - { expression: 'd.format("dddd ddd dd d")', values: { Ann.md: text Tuesday Tue Tu 2 } }
+  - { expression: 'd.format("H HH h hh m mm s ss A a")', values: { Ann.md: text 9 09 9 09 5 05 3 03 AM am } }
+  - { expression: 'd.format("[Today is] dddd")', values: { Ann.md: text Today is Tuesday } }
+  - { expression: 'd.format("SSS")', values: { Ann.md: text 000 } }
+  - { expression: 'b.format("YYYY-MM-DD HH:mm")', values: { Ann.md: text 1980-11-03 00:00 } }
+  - { expression: 'b.format("h A")', values: { Ann.md: text 12 AM } }
+  - { expression: 'now().format("h:mm A")', values: { Ann.md: text 2:30 PM } }
+  - { expression: 'date("2026-11-01").format("Do")', values: { Ann.md: text 1st } }
+  - { expression: 'date("2026-11-03").format("Do")', values: { Ann.md: text 3rd } }
+  - { expression: 'date("2026-11-11").format("Do")', values: { Ann.md: text 11th } }
+  - { expression: 'date("2026-11-22").format("Do")', values: { Ann.md: text 22nd } }
+  - { expression: d.time(), values: { Ann.md: text 09:05:03 } }
+  - { expression: b.time(), values: { Ann.md: text 00:00:00 } }
+  - { expression: now().relative(), values: { Ann.md: text a few seconds ago } }
+  - { expression: 'date("2026-11-23 14:30:30").relative()', values: { Ann.md: text in a few seconds } }
+  - { expression: 'date("2026-11-23 14:30:45").relative()', values: { Ann.md: text in a minute } }
+  - { expression: 'date("2026-11-23 14:29:00").relative()', values: { Ann.md: text a minute ago } }
+  - { expression: 'date("2026-11-23 13:45:00").relative()', values: { Ann.md: text an hour ago } }
+  - { expression: 'date("2026-11-23 17:30:00").relative()', values: { Ann.md: text in 3 hours } }
+  - { expression: 'date("2026-11-21 14:30:00").relative()', values: { Ann.md: text 2 days ago } }
+  - { expression: 'date("2026-11-13 14:30:00").relative()', values: { Ann.md: text 10 days ago } }
+  - { expression: 'date("2026-10-23 14:30:00").relative()', values: { Ann.md: text a month ago } }
+  - { expression: 'date("2026-12-23 14:30:00").relative()', values: { Ann.md: text in a month } }
+  - { expression: 'date("2026-09-30").relative()', values: { Ann.md: text 2 months ago } }
+  - { expression: 'date("2025-11-23").relative()', values: { Ann.md: text a year ago } }
+  - { expression: 'date("2020-01-01").relative()', values: { Ann.md: text 7 years ago } }
+  - { expression: d.isEmpty(), values: { Ann.md: boolean false } }
+  - { expression: d.second, values: { Ann.md: number 3 } }
+  - { expression: d.millisecond, values: { Ann.md: number 0 } }

@@ -4,7 +4,6 @@
 import { MAX_FRONTMATTER_LENGTH } from "../links/aliases";
 import { codeLines, codeSpans, frontmatterEnd, isWhiteSpace, splitLines, trim } from "../links/text";
 import { CACHE_LIMIT, Properties } from "./properties";
-import { PropertyTypes } from "./propertyTypes";
 
 /** A tag of a note: its text without '#' as written (NFC), and the 0-based line it stands on (for a frontmatter tag,
  * the line of its list item or of the `tags` key). */
@@ -30,6 +29,15 @@ function readTags(content: string): TagUse[] {
   const result = end > 0 ? fromFrontmatter(content, lines, end) : [];
   fromText(lines, end, result);
   return result;
+}
+
+/** The text without the slashes it ends in (and, with `start`, begins with): by a loop, since V8 runs /\/+$/ in
+ * quadratic time on a long run of slashes inside a text. */
+export function trimSlashes(text: string, start: boolean): string {
+  let [from, to] = [0, text.length];
+  while (to > 0 && text[to - 1] === "/") to--;
+  while (start && from < to && text[from] === "/") from++;
+  return text.slice(from, to);
 }
 
 const isAsciiDigit = (code: number) => code >= 0x30 && code <= 0x39;
@@ -67,11 +75,12 @@ function fromFrontmatter(content: string, lines: readonly string[], end: number)
   }
   // Frontmatter longer than aliases are read from has no tags either.
   if (key < 0 || lines.slice(0, end).reduce((sum, l) => sum + l.length + 1, 0) > MAX_FRONTMATTER_LENGTH) return [];
-  // tags is a list of text in every vault, so a single value reads as a list of one and a number or date stays as written.
-  const read = Properties.read(content, PropertyTypes.none);
+  // Every value as written, as the server's Frontmatter.Read gives it: a single value stands for a list of one, and a
+  // number or a date is the text it is written as.
+  const read = Properties.asWritten(content);
   if (read.problem !== null) return [];
   const tags = read.values.get("tags");
-  const values = tags?.kind === "list" ? tags.items.flatMap((v) => (v.kind === "text" ? [v.text] : [])) : [];
+  const values = tags?.kind === "text" ? [tags.text] : tags?.kind === "list" ? tags.items.flatMap((v) => (v.kind === "text" ? [v.text] : [])) : [];
 
   const result: TagUse[] = [];
   let next = key + 1;
@@ -87,7 +96,7 @@ function fromFrontmatter(content: string, lines: readonly string[], end: number)
 
     // Older notes write "tags: a, b" or "tags: a b"; Obsidian splits those.
     for (const part of value.split(/[, \t]/)) {
-      const tag = part.replace(/^#+/, "").replace(/\/+$/, "").normalize("NFC");
+      const tag = trimSlashes(part.replace(/^#+/, ""), false).normalize("NFC");
       if (part.length > 0 && isTag(tag)) result.push({ tag, line });
     }
   }
@@ -144,7 +153,7 @@ function fromText(lines: readonly string[], start: number, result: TagUse[]): vo
 
       let stop = p + 1;
       while (stop < line.length && isTagChar(line[stop]!)) stop++;
-      const tag = line.slice(p + 1, stop).replace(/\/+$/, "");
+      const tag = trimSlashes(line.slice(p + 1, stop), false);
       if (isTag(tag)) result.push({ tag: tag.normalize("NFC"), line: i });
       p = stop;
     }

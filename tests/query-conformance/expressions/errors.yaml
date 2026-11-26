@@ -1,14 +1,17 @@
-description: What no note can make right is an error of the query, found before any note is read; a value of the wrong type is not.
-source: spec
+description: What no note can make right is an error value in the cell, with Obsidian's message, not an error of the query; an unknown method on null is null.
+source: obsidian 1.15.1
 formulas:
   a: formula.b
   b: formula.a
 notes:
-  Ann.md: ""
+  Ann.md: |
+    ---
+    name: Ann
+    ---
 cases:
-  - { expression: nothing(1), error: unknown-function }
-  - { expression: name.shout(), error: unknown-method }
-  - { expression: formula.missing, error: unknown-formula }
-  - { expression: formula.a, error: formula-cycle }
-  - { expression: 'a = 1', error: syntax }
-  - { expression: 'name.matches(/(a/)', error: regex }
+  - { expression: nothing(1), values: { Ann.md: error Cannot find function "nothing" } }
+  - { expression: name.shout(), values: { Ann.md: error Cannot find function "shout" on type String } }
+  - { expression: missing.shout(), values: { Ann.md: null } }
+  - { expression: formula.missing, values: { Ann.md: error Cannot find "missing" on type Formulas } }
+  - { expression: formula.a, values: { Ann.md: error Infinite loop detected in formula } }
+  - { expression: formula.b, values: { Ann.md: error Infinite loop detected in formula } }

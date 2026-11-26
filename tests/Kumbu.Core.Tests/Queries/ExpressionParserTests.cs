@@ -85,7 +85,6 @@ public class ExpressionParserTests
     [InlineData("a & b", 2, "'&&'")]
     [InlineData("a | b", 2, "'||'")]
     [InlineData("/open", 0, "unterminated")]
-    [InlineData("/a/x", 3, "flag")]
     [InlineData("a # b", 2, "'#'")]
     public void Says_where_and_what_is_wrong(string text, int position, string says)
     {

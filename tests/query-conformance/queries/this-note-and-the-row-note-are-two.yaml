@@ -1,0 +1,32 @@
+description: The query note as a row keeps its own properties while this.note holds the caller's arguments, however the same file's note is reached first.
+source: spec
+query: A query.md
+notes:
+  A query.md: |
+    ---
+    type: query
+    who: own
+    params:
+      who:
+        type: text
+    ---
+    ```base
+    filters: note.who == this.note.who
+    views:
+      - type: table
+        name: Same
+        order: [file.name]
+    ```
+  B.md: |
+    ---
+    who: arg
+    ---
+  C.md: |
+    ---
+    who: own
+    ---
+runs:
+  - args: { who: arg }
+    columns: [file.name]
+    rows:
+      - [text B]

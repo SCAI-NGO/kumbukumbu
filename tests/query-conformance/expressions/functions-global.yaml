@@ -1,0 +1,41 @@
+description: The global functions of Obsidian's reference that give data; file() and link() find a file as a link from the row's note does, and random() is one number per run and row.
+source: spec
+now: 2026-11-23T14:30:00
+notes:
+  People/Ann.md: |
+    ---
+    n: 7
+    ---
+  People/Brita.md: ""
+cases:
+  - { expression: 'if(n > 5, "big", "small")', values: { People/Ann.md: text big, People/Brita.md: text small } }
+  - { expression: 'max(3, n, 5)', values: { People/Ann.md: number 7, People/Brita.md: number 5 } }
+  - { expression: 'min(3, n, 5)', values: { People/Ann.md: number 3, People/Brita.md: number 3 } }
+  - { expression: max(), values: { People/Ann.md: null, People/Brita.md: null } }
+  - { expression: 'max(1, "a")', values: { People/Ann.md: error, People/Brita.md: error } }
+  - { expression: number(date("1970-01-02")), values: { People/Ann.md: number 86400000, People/Brita.md: number 86400000 } }
+  - { expression: number(now()), values: { People/Ann.md: number 1795444200000, People/Brita.md: number 1795444200000 } }
+  - { expression: 'number("3.4")', values: { People/Ann.md: number 3.4, People/Brita.md: number 3.4 } }
+  - { expression: 'list("value")', values: { People/Ann.md: [text value], People/Brita.md: [text value] } }
+  - { expression: 'list([1, 2])', values: { People/Ann.md: [number 1, number 2], People/Brita.md: [number 1, number 2] } }
+  - expression: |-
+      escapeHTML("<a href=\"x\">Tom & 'Jerry'</a>")
+    values:
+      People/Ann.md: text &lt;a href=&quot;x&quot;&gt;Tom &amp; &#39;Jerry&#39;&lt;/a&gt;
+      People/Brita.md: text &lt;a href=&quot;x&quot;&gt;Tom &amp; &#39;Jerry&#39;&lt;/a&gt;
+  - { expression: random() >= 0 && random() < 1, values: { People/Ann.md: boolean true, People/Brita.md: boolean true } }
+  - { expression: random() == random(), values: { People/Ann.md: boolean true, People/Brita.md: boolean true } }
+  - { expression: 'file("People/Brita.md")', values: { People/Ann.md: file People/Brita.md, People/Brita.md: file People/Brita.md } }
+  - { expression: 'file("Brita")', values: { People/Ann.md: file People/Brita.md, People/Brita.md: file People/Brita.md } }
+  - { expression: 'file("[[Brita]]")', values: { People/Ann.md: file People/Brita.md, People/Brita.md: file People/Brita.md } }
+  - { expression: 'file("Nowhere.md")', values: { People/Ann.md: null, People/Brita.md: null } }
+  - { expression: file(file), values: { People/Ann.md: file People/Ann.md, People/Brita.md: file People/Brita.md } }
+  - { expression: 'file(link("Brita"))', values: { People/Ann.md: file People/Brita.md, People/Brita.md: file People/Brita.md } }
+  - { expression: 'link("Brita")', values: { People/Ann.md: link People/Brita.md, People/Brita.md: link People/Brita.md } }
+  - { expression: 'link("Brita", "B")', values: { People/Ann.md: link People/Brita.md|B, People/Brita.md: link People/Brita.md|B } }
+  - { expression: 'link("[[Brita|Bee]]")', values: { People/Ann.md: link People/Brita.md|Bee, People/Brita.md: link People/Brita.md|Bee } }
+  - { expression: 'link("Nowhere")', values: { People/Ann.md: link Nowhere, People/Brita.md: link Nowhere } }
+  - { expression: link(file), values: { People/Ann.md: link People/Ann.md, People/Brita.md: link People/Brita.md } }
+  - { expression: 'html("<b>x</b>")', values: { People/Ann.md: error Cannot find function "html", People/Brita.md: error Cannot find function "html" } }
+  - { expression: 'image("photo.png")', values: { People/Ann.md: error Cannot find function "image", People/Brita.md: error Cannot find function "image" } }
+  - { expression: 'icon("star")', values: { People/Ann.md: error Cannot find function "icon", People/Brita.md: error Cannot find function "icon" } }

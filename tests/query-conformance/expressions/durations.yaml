@@ -1,0 +1,39 @@
+description: Until probe 3, a duration shows and compares as its milliseconds; duration(text) reads the units date arithmetic takes, a date minus a date is one, and a duration times or divided by a number stays one, the duration on the left.
+source: spec
+now: 2026-11-23T14:30:00
+notes:
+  Ann.md: |
+    ---
+    birthday: 1980-11-03
+    met: 2026-11-23T09:15
+    ---
+cases:
+  - { expression: duration("1d"), values: { Ann.md: duration 86400000 } }
+  - { expression: duration("1h 30m"), values: { Ann.md: duration 5400000 } }
+  - { expression: duration("2 days"), values: { Ann.md: duration 172800000 } }
+  - { expression: duration("1w"), values: { Ann.md: duration 604800000 } }
+  - { expression: duration("-1s"), values: { Ann.md: duration -1000 } }
+  - { expression: duration("1M"), values: { Ann.md: duration 2629746000 } }
+  - { expression: duration("1y"), values: { Ann.md: duration 31556952000 } }
+  - { expression: duration("soon"), values: { Ann.md: error Invalid duration "soon" } }
+  - { expression: duration(missing), values: { Ann.md: null } }
+  - { expression: today() - date("2026-11-20"), values: { Ann.md: duration 259200000 } }
+  - { expression: date("2026-11-20") - today(), values: { Ann.md: duration -259200000 } }
+  - { expression: met - today(), values: { Ann.md: duration 33300000 } }
+  - { expression: duration("1d") * 2, values: { Ann.md: duration 172800000 } }
+  - { expression: duration("1d") / 2, values: { Ann.md: duration 43200000 } }
+  - { expression: 2 * duration("1d"), values: { Ann.md: error Invalid operator between Number and Duration } }
+  - { expression: duration("1d") + duration("2h"), values: { Ann.md: duration 93600000 } }
+  - { expression: duration("1d") - duration("2h"), values: { Ann.md: duration 79200000 } }
+  - { expression: duration("1d") + 1, values: { Ann.md: error Invalid operator between Duration and Number } }
+  - { expression: duration("1d") % 2, values: { Ann.md: error Invalid operator between Duration and Number } }
+  - { expression: birthday + duration("1d"), values: { Ann.md: date 1980-11-04 } }
+  - { expression: birthday - duration("1M"), values: { Ann.md: date 1980-10-03 } }
+  - { expression: birthday + duration("1d") * 7, values: { Ann.md: date 1980-11-10 } }
+  - { expression: met + (today() - date("2026-11-22")), values: { Ann.md: date 2026-11-24T09:15:00 } }
+  - { expression: birthday + (today() - date("2026-11-22")), values: { Ann.md: date 1980-11-04T00:00:00 } }
+  - { expression: today() - date("2026-11-22") == duration("1d"), values: { Ann.md: boolean true } }
+  - { expression: duration("1d") == 86400000, values: { Ann.md: boolean true } }
+  - { expression: duration("1d") > duration("23h"), values: { Ann.md: boolean true } }
+  - { expression: duration("1d") > 1000, values: { Ann.md: boolean true } }
+  - { expression: '"" + duration("1d")', values: { Ann.md: text 86400000 } }

@@ -1,4 +1,4 @@
-description: Texts and lists have length, contains and their other methods; on null, every method but isEmpty gives null.
+description: Texts and lists have length, contains and their other methods, tags with their '#'; on null, every method but isEmpty gives null.
 source: spec
 notes:
   Ann.md: |
@@ -11,12 +11,13 @@ cases:
   - { expression: name.trim().length, values: { Ann.md: number 9 } }
   - { expression: name.lower().contains("smith"), values: { Ann.md: boolean true } }
   - { expression: name.trim().startsWith("Ann"), values: { Ann.md: boolean true } }
-  - { expression: name.upper().trim().endsWith("SMITH"), values: { Ann.md: boolean true } }
-  - { expression: name.matches(/smith/i), values: { Ann.md: boolean true } }
-  - { expression: tags.contains("friend"), values: { Ann.md: boolean true } }
+  - { expression: name.upper().trim().endsWith("SMITH"), values: { Ann.md: error Cannot find function "upper" on type String } }
+  - { expression: name.matches(/smith/i), values: { Ann.md: error Cannot find function "matches" on type String } }
+  - { expression: tags.contains("friend"), values: { Ann.md: boolean false } }
+  - { expression: tags.contains("#friend"), values: { Ann.md: boolean true } }
   - { expression: tags.length, values: { Ann.md: number 2 } }
-  - { expression: 'tags.join(" & ")', values: { Ann.md: text person & friend } }
-  - { expression: 'tags[0]', values: { Ann.md: text person } }
+  - { expression: 'tags.join(" & ")', values: { Ann.md: 'text #person & #friend' } }
+  - { expression: 'tags[0]', values: { Ann.md: 'text #person' } }
   - { expression: 'tags[5]', values: { Ann.md: null } }
   - { expression: missing.isEmpty(), values: { Ann.md: boolean true } }
   - { expression: missing.lower(), values: { Ann.md: null } }

@@ -27,9 +27,10 @@ notes:
         - this.tags.contains(place)
     views:
       - type: table
+        name: Due
         order: [file.basename, due]
         sort:
-          - property: due
+          - { property: due, direction: ASC }
     ```
   Paint.md: |
     ---

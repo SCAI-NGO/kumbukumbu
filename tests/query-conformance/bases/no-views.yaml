@@ -8,4 +8,4 @@ base: |
   filters: file.hasTag("keep")
 runs:
   - columns: [file.name]
-    rows: [[text a.md]]
+    rows: [[text a]]

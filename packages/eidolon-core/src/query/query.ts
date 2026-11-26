@@ -4,7 +4,7 @@
 // so the same base renders in Obsidian through the note it is embedded in. The cases are in tests/query-conformance/queries.
 import { fences, frontmatterEnd, splitLines, trim } from "../links/text";
 import { Base, type QueryResult } from "./base";
-import { QueryError } from "./errors";
+import { QueryError, type QueryWarning } from "./errors";
 import { QueryNote } from "./note";
 import { Properties } from "./properties";
 import { PropertyTypes, type PropertyType } from "./propertyTypes";
@@ -74,17 +74,18 @@ export class Query {
     return found.base.run(found.view, notes, self, now);
   }
 
-  /** Compiles every view without running it (no note is read, no argument needed): the error of each view that can't run,
-   * by view, in order; empty when all can. */
-  check(now: string): Array<{ view: string | null; error: QueryError }> {
+  /** Compiles every view without running it (no note is read, no argument needed): by view, in order, the error of each
+   * view that can't run, or the warnings of one that runs with them; empty when all run without. */
+  check(now: string): Array<{ view: string | null; error: QueryError | null; warnings: readonly QueryWarning[] }> {
     const self = this.bind(new Map(), true);
-    const problems: Array<{ view: string | null; error: QueryError }> = [];
+    const problems: Array<{ view: string | null; error: QueryError | null; warnings: readonly QueryWarning[] }> = [];
     for (const { base, view } of this.views) {
       try {
-        base.run(view, [], self, now);
+        const { warnings } = base.run(view, [], self, now);
+        if (warnings.length > 0) problems.push({ view, error: null, warnings });
       } catch (e) {
         if (!(e instanceof QueryError)) throw e;
-        problems.push({ view, error: e });
+        problems.push({ view, error: e, warnings: [] });
       }
     }
     return problems;
@@ -109,7 +110,7 @@ export class Query {
       else values.set(param.name, NULL);
     }
 
-    return new QueryNote(this.note.path, this.note.content, { values, problem: null });
+    return new QueryNote(this.note.path, this.note.content, { values, problem: null }, this.note.size, this.note.created, this.note.modified);
   }
 }
 

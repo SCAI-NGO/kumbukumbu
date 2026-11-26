@@ -1,4 +1,4 @@
-description: A declared date reads a quoted date as a date; the declaration wins over the quotes.
+description: A declared date doesn't change a value; a quoted date stays the text it is.
 source: spec
 types:
   birthday: date
@@ -10,4 +10,4 @@ notes:
 expect:
   properties:
     Ann.md:
-      birthday: date 1980-11-03
+      birthday: text 1980-11-03

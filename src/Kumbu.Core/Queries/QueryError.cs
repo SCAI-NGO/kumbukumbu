@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 namespace Kumbu.Core.Queries;
 
-/// <summary>A query that no note can make right: a function, method or formula that doesn't exist, formulas that use
-/// each other in a circle, a regular expression that doesn't compile. <see cref="Code"/> is the same for every engine
+/// <summary>A query that can't run: an expression that doesn't parse, nests too deeply or builds too much for a note, a
+/// base that can't be read, a call that doesn't fit the query. <see cref="Code"/> is the same for every engine
 /// (the conformance cases compare it); the message is for people.</summary>
 public sealed class QueryError(string code, string message, int position) : Exception(message)
 {
@@ -30,3 +30,8 @@ public sealed class QueryError(string code, string message, int position) : Exce
         }
     }
 }
+
+/// <summary>What a query names that doesn't exist (a function, method or formula) or formulas that use each other in a
+/// circle: the query still runs, with an error value in the cells it touches, and <c>query check</c> tells it.
+/// <see cref="Position"/> counts in <see cref="Expression"/>.</summary>
+public sealed record QueryWarning(string Code, string Message, string Expression, int Position);

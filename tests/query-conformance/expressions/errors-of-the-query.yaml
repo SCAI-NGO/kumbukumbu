@@ -1,0 +1,6 @@
+description: An expression that doesn't parse is an error of the query, found before any note is read; a regular expression that doesn't compile is null (regex.yaml).
+source: spec
+notes:
+  Ann.md: ""
+cases:
+  - { expression: 'a = 1', error: syntax }

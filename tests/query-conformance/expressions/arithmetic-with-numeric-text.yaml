@@ -1,0 +1,18 @@
+description: -, *, / and % read a text that reads as a number as that number, as JavaScript does; + with a text joins texts; a text that doesn't read as one is an error in the cell.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    t: "11"
+    name: Ann
+    ---
+cases:
+  - { expression: t - 1, values: { Ann.md: number 10 } }
+  - { expression: t * 2, values: { Ann.md: number 22 } }
+  - { expression: t / 2, values: { Ann.md: number 5.5 } }
+  - { expression: t % 4, values: { Ann.md: number 3 } }
+  - { expression: '"4" - " 1 "', values: { Ann.md: number 3 } }
+  - { expression: t + 1, values: { Ann.md: text 111 } }
+  - { expression: name - 1, values: { Ann.md: error Invalid operator between String and Number } }
+  - { expression: 1 - name, values: { Ann.md: error Invalid operator between Number and String } }
+  - { expression: t * missing, values: { Ann.md: null } }

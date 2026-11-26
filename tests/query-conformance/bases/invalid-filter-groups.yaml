@@ -1,0 +1,19 @@
+description: A filter group with a key other than and, or and not, or with more than one, makes the whole base an error, its other views too; so does one in a view's own filters.
+source: obsidian 1.15.1
+notes:
+  a.md: ""
+base: |
+  views:
+    - type: table
+      name: Fine
+      order: [file.name]
+    - type: table
+      name: Own
+      filters:
+        and:
+          - xor: [true]
+runs:
+  - view: Fine
+    error: base
+  - view: Own
+    error: base

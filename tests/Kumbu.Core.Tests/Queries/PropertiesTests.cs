@@ -40,7 +40,7 @@ public class PropertiesTests
         var yaml = "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
                    + string.Concat(Enumerable.Range(0, 8).Select(i => $"{(char)('b' + i)}: &{(char)('b' + i)} [{string.Join(", ", Enumerable.Repeat($"*{(char)('a' + i)}", 10))}]\n"));
 
-        var read = Properties.Read($"---\n{yaml}---\n", PropertyTypes.None);
+        var read = Properties.Read($"---\n{yaml}---\n");
 
         Assert.NotNull(read.Problem);
         Assert.Empty(read.Values);
@@ -48,16 +48,13 @@ public class PropertiesTests
 
     // A query reads every note's frontmatter; parsed once per content, a vault of thousands runs in milliseconds (ADR 0027).
     [Fact]
-    public void A_note_s_properties_are_parsed_once_for_its_content_and_its_vault_s_types()
+    public void A_note_s_properties_are_parsed_once_for_its_content()
     {
         var content = string.Concat("---\nbirthday: 1980-11-23\n---\n", "# Ann");
-        var types = PropertyTypes.Read("{\"types\": {\"birthday\": \"date\"}}");
 
-        var first = Properties.Read(content, types);
+        var first = Properties.Read(content);
 
-        Assert.Same(first, Properties.Read(content, types));
-        Assert.Same(first, Properties.Read(content, PropertyTypes.Read("{\"types\": {\"birthday\": \"date\"}}")));
-        Assert.IsType<TextValue>(Properties.Read(content, PropertyTypes.Read("{\"types\": {\"birthday\": \"text\"}}")).Values["birthday"]);
-        Assert.IsType<DateValue>(Properties.Read(content, types).Values["birthday"]);
+        Assert.Same(first, Properties.Read(content));
+        Assert.IsType<DateValue>(first.Values["birthday"]);
     }
 }

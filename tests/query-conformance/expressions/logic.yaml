@@ -1,16 +1,11 @@
-description: '&& and || give one of their operands, as in JavaScript; ! gives a checkbox; null, 0 and "" count as false.'
-source: spec
+description: '&& and || give a checkbox, not one of their operands (finding 12).'
+source: obsidian 1.15.1
 notes:
   Ann.md: |
     ---
     nick: Annie
     zero: 0
-    empty: ""
     ---
 cases:
-  - { expression: missing || "none", values: { Ann.md: text none } }
-  - { expression: nick || "none", values: { Ann.md: text Annie } }
-  - { expression: nick && zero, values: { Ann.md: number 0 } }
-  - { expression: '!empty', values: { Ann.md: boolean true } }
-  - { expression: '!nick', values: { Ann.md: boolean false } }
-  - { expression: '!zero && !missing', values: { Ann.md: boolean true } }
+  - { expression: missing || "none", values: { Ann.md: boolean true } }
+  - { expression: nick && zero, values: { Ann.md: boolean false } }

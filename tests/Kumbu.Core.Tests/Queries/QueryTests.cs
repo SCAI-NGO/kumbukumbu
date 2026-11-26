@@ -37,7 +37,7 @@ public class QueryTests
     }
 
     [Fact]
-    public void Check_names_each_broken_view_with_its_expression_and_position_and_needs_no_arguments()
+    public void Check_names_each_broken_view_and_each_warning_with_its_expression_and_position_and_needs_no_arguments()
     {
         var query = Query.Read(Note("Q.md", """
             ---
@@ -66,9 +66,9 @@ public class QueryTests
         var problems = query.Check(new DateTime(2026, 1, 1));
 
         Assert.Equal(
-            ["Loud unknown-method 'name.shout()' 4", "Broken syntax 'a &' 2"],
-            problems.Select(p => $"{p.View} {p.Error.Code} '{p.Error.Expression}' {p.Error.Position}"));
+            ["Loud warning unknown-method 'name.shout()' 4", "Broken syntax 'a &' 2"],
+            problems.Select(p => p.Error is { } e ? $"{p.View} {e.Code} '{e.Expression}' {e.Position}" : string.Join(", ", p.Warnings.Select(w => $"{p.View} warning {w.Code} '{w.Expression}' {w.Position}"))));
     }
 
-    private static QueryNote Note(string path, string content) => new(path, content, Properties.Read(content, PropertyTypes.None));
+    private static QueryNote Note(string path, string content) => new(path, content, Properties.Read(content));
 }

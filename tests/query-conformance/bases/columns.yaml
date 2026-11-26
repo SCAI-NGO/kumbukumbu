@@ -17,5 +17,5 @@ base: |
 runs:
   - columns: [file.name, status, note.status, my prop, formula.twice]
     rows:
-      - [text Ann.md, text open, text open, number 5, number 10]
-      - [text Brita.md, null, null, null, null]
+      - [text Ann, text open, text open, number 5, number 10]
+      - [text Brita, null, null, null, null]

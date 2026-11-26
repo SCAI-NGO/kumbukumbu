@@ -1,0 +1,45 @@
+description: A date plus or minus a text of durations (y M w d h m s, or their names in any case, several in one text, a minus allowed) is a date; months clamp the day; hours, minutes and seconds give a date without a time one, the other units keep whether it has one; a text that isn't a duration is an error in the cell.
+source: spec
+now: 2026-11-23T14:30:00
+notes:
+  Ann.md: |
+    ---
+    birthday: 1980-11-03
+    met: 2026-11-23T09:15
+    leap: 2024-01-31
+    ---
+cases:
+  - { expression: 'date("2024-12-01") + "1M" + "4h" + "3m"', values: { Ann.md: date 2025-01-01T04:03:00 } }
+  - { expression: now() + "1 day", values: { Ann.md: date 2026-11-24T14:30:00 } }
+  - { expression: today() - "1M", values: { Ann.md: date 2026-10-23 } }
+  - { expression: birthday + "1d", values: { Ann.md: date 1980-11-04 } }
+  - { expression: birthday - "1w", values: { Ann.md: date 1980-10-27 } }
+  - { expression: birthday + "1y 2M 3d", values: { Ann.md: date 1982-01-06 } }
+  - { expression: birthday + "1y2M", values: { Ann.md: date 1982-01-03 } }
+  - { expression: birthday + "-1d", values: { Ann.md: date 1980-11-02 } }
+  - { expression: birthday - "-1d", values: { Ann.md: date 1980-11-04 } }
+  - { expression: birthday + "2h", values: { Ann.md: date 1980-11-03T02:00:00 } }
+  - { expression: met - "2h", values: { Ann.md: date 2026-11-23T07:15:00 } }
+  - { expression: met + "30m", values: { Ann.md: date 2026-11-23T09:45:00 } }
+  - { expression: met + "10s", values: { Ann.md: date 2026-11-23T09:15:10 } }
+  - { expression: met + "1d", values: { Ann.md: date 2026-11-24T09:15:00 } }
+  - { expression: met.date() + "1h", values: { Ann.md: date 2026-11-23T01:00:00 } }
+  - { expression: leap + "1M", values: { Ann.md: date 2024-02-29 } }
+  - { expression: date("2023-01-31") + "1M", values: { Ann.md: date 2023-02-28 } }
+  - { expression: leap + "1y", values: { Ann.md: date 2025-01-31 } }
+  - { expression: 'date("2024-01-30") + "1M 1d"', values: { Ann.md: date 2024-02-29 } }
+  - { expression: 'date("2024-01-30") + "1M" + "1d"', values: { Ann.md: date 2024-03-01 } }
+  - { expression: birthday + "3 days", values: { Ann.md: date 1980-11-06 } }
+  - { expression: birthday + "2 Weeks", values: { Ann.md: date 1980-11-17 } }
+  - { expression: birthday + "1 year", values: { Ann.md: date 1981-11-03 } }
+  - { expression: birthday + "1 MONTH", values: { Ann.md: date 1980-12-03 } }
+  - { expression: met + "1 hour", values: { Ann.md: date 2026-11-23T10:15:00 } }
+  - { expression: met + "5 minutes", values: { Ann.md: date 2026-11-23T09:20:00 } }
+  - { expression: met + "1 second", values: { Ann.md: date 2026-11-23T09:15:01 } }
+  - { expression: birthday + "soon", values: { Ann.md: error Invalid duration "soon" } }
+  - { expression: birthday + "1D", values: { Ann.md: error Invalid duration "1D" } }
+  - { expression: birthday + "", values: { Ann.md: error Invalid duration "" } }
+  - { expression: birthday + 1, values: { Ann.md: error Invalid operator between Date and Number } }
+  - { expression: birthday + birthday, values: { Ann.md: error Invalid operator between Date and Date } }
+  - { expression: missing - "1d", values: { Ann.md: null } }
+  - { expression: date("9999-12-31") + "1d", values: { Ann.md: error Invalid date } }

@@ -1,0 +1,67 @@
+description: Only ASC and DESC sort; a sort key without a direction, or with asc or Desc, sorts nothing, and the rows keep path order unless a later key sorts.
+source: obsidian 1.15.1
+notes:
+  a.md: |
+    ---
+    rank: 2
+    ---
+  b.md: |
+    ---
+    rank: 1
+    ---
+  c.md: |
+    ---
+    rank: 3
+    ---
+base: |
+  views:
+    - type: table
+      name: Up
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: ASC }
+    - type: table
+      name: Down
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: DESC }
+    - type: table
+      name: None
+      order: [file.basename, rank]
+      sort:
+        - { property: rank }
+    - type: table
+      name: Lower case
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: asc }
+    - type: table
+      name: Mixed case
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: Desc }
+    - type: table
+      name: Skipped then sorted
+      order: [file.basename, rank]
+      sort:
+        - { property: rank, direction: asc }
+        - { property: file.basename, direction: DESC }
+runs:
+  - view: Up
+    columns: [file.basename, rank]
+    rows: [[text b, number 1], [text a, number 2], [text c, number 3]]
+  - view: Down
+    columns: [file.basename, rank]
+    rows: [[text c, number 3], [text a, number 2], [text b, number 1]]
+  - view: None
+    columns: [file.basename, rank]
+    rows: [[text a, number 2], [text b, number 1], [text c, number 3]]
+  - view: Lower case
+    columns: [file.basename, rank]
+    rows: [[text a, number 2], [text b, number 1], [text c, number 3]]
+  - view: Mixed case
+    columns: [file.basename, rank]
+    rows: [[text a, number 2], [text b, number 1], [text c, number 3]]
+  - view: Skipped then sorted
+    columns: [file.basename, rank]
+    rows: [[text c, number 3], [text b, number 1], [text a, number 2]]

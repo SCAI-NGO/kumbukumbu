@@ -1,4 +1,4 @@
-description: if, number, list and date; a value of the wrong type gives null rather than an error.
+description: if, number, list and date; number reads a text as JavaScript's Number does, and a text it can't read is an error in the cell.
 source: spec
 notes:
   Ann.md: |
@@ -12,9 +12,15 @@ cases:
   - { expression: 'if(missing, "yes")', values: { Ann.md: null } }
   - { expression: number(rating) * 2, values: { Ann.md: number 9 } }
   - { expression: number(done), values: { Ann.md: number 1 } }
-  - { expression: number("soon"), values: { Ann.md: null } }
+  - { expression: number("soon"), values: { Ann.md: error Unable to parse "soon" as a number. } }
+  - { expression: number(" 12 "), values: { Ann.md: number 12 } }
+  - { expression: "number(\"\uFEFF12\")", values: { Ann.md: error Unable to parse } }
+  - { expression: number("1e3"), values: { Ann.md: number 1000 } }
+  - { expression: number("0x1F"), values: { Ann.md: number 31 } }
+  - { expression: number("-Infinity"), values: { Ann.md: number -Infinity } }
+  - { expression: number(".inf"), values: { Ann.md: error Unable to parse ".inf" as a number. } }
   - { expression: list(related), values: { Ann.md: [text Brita] } }
-  - { expression: list(missing), values: { Ann.md: [] } }
+  - { expression: list(missing), values: { Ann.md: null } }
   - { expression: date("2026-11-23"), values: { Ann.md: date 2026-11-23 } }
-  - { expression: date("2026-11-23 10:00"), values: { Ann.md: datetime 2026-11-23T10:00:00 } }
+  - { expression: date("2026-11-23 10:00"), values: { Ann.md: date 2026-11-23T10:00:00 } }
   - { expression: date("soon"), values: { Ann.md: null } }

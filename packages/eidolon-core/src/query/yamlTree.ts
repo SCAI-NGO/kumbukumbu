@@ -5,7 +5,7 @@
 import { isAlias, isMap, isScalar, isSeq, parseAllDocuments, type Node } from "yaml";
 
 export type YamlNode =
-  | { readonly kind: "scalar"; readonly value: string }
+  | { readonly kind: "scalar"; readonly value: string; readonly plain?: boolean }
   | { readonly kind: "seq"; readonly items: readonly YamlNode[] }
   | { readonly kind: "map"; readonly entries: ReadonlyArray<readonly [YamlNode, YamlNode]> };
 
@@ -40,7 +40,8 @@ export function readYaml(text: string): YamlNode | null {
     if (isMap(node))
       return { kind: "map", entries: node.items.map((pair) => [walk(pair.key as Node | null, depth + 1), walk(pair.value as Node | null, depth + 1)] as const) };
     if (isSeq(node)) return { kind: "seq", items: node.items.map((item) => walk(item as Node | null, depth + 1)) };
-    if (isScalar(node)) return { kind: "scalar", value: node.value === null || node.value === undefined ? "" : String(node.value) };
+    if (isScalar(node))
+      return { kind: "scalar", value: node.value === null || node.value === undefined ? "" : String(node.value), plain: node.type === undefined || node.type === "PLAIN" };
     return { kind: "scalar", value: "" };
   };
   return walk(root as Node, 0);

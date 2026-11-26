@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace Kumbu.Core.Queries;
@@ -11,8 +12,6 @@ public sealed class ExpressionParser
 {
     public const int MaxLength = 10_000;
     public const int MaxDepth = 64;
-
-    private const string RegexFlags = "gimsu";
 
     private readonly string text;
     private int at;
@@ -41,6 +40,8 @@ public sealed class ExpressionParser
     private void Enter()
     {
         if (++depth > MaxDepth) throw new QuerySyntaxError($"The expression is nested too deeply: at most {MaxDepth} levels.", at);
+        // A formula is parsed where the check of the expressions that use it has gone down to; the stack may end first.
+        if (!RuntimeHelpers.TryEnsureSufficientExecutionStack()) throw new QueryError("too-deep", "The expression and the formulas it uses are nested too deeply.", at);
     }
 
     private Expr Or() => LeftToRight(And, ("||", Operator.Or));
@@ -266,13 +267,9 @@ public sealed class ExpressionParser
 
         if (at >= text.Length || text[at] != '/') throw new QuerySyntaxError("The regular expression is unterminated.", start);
         at++;
+        // Any letters are its flags: an unknown or repeated one makes it null, not a syntax error, as in Obsidian.
         var flags = at;
-        while (char.IsAsciiLetter(Peek()))
-        {
-            if (!RegexFlags.Contains(Peek()) || text.IndexOf(Peek(), flags, at - flags) >= 0)
-                throw new QuerySyntaxError($"Unknown or repeated flag '{Peek()}' of the regular expression: use {string.Join(", ", RegexFlags.ToCharArray())}.", at);
-            at++;
-        }
+        while (char.IsAsciiLetter(Peek())) at++;
 
         return new RegexExpr(pattern.ToString(), text[flags..at], start);
     }

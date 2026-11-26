@@ -1,0 +1,46 @@
+description: The list methods of Obsidian's reference; value, index and acc are names only inside filter, map and reduce, the innermost lambda's first, and elsewhere value is the property of that name.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    nums: [3, 1, 2]
+    value: 42
+    ---
+cases:
+  - { expression: '[1, 2, 3, 4].filter(value > 2)', values: { Ann.md: [number 3, number 4] } }
+  - { expression: '[10, 20, 30].filter(index > 0)', values: { Ann.md: [number 20, number 30] } }
+  - { expression: '[1, 2, 3, 4].map(value + 1)', values: { Ann.md: [number 2, number 3, number 4, number 5] } }
+  - { expression: '["a", "b"].map(value + index)', values: { Ann.md: [text a0, text b1] } }
+  - { expression: '[1, 2, 3].reduce(acc + value, 0)', values: { Ann.md: number 6 } }
+  - { expression: 'nums.reduce(if(acc == null || value > acc, value, acc), null)', values: { Ann.md: number 3 } }
+  - { expression: '[].reduce(acc + value, 5)', values: { Ann.md: number 5 } }
+  - { expression: '[[1, 2], [3]].map(value.map(value * 10))', values: { Ann.md: [[number 10, number 20], [number 30]] } }
+  - { expression: '[[1, 2], [3]].reduce(acc + value.reduce(acc + value, 0), 0)', values: { Ann.md: number 6 } }
+  - { expression: '[1].reduce([2].map(acc + value), 10)', values: { Ann.md: [number 12] } }
+  - { expression: value, values: { Ann.md: number 42 } }
+  - { expression: '[1].map(value)', values: { Ann.md: [number 1] } }
+  - { expression: '[1].map(note.value)', values: { Ann.md: [number 42] } }
+  - { expression: 'missing.filter(value > 1)', values: { Ann.md: null } }
+  - { expression: '"abc".map(value)', values: { Ann.md: error Cannot find function "map" on type String } }
+  - { expression: '[1, nothing(2)].map(value)', values: { Ann.md: error Cannot find function "nothing" } }
+  - { expression: '[1, 2].map(value.shout())', values: { Ann.md: error Cannot find function "shout" on type Number } }
+  - { expression: '[1, [2, 3]].flat()', values: { Ann.md: [number 1, number 2, number 3] } }
+  - { expression: '[1, [2, [3]]].flat()', values: { Ann.md: [number 1, number 2, [number 3]] } }
+  - { expression: nums.sort(), values: { Ann.md: [number 1, number 2, number 3] } }
+  - { expression: '[10, 9, 1].sort()', values: { Ann.md: [number 1, number 9, number 10] } }
+  - { expression: '["c", "a", "b"].sort()', values: { Ann.md: [text a, text b, text c] } }
+  - { expression: '[1, 2, 2, 3].unique()', values: { Ann.md: [number 1, number 2, number 3] } }
+  - { expression: '[1, 2, 3, 4].slice(1, 3)', values: { Ann.md: [number 2, number 3] } }
+  - { expression: '[1, 2, 3, 4].slice(-1)', values: { Ann.md: [number 4] } }
+  - { expression: nums.reverse(), values: { Ann.md: [number 2, number 1, number 3] } }
+  - { expression: 'nums.join(",")', values: { Ann.md: 'text 3,1,2' } }
+  - { expression: nums.contains(2), values: { Ann.md: boolean true } }
+  - { expression: 'nums.containsAll(1, 3)', values: { Ann.md: boolean true } }
+  - { expression: 'nums.containsAll(1, 5)', values: { Ann.md: boolean false } }
+  - { expression: 'nums.containsAny(5, 2)', values: { Ann.md: boolean true } }
+  - { expression: nums.containsAny(5), values: { Ann.md: boolean false } }
+  - { expression: '[].isEmpty()', values: { Ann.md: boolean true } }
+  - { expression: nums.length, values: { Ann.md: number 3 } }
+  # NaN goes after the other numbers, so the order holds from one pair to the next.
+  - { expression: '[3, 0 / 0, 1, 0 / 0, 2].sort()', values: { Ann.md: [number 1, number 2, number 3, number NaN, number NaN] } }
+  - { expression: '[0 / 0, "b", 2, 0 / 0, "a", 1].sort()', values: { Ann.md: [number 1, number 2, number NaN, number NaN, text a, text b] } }

@@ -1,5 +1,6 @@
-description: A filter is an expression or a group; and needs all, or needs one, not needs none of its items; groups nest.
-source: spec
+description: A filter is an expression or a group; and needs all, or needs one, not needs none of its items; groups nest. The base file is a row too, where its filters let it be.
+source: obsidian 1.15.1
+file: case-filter-groups.base
 notes:
   A.md: |
     ---
@@ -60,7 +61,7 @@ runs:
     rows: [[text B], [text C]]
   - view: Not
     columns: [file.basename]
-    rows: [[text A], [text C]]
+    rows: [[text A], [text C], [text case-filter-groups]]
   - view: Nested
     columns: [file.basename]
     rows: [[text C], [text D]]

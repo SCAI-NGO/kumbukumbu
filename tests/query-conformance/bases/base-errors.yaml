@@ -1,4 +1,4 @@
-description: A base that can't run says why before any row; an unknown view, an unknown filter group, and the expressions' own errors.
+description: A base that can't run says why before any row, an unknown view or a filter that doesn't read; an expression's error is a value in its cells, not an error of the base.
 source: spec
 notes:
   a.md: ""
@@ -11,18 +11,18 @@ base: |
       order: [file.name]
     - type: table
       name: Uses broken
-      order: [formula.broken]
+      order: [file.name, formula.broken]
     - type: table
-      name: Bad group
-      filters:
-        xor: [true]
+      name: Bad syntax
+      filters: "a &"
 runs:
   - view: Fine
     columns: [file.name]
-    rows: [[text a.md]]
+    rows: [[text a]]
   - view: Missing
     error: unknown-view
   - view: Uses broken
-    error: unknown-function
-  - view: Bad group
-    error: base
+    columns: [file.name, formula.broken]
+    rows: [[text a, error Cannot find function "nothing"]]
+  - view: Bad syntax
+    error: syntax

@@ -35,6 +35,9 @@ public sealed partial class Query
     /// <summary>The views of its bases, in the order they are written; the first is the one a call without a view runs.</summary>
     public IReadOnlyList<string> ViewNames => views.Where(v => v.View is not null).Select(v => v.View!).ToList();
 
+    /// <summary>Whether a text of one of its bases holds <paramref name="word"/> (<see cref="Base.Mentions"/>).</summary>
+    public bool Mentions(string word) => views.Any(v => v.Base.Mentions(word));
+
     public static bool IsBaseFile(string path) => path.EndsWith(".base", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether a note is meant as a query, read cheaply: <c>type: query</c> in its frontmatter, or a <c>.base</c> file.</summary>
@@ -56,31 +59,32 @@ public sealed partial class Query
     }
 
     /// <summary>Runs a view (by name; the first when null) with the call's arguments: each name a parameter, each value
-    /// a text read as the parameter's type (a list takes one per item). Throws <see cref="QueryError"/>.</summary>
-    public QueryResult Run(string? view, IReadOnlyDictionary<string, IReadOnlyList<string>> arguments, IEnumerable<QueryNote> notes, DateTime now)
+    /// a text read as the parameter's type (a list takes one per item). Throws <see cref="QueryError"/>, and
+    /// <see cref="OperationCanceledException"/> at the next row once the token is cancelled.</summary>
+    public QueryResult Run(string? view, IReadOnlyDictionary<string, IReadOnlyList<string>> arguments, IEnumerable<QueryNote> notes, DateTime now, CancellationToken ct = default)
     {
         var self = Bind(arguments);
         var (base_, name) = view is null
             ? views[0]
             : views.FirstOrDefault(v => v.View == view) is { Base: not null } found ? found : throw new QueryError("unknown-view", $"The query has no view '{view}'.", 0);
-        return base_.Run(name, notes, self, now);
+        return base_.Run(name, notes, self, now, ct);
     }
 
-    /// <summary>Compiles every view without running it (no note is read, no argument needed): the error of each view that
-    /// can't run, by view, in order; empty when all can.</summary>
-    public IReadOnlyList<(string? View, QueryError Error)> Check(DateTime now)
+    /// <summary>Compiles every view without running it (no note is read, no argument needed): by view, in order, the
+    /// error of each view that can't run, or the warnings of one that runs with them; empty when all run without.</summary>
+    public IReadOnlyList<(string? View, QueryError? Error, IReadOnlyList<QueryWarning> Warnings)> Check(DateTime now)
     {
         var self = Bind(new Dictionary<string, IReadOnlyList<string>>(), check: true);
-        var problems = new List<(string?, QueryError)>();
+        var problems = new List<(string?, QueryError?, IReadOnlyList<QueryWarning>)>();
         foreach (var (base_, view) in views)
         {
             try
             {
-                base_.Run(view, [], self, now);
+                if (base_.Run(view, [], self, now).Warnings is { Count: > 0 } warnings) problems.Add((view, null, warnings));
             }
             catch (QueryError e)
             {
-                problems.Add((view, e));
+                problems.Add((view, e, []));
             }
         }
 
@@ -105,7 +109,7 @@ public sealed partial class Query
             else values[param.Name] = NullValue.Instance;
         }
 
-        return new QueryNote(note.Path, note.Content, new NoteProperties(values, null));
+        return new QueryNote(note.Path, note.Content, new NoteProperties(values, null), note.Size, note.Created, note.Modified);
     }
 
     private static Value Argument(QueryParam param, IReadOnlyList<string> given)

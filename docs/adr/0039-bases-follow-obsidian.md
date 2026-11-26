@@ -1,9 +1,9 @@
-# 0028. Bases follow Obsidian's semantics; Kumbu² only adds diagnostics
+# 0039. Bases follow Obsidian's semantics; Kumbu² only adds diagnostics
 
 - **Date:** 2026-11-25
 - **Status:** Accepted
 - **Decided by:** Chris, with Claude
-- **Spec:** [Queries: the data side](../superpowers/specs/2026-11-24-queries-data-side-design.md)
+- **Spec:** [Queries: the data side](../superpowers/specs/2026-11-24-queries-data-side-design.md), [Bases follow Obsidian](../superpowers/specs/2026-11-25-bases-follow-obsidian-design.md)
 
 ## Context
 

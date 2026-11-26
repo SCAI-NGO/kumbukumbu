@@ -12,8 +12,8 @@ import { QueryError, QuerySyntaxError } from "../src/query/errors";
 import { QueryNote } from "../src/query/note";
 import { Properties } from "../src/query/properties";
 import { Query, type QueryParam } from "../src/query/query";
-import { PropertyTypes } from "../src/query/propertyTypes";
-import { formatNumber, type Value } from "../src/query/value";
+import { QueryVault } from "../src/query/vault";
+import { asMilliseconds, formatNumber, type Value } from "../src/query/value";
 
 const ME = "ts";
 const folder = resolve(dirname(fileURLToPath(import.meta.url)), "../../../tests/query-conformance");
@@ -75,15 +75,34 @@ function describeValue(value: Value): string {
     case "text": return value.text.length === 0 ? "text" : `text ${value.text}`;
     case "number": return `number ${formatNumber(value.number)}`;
     case "boolean": return `boolean ${value.boolean}`;
-    case "date": return `date ${value.date}`;
-    // A datetime is told to the second, as the C# runner does.
-    case "datetime": return `datetime ${value.dateTime.slice(0, 19)}`;
+    // A date with a time is told to the second, as the C# runner does.
+    case "date": return `date ${value.hasTime ? value.moment.slice(0, 19) : value.moment.slice(0, 10)}`;
+    case "duration": return `duration ${formatNumber(asMilliseconds(value))}`;
     case "list": return `[${value.items.map(describeValue).join(", ")}]`;
     case "object": return `{${describeMap([...value.values].map(([k, v]) => [k, describeValue(v)])).join(", ")}}`;
     case "file": return `file ${value.note.path}`;
+    case "link": return value.display === null ? `link ${value.path}` : `link ${value.path}|${value.display}`;
+    case "error": return `error ${value.message}`;
     default: throw new Error(`Cannot describe a ${value.kind}.`);
   }
 }
+
+// A value as the case writes it when it matches, else as it is: "error" matches any error value, and "error <text>" one
+// whose message starts with the text.
+function matches(expected: Node, actual: Value): boolean {
+  if (typeof expected === "string" && actual.kind === "error")
+    return expected === "error" || (expected.startsWith("error ") && actual.message.startsWith(expected.slice("error ".length)));
+  if (Array.isArray(expected) && actual.kind === "list")
+    return expected.length === actual.items.length && expected.every((e, i) => matches(e, actual.items[i]!));
+  if (typeof expected === "object" && !Array.isArray(expected) && actual.kind === "object") {
+    const entries = Object.entries(expected);
+    return entries.length === actual.values.size && entries.every(([k, v]) => actual.values.has(k) && matches(v, actual.values.get(k)!));
+  }
+  return describeExpected(expected) === describeValue(actual);
+}
+
+const shown = (expected: Node | undefined, actual: Value): string =>
+  expected !== undefined && matches(expected, actual) ? describeExpected(expected) : describeValue(actual);
 
 for (const [file, root] of cases) {
   const pending = root.pending === undefined ? [] : list(root.pending).map(text);
@@ -93,21 +112,20 @@ for (const [file, root] of cases) {
     const source = text(root.source);
     expect(source === "spec" || source.startsWith("obsidian "), `Unknown source '${source}'.`).toBe(true);
 
-    const types = PropertyTypes.read(JSON.stringify({ types: root.types === undefined ? {} : map(root.types) }));
-    const notes = new Map(Object.entries(map(root.notes)).map(([path, content]) => [path, Properties.read(text(content), types)]));
+    const notes = new Map(Object.entries(map(root.notes)).map(([path, content]) => [path, Properties.read(text(content))]));
 
     if (root.query !== undefined || (root.runs !== undefined && list(root.runs).some((r) => map(r).query !== undefined))) {
-      queries(root, types);
+      queries(root);
       return;
     }
 
     if (root.runs !== undefined) {
-      bases(root, types);
+      bases(root);
       return;
     }
 
     if (root.cases !== undefined) {
-      expressions(root, types);
+      expressions(root);
       return;
     }
 
@@ -129,24 +147,39 @@ for (const [file, root] of cases) {
 const codeOf = (e: unknown): string =>
   e instanceof QuerySyntaxError ? "syntax" : e instanceof QueryError ? e.code : e instanceof Error ? e.constructor.name : String(e);
 
-type Types = ReturnType<typeof PropertyTypes.read>;
+// The files of a case: a .md file is a note; any other is a file with that text, without properties. A base case with
+// "file" has its base as one of the files; times are null unless the case gives them.
+function queryNotes(root: Case): Map<string, QueryNote> {
+  const times = root.times === undefined ? {} : map(root.times);
+  const file = (path: string, content: string) => {
+    const properties = QueryNote.isNotePath(path) ? Properties.read(content) : { values: new Map(), problem: null };
+    const given = times[path];
+    return given === undefined
+      ? new QueryNote(path, content, properties)
+      : new QueryNote(path, content, properties, null, text(map(given).ctime), text(map(given).mtime));
+  };
+  const notes = new Map(Object.entries(map(root.notes)).map(([path, content]) => [path, file(path, text(content))]));
+  if (root.file !== undefined) notes.set(text(root.file), file(text(root.file), text(root.base)));
+  return notes;
+}
 
-const queryNotes = (root: Case, types: Types) => new Map(Object.entries(map(root.notes)).map(([path, content]) =>
-  [path, new QueryNote(path, text(content), Properties.read(text(content), types))]));
-
-function expressions(root: Case, types: Types): void {
-  const notes = queryNotes(root, types);
+function expressions(root: Case): void {
+  const notes = queryNotes(root);
   const formulas = new Map(Object.entries(root.formulas === undefined ? {} : map(root.formulas)).map(([k, v]) => [k, text(v)]));
   const self = root.this === undefined ? null : notes.get(text(root.this))!;
   const now = root.now === undefined ? DEFAULT_NOW : text(root.now);
 
+  // One run: random() is one number per note across the case's expressions.
+  const vault = new QueryVault(notes.values());
   for (const c of list(root.cases).map(map)) {
     const source = text(c.expression);
     const evaluator = new Evaluator(formulas);
     if (c.error !== undefined) {
       let code = "none";
       try {
-        evaluator.compile(source);
+        // Most errors of the query come from compiling; the limits of what an expression builds come from evaluating it.
+        const compiled = evaluator.compile(source);
+        for (const note of notes.values()) evaluator.evaluate(compiled, { note, this: self, now, vault });
       } catch (e) {
         code = codeOf(e);
       }
@@ -158,15 +191,19 @@ function expressions(root: Case, types: Types): void {
     const expected = map(c.values);
     expect(Object.keys(expected).length, `${source}: a value for every note.`).toBe(notes.size);
     for (const [path, value] of Object.entries(expected))
-      expect(describeValue(evaluator.evaluate(expr, { note: notes.get(path)!, this: self, now })), `${source} on ${path}`).toBe(describeExpected(value));
+      expect(shown(value, evaluator.evaluate(expr, { note: notes.get(path)!, this: self, now, vault })), `${source} on ${path}`).toBe(describeExpected(value));
   }
 }
 
-const rowsOf = (result: QueryResult) => result.rows.map((r) => r.cells.map(describeValue).join(" | ")).join("\n");
+// The rows as the result has them, a cell that matches the case's told as the case tells it.
+const rowsOf = (result: QueryResult, run: Case) => {
+  const expected = list(run.rows).map(list);
+  return result.rows.map((r, i) => r.cells.map((c, j) => shown(expected[i]?.[j], c)).join(" | ")).join("\n");
+};
 const expectedRows = (run: Case) => list(run.rows).map((r) => list(r).map(describeExpected).join(" | ")).join("\n");
 
-function bases(root: Case, types: Types): void {
-  const notes = queryNotes(root, types);
+function bases(root: Case): void {
+  const notes = queryNotes(root);
   const self = root.this === undefined ? null : notes.get(text(root.this))!;
   const now = root.now === undefined ? DEFAULT_NOW : text(root.now);
   const yaml = text(root.base);
@@ -187,7 +224,7 @@ function bases(root: Case, types: Types): void {
 
     const result = go();
     expect(result.columns).toEqual(list(run.columns).map(text));
-    expect(rowsOf(result)).toBe(expectedRows(run));
+    expect(rowsOf(result, run)).toBe(expectedRows(run));
   }
 }
 
@@ -200,8 +237,8 @@ function describeParam(p: QueryParam): string {
   return `{${parts.sort(ordinal).join(", ")}}`;
 }
 
-function queries(root: Case, types: Types): void {
-  const notes = queryNotes(root, types);
+function queries(root: Case): void {
+  const notes = queryNotes(root);
   const now = root.now === undefined ? DEFAULT_NOW : text(root.now);
   const main = root.query === undefined ? null : text(root.query);
 
@@ -233,6 +270,6 @@ function queries(root: Case, types: Types): void {
 
     const result = go();
     expect(result.columns).toEqual(list(run.columns).map(text));
-    expect(rowsOf(result), label).toBe(expectedRows(run));
+    expect(rowsOf(result, run), label).toBe(expectedRows(run));
   }
 }

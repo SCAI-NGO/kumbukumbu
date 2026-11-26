@@ -15,7 +15,7 @@ base: |
       order: [file.name]
 runs:
   - columns: [file.name]
-    rows: [[text a.md], [text b.md]]
+    rows: [[text a], [text b]]
   - view: All
     columns: [file.name]
-    rows: [[text a.md], [text b.md], [text c.md]]
+    rows: [[text a], [text b], [text c]]

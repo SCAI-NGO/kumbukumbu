@@ -1,5 +1,5 @@
 description: A parameter left out takes its default; this is the query note itself, its own properties under the arguments.
-source: spec
+source: obsidian 1.15.1
 query: Queries/Open tasks.md
 notes:
   Queries/Open tasks.md: |
@@ -15,6 +15,7 @@ notes:
     filters: status == this.status && owner == this.owner
     views:
       - type: table
+        name: Open
         order: [file.basename, status]
     ```
   Tasks/Paint.md: |

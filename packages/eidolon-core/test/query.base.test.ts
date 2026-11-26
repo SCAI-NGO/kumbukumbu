@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// What only this engine has inside: the budget of a base's YAML, the nesting of its filters, the depth of an expression.
+// What only this engine has inside: the budget of a base's YAML, the nesting of its filters, the depth of an expression,
+// the bounds of a run.
 import { expect, test } from "vitest";
 import { Base } from "../src/query/base";
 import { QuerySyntaxError } from "../src/query/errors";
 import { Evaluator } from "../src/query/evaluator";
 import { QueryNote } from "../src/query/note";
 import { ExpressionParser } from "../src/query/parser";
+import { QueryVault } from "../src/query/vault";
 import { Properties } from "../src/query/properties";
-import { PropertyTypes } from "../src/query/propertyTypes";
 
-const note = new QueryNote("a.md", "", Properties.read("", PropertyTypes.none));
+const note = new QueryNote("a.md", "", Properties.read(""));
 const NOW = "2026-01-01T12:00:00";
 
 const codeOf = (go: () => unknown): string => {
@@ -51,7 +52,7 @@ test("a long chain of one operator compiles and evaluates without running out of
   expect(source.length).toBeLessThan(10_000);
   const evaluator = new Evaluator();
   const expr = evaluator.compile(source);
-  expect(evaluator.evaluate(expr, { note, this: null, now: NOW }).kind).toBe("null");
+  expect(evaluator.evaluate(expr, { note, this: null, now: NOW })).toEqual({ kind: "boolean", boolean: false });
 });
 
 // Each step of a chain is a level of the parser's 64, so a long chain is a syntax error whatever the stack, and one
@@ -99,15 +100,46 @@ const ladder = (text: (i: number) => string) => {
 // the walk goes deepest.
 test("formulas at every limit, each a long chain, compile and evaluate", () => {
   const formulas = ladder((i) => `formula.f${i + 1}` + "&&1".repeat(Math.floor((ExpressionParser.MAX_LENGTH - 12) / 3)));
-  expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 1 });
+  expect(run(formulas, "formula.f0")).toEqual({ kind: "boolean", boolean: true });
 });
 
-// Nested as deeply as an expression may be, 64 levels of formulas stack about 4,000 levels: that compiles on the
-// server's stack, and here it may outrun a cold JavaScript stack, where compile's net makes it too-deep, never a RangeError.
-test("formulas at every limit, each nested as deeply as allowed, give a value or too-deep", () => {
+// Nested as deeply as an expression may be, 64 levels of formulas stack about 4,000 levels: more than the levels a
+// thread's stack of the server holds, so too deep on both engines.
+test("formulas at every limit, each nested as deeply as allowed, are too deep", () => {
   const formulas = ladder((i) => "-".repeat(ExpressionParser.MAX_DEPTH - 2) + `formula.f${i + 1}`);
-  const outcome = codeOf(() => expect(run(formulas, "formula.f0")).toEqual({ kind: "number", number: 1 }));
-  expect(["none", "too-deep"]).toContain(outcome);
+  expect(codeOf(() => run(formulas, "formula.f0"))).toBe("too-deep");
+});
+
+const chain = (nesting: number) => ladder((i) => "-".repeat(nesting) + `formula.f${i + 1}`);
+
+test("64 formulas nested 30 deep each are too deep", () => {
+  expect(codeOf(() => run(chain(30), "formula.f0"))).toBe("too-deep");
+});
+
+test("formulas within the levels evaluate", () => {
+  // Each formula is its negations and the reference: nesting + 1 levels, and the expression's own one.
+  const nesting = Math.floor((Evaluator.MAX_LEVELS - 1) / ExpressionParser.MAX_DEPTH) - 2;
+  expect(run(chain(nesting), "formula.f0")).toEqual({ kind: "number", number: nesting % 2 === 0 ? 1 : -1 });
+});
+
+// A cycle cuts each stage's check short, so the levels the check keeps undercount the path an evaluation takes through
+// the stages: S1 → … → S63, where S63 also uses the previous stage's entry, and S64, the next stage's entry, uses S1.
+test.each([0, 30])("formulas that go deeper through cycles than their check sees are too deep (nesting %i)", (nesting) => {
+  const stages = 10;
+  const k = 64;
+  const wrap = (text: string) => `${"-".repeat(nesting)}(${text})`;
+  const formulas = new Map([["A1", "1"]]);
+  let entry = "A1";
+  for (let s = 0; s < stages; s++) {
+    for (let i = 1; i <= k; i++)
+      formulas.set(`S${s}_${i}`, wrap(i < k - 1 ? `formula.S${s}_${i + 1}` : i === k - 1 ? `formula.${entry} + formula.S${s}_${k}` : `formula.S${s}_1`));
+    entry = `S${s}_${k}`;
+  }
+  const evaluator = new Evaluator(formulas);
+  expect(codeOf(() => {
+    for (let s = 0; s < stages; s++) evaluator.compile(`formula.S${s}_1`);
+    return evaluator.evaluate(evaluator.compile(`formula.${entry}`), { note, this: null, now: NOW });
+  })).toBe("too-deep");
 });
 
 test("a formula beyond the depth limit is still too deep when its formulas were checked before", () => {
@@ -121,5 +153,74 @@ test("a formula beyond the depth limit is still too deep when its formulas were 
 test("a cycle is found when part of it was checked before", () => {
   const evaluator = new Evaluator(new Map([["a", "formula.b"], ["b", "formula.c"], ["c", "1"], ["d", "formula.b + formula.d"]]));
   evaluator.compile("formula.a");
-  expect(codeOf(() => evaluator.compile("formula.d"))).toBe("formula-cycle");
+  const d = evaluator.compile("formula.d");
+  expect(evaluator.warnings.map((w) => `${w.code} '${w.expression}' ${w.position}`)).toEqual(["formula-cycle 'formula.b + formula.d' 19"]);
+  expect(evaluator.evaluate(d, { note, this: null, now: NOW })).toEqual({ kind: "error", message: "Infinite loop detected in formula" });
+});
+
+// A cycle no longer fails the compile, so the evaluation must stop on it by itself, and once per row.
+test("a long cycle gives an error value at once", () => {
+  const n = ExpressionParser.MAX_DEPTH - 1;
+  const formulas = new Map(Array.from({ length: n }, (_, i) => [`f${i}`, `formula.f${(i + 1) % n} + formula.f${(i + 1) % n}`] as [string, string]));
+  const started = performance.now();
+  expect(run(formulas, "formula.f0")).toEqual({ kind: "error", message: "Infinite loop detected in formula" });
+  expect(performance.now() - started).toBeLessThan(1000);
+});
+
+const notes = (count: number) => Array.from({ length: count }, (_, i) => new QueryNote(`n${String(i).padStart(3, "0")}.md`, "", Properties.read("")));
+
+test("a sort by random() orders the rows by the number each shows", () => {
+  const yaml = "formulas:\n  r: random()\nviews:\n  - type: table\n    name: Random\n    order: [formula.r]\n    sort:\n      - { property: formula.r, direction: ASC }\n";
+  const shown = Base.parse(yaml).run(null, notes(50), null, NOW).rows.map((r) => (r.cells[0] as { number: number }).number);
+  expect(shown).toEqual([...shown].sort((a, b) => a - b));
+});
+
+const thrown = (go: () => unknown): unknown => {
+  try {
+    go();
+  } catch (e) {
+    return e;
+  }
+  return null;
+};
+
+test("a run whose notes each stay within their steps still ends at the steps of the run", () => {
+  // About 460,000 steps for each note: within the bound of one, but twelve of them pass the run's.
+  const yaml = `filters: '"x".repeat(150000).split("").filter(value == "y").length == 0'\n`;
+  expect(thrown(() => Base.parse(yaml).run(null, notes(12), null, NOW))).toMatchObject({ code: "too-large", message: expect.stringContaining("over its notes") });
+});
+
+test("a run whose cells each stay within their size still ends at the size of the run", () => {
+  const yaml = `formulas:\n  big: '"x".repeat(900000)'\nviews:\n  - type: table\n    name: Big\n    order: [formula.big]\n`;
+  expect(Base.parse(yaml).run(null, notes(1), null, NOW).rows).toHaveLength(1);
+  expect(thrown(() => Base.parse(yaml).run(null, notes(12), null, NOW))).toMatchObject({ code: "too-large", message: expect.stringContaining("over its notes") });
+});
+
+// A note with many tags, whose list a lambda asks for again for each of them.
+const tagged = (count: number) => new QueryNote("a.md", Array.from({ length: count }, (_, i) => `#t${i} `).join(""), Properties.read(""));
+
+test("a file's list and object fields are built once a run", () => {
+  const n = tagged(3);
+  const vault = new QueryVault([n]);
+  const evaluator = new Evaluator();
+  for (const field of ["file.tags", "file.links", "file.embeds", "file.backlinks", "file.properties", "note"]) {
+    const expr = evaluator.compile(field);
+    expect(evaluator.evaluate(expr, { note: n, this: null, now: NOW, vault })).toBe(evaluator.evaluate(expr, { note: n, this: null, now: NOW, vault }));
+  }
+});
+
+test("a lambda that asks for a long list of tags again for each takes no longer than one pass", () => {
+  const n = tagged(20_000);
+  const evaluator = new Evaluator();
+  const started = performance.now();
+  const value = evaluator.evaluate(evaluator.compile("file.tags.map(file.tags.length).length"), { note: n, this: null, now: NOW, vault: new QueryVault([n]) });
+  expect(value).toEqual({ kind: "number", number: 20_000 });
+  // 25.8 s when each access built the list again; a pass of 20,000 items takes milliseconds.
+  expect(performance.now() - started).toBeLessThan(5000);
+});
+
+test("a sort direction that sorts nothing is a warning, and the query still runs", () => {
+  const yaml = "views:\n  - type: table\n    name: Sorts\n    sort:\n      - { property: file.name, direction: asc }\n";
+  const { warnings } = Base.parse(yaml).run(null, [note], null, NOW);
+  expect(warnings).toEqual([{ code: "sort-direction", message: 'sort direction "asc" sorts nothing; use ASC or DESC', expression: "file.name", position: 0 }]);
 });

@@ -1,0 +1,15 @@
+description: Text has no upper() and no matches(); a regular expression matches through its own matches(), an unknown flag or a pattern that doesn't compile gives null, and replace with a text replaces every occurrence (findings 5, 17, 18).
+source: obsidian 1.15.1
+notes:
+  Ann.md: |
+    ---
+    name: Ann Smith
+    ---
+cases:
+  - { expression: '/smith/i.matches(name)', values: { Ann.md: boolean true } }
+  - { expression: '/a/x.matches("a")', values: { Ann.md: null } }
+  - { expression: '/(a/.matches("a")', values: { Ann.md: null } }
+  - { expression: 'name.replace("n", "N")', values: { Ann.md: text ANN Smith } }
+  - { expression: name.upper(), values: { Ann.md: error Cannot find function "upper" on type String } }
+  - { expression: name.toUpperCase(), values: { Ann.md: error Cannot find function "toUpperCase" on type String } }
+  - { expression: 'name.matches(/smith/i)', values: { Ann.md: error Cannot find function "matches" on type String } }

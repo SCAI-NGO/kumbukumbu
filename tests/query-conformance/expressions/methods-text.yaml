@@ -1,0 +1,36 @@
+description: The text methods of Obsidian's reference; replace with a text replaces every occurrence, with a regular expression the first unless it has g, and $1 names a group; split takes a text or a regular expression and a limit.
+source: spec
+notes:
+  Ann.md: |
+    ---
+    name: Ann Smith
+    csv: a,b,c,d
+    ---
+cases:
+  - { expression: 'name.contains("Smith")', values: { Ann.md: boolean true } }
+  - { expression: '"hello".containsAll("h", "e")', values: { Ann.md: boolean true } }
+  - { expression: '"hello".containsAll("h", "x")', values: { Ann.md: boolean false } }
+  - { expression: '"hello".containsAny("x", "y", "e")', values: { Ann.md: boolean true } }
+  - { expression: '"hello".containsAny("x")', values: { Ann.md: boolean false } }
+  - { expression: 'name.endsWith("Smith")', values: { Ann.md: boolean true } }
+  - { expression: 'name.startsWith("Smith")', values: { Ann.md: boolean false } }
+  - { expression: name.lower(), values: { Ann.md: text ann smith } }
+  - { expression: '"hello world".title()', values: { Ann.md: text Hello World } }
+  - { expression: '"a.b.c".replace(".", "-")', values: { Ann.md: text a-b-c } }
+  - { expression: '"a:b:c:d".replace(/:/, "-")', values: { Ann.md: text a-b:c:d } }
+  - { expression: '"a:b:c:d".replace(/:/g, "-")', values: { Ann.md: text a-b-c-d } }
+  - { expression: '"John Smith".replace(/(\w+) (\w+)/, "$2, $1")', values: { Ann.md: 'text Smith, John' } }
+  - { expression: '"123".repeat(2)', values: { Ann.md: text 123123 } }
+  - { expression: '"a".repeat(0)', values: { Ann.md: text } }
+  - { expression: '"a".repeat(-1)', values: { Ann.md: error } }
+  - { expression: '"hello".reverse()', values: { Ann.md: text olleh } }
+  - { expression: '"hello".slice(1, 4)', values: { Ann.md: text ell } }
+  - { expression: '"hello".slice(-3)', values: { Ann.md: text llo } }
+  - { expression: 'csv.split(",", 3)', values: { Ann.md: [text a, text b, text c] } }
+  - { expression: 'csv.split(",")', values: { Ann.md: [text a, text b, text c, text d] } }
+  - { expression: 'csv.split(/,/, 3)', values: { Ann.md: [text a, text b, text c] } }
+  - { expression: '"a1b2c".split(/(\d)/)', values: { Ann.md: [text a, text 1, text b, text 2, text c] } }
+  - { expression: '"abc".split("")', values: { Ann.md: [text a, text b, text c] } }
+  - { expression: '"  x ".trim()', values: { Ann.md: text x } }
+  - { expression: name.length, values: { Ann.md: number 9 } }
+  - { expression: name.isEmpty(), values: { Ann.md: boolean false } }
