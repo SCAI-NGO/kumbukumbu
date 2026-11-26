@@ -20,7 +20,9 @@ export class QueryVault {
   private readonly byPath = new Map<string, QueryNote>();
   private readonly linkCache = new Map<QueryNote, readonly QueryLink[]>();
   private readonly randoms = new Map<string, number>();
-  private readonly kept = new Map<string, Value>();
+  // By the file as built, not its path: this (bind's, holding the arguments) is another file of the same path as the
+  // query note's row, and the one built first mustn't stand for both.
+  private readonly kept = new Map<QueryNote, Map<string, Value>>();
   private resolverCache: LinkResolver | null = null;
   private backlinkCache: Map<string, QueryNote[]> | null = null;
 
@@ -75,11 +77,13 @@ export class QueryVault {
   /** A file's field as a list or an object (its tags, links, backlinks, properties), built the first time the run asks for
    * it; the same value after, so asking again costs nothing and its measure is kept. */
   keptOf(note: QueryNote, field: string): Value | undefined {
-    return this.kept.get(`${field}\u0000${note.path}`);
+    return this.kept.get(note)?.get(field);
   }
 
   keep(note: QueryNote, field: string, value: Value): Value {
-    this.kept.set(`${field}\u0000${note.path}`, value);
+    let fields = this.kept.get(note);
+    if (fields === undefined) this.kept.set(note, (fields = new Map()));
+    fields.set(field, value);
     return value;
   }
 

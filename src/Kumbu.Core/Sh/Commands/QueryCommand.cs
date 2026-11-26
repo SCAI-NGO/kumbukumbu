@@ -96,14 +96,15 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           (error: Invalid operator between String and Number): a function, method or field its value
           hasn't, a formula that doesn't exist or uses itself, a calculation between types that don't
           fit, number() of a text that isn't one. Whatever uses an error is that error (false && and
-          true || stop before it, as in JavaScript); a filter that gives one drops the row; a sort puts it after the empty values. null passes through most
-          of it: a method or field of null is null. A regular expression is null, and query check
-          says why, when it doesn't compile or goes beyond the part of RE2 both engines run alike:
-          no lookaround, backreferences, named groups or Unicode classes, and at most 64 positions
-          written out (a count multiplies its body). Only what can't be read (syntax) and the limits
-          are an error of the query: too-deep past 64 levels of nesting, or 512 with the formulas it
-          uses added up; too-large past 1,000,000 steps or characters for one note, or 5,000,000
-          steps for the run.
+          true || stop before it, as in JavaScript); a filter that gives one drops the row; a sort
+          puts it after the empty values. null passes through most of it: a method or field of null
+          is null. A regular expression is null, and query check says why, when it doesn't compile
+          or goes beyond the part of RE2 both engines run alike: no lookaround, backreferences,
+          named groups or Unicode classes, and at most 64 positions written out (a count multiplies
+          its body). Only what can't be read (syntax) and the limits are an error of the query:
+          too-deep past 64 levels of nesting, or 512 with the formulas it uses added up; too-large
+          past 1,000,000 steps or characters for one note and expression, or 5,000,000 steps for
+          the run.
 
           query ls
           query inspect Birthdays
@@ -119,7 +120,8 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
-        if (CommandArgs.RefuseVersion(Name, args, "a query runs over the notes as they are now") is { } versionError) return versionError;
+        if (CommandArgs.RefuseVersion(Name, args, "a query runs over the notes as they are now") is { } versionError)
+            return versionError;
         if (args.Count == 0) return ShellResult.Error($"query: missing operand ({Usage})");
         var rest = args.Skip(1).ToList();
         return args[0] switch
@@ -129,7 +131,8 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             "execute" => await ExecuteAsync(rest, ct),
             "check" => await CheckAsync(rest, ct),
             "properties" => await PropertiesAsync(rest, ct),
-            var other => ShellResult.Error($"query: {other} is not a form of query: ls, inspect, execute, check or properties (help query)"),
+            var other => ShellResult.Error(
+                $"query: {other} is not a form of query: ls, inspect, execute, check or properties (help query)"),
         };
     }
 
@@ -211,7 +214,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         // An error in a cell is a value, as in Obsidian; told before the table, so a reader can't overlook it in a long column.
         var errors = result.Columns.Select((column, i) => (Column: column, Errors: result.Rows.Select(r => r.Cells[i]).OfType<ErrorValue>().ToList()))
             .Where(c => c.Errors.Count > 0)
-            .Select(c => $"{(c.Errors.Count == 1 ? "1 error" : $"{c.Errors.Count:N0} errors")} in {c.Column}: {c.Errors[0].Message}");
+            .Select(c => $"{(c.Errors.Count == 1 ? "1 error" : $"{c.Errors.Count:N0} errors")} in {c.Column}: {Clip(c.Errors[0].Message)}");
         string[] header = [$"{result.View}: {count}", .. errors, Row(["path", .. result.Columns]), Row([.. Enumerable.Repeat("---", result.Columns.Count + 1)])];
         var rows = result.Rows.Select(r => Row([vault[r.Note].Value, .. r.Cells.Select(Evaluator.Display)])).ToList();
         var listed = TextFiles.Listed(Name, rows, "\n", "rows", "a limit in the view, or a filter, narrows it", Lines.Join(header).Length + 1);
@@ -428,8 +431,23 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
 
     private static string Says(QueryError e) => Says(e.Code, e.Message, e.Expression, e.Position);
 
+    // On one line, as each of query check's lines is: a YAML expression can span several. The expression keeps its length,
+    // so the position still points into it.
     private static string Says(string code, string message, string? expression, int position) =>
-        code + (expression is { } x ? $" in '{x}' at {position.ToString(CultureInfo.InvariantCulture)}" : "") + $": {message}";
+        code + (expression is { } x ? $" in '{OneLine(x)}' at {position.ToString(CultureInfo.InvariantCulture)}" : "") + $": {Clip(message)}";
+
+    // A message can quote a note's text (Unable to parse "…" as a number): on one line, so it can't make lines of the
+    // table, and short, so a long property can't push the table past the output limit.
+    private static string Clip(string message)
+    {
+        var line = message.ReplaceLineEndings(" ");
+        return line.Length <= 200 ? line : line[..199] + "…";
+    }
+
+    private static string OneLine(string text) => string.Create(text.Length, text, (span, t) =>
+    {
+        for (var i = 0; i < t.Length; i++) span[i] = t[i] is '\r' or '\n' or '\f' or '\u0085' or '\u2028' or '\u2029' ? ' ' : t[i];
+    });
 
     private static ShellResult Failed(VaultPath path, QueryError e) => ShellResult.Error($"query: {path.Value}: {Says(e)}");
 

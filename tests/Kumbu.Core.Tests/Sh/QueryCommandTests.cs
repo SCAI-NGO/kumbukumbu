@@ -66,6 +66,9 @@ public class QueryCommandTests
 
     private Task<ShellResult> Run(string line) => _sh.RunAsync(line, CancellationToken.None);
 
+    private void AddNote(string path, string content) =>
+        _store.Put(new StoredNote(VaultPath.TryParse(path, out var parsed) ? parsed : throw new ArgumentException(path), content, 1, Writers.Seed, InMemoryNoteStore.Seeded, [], content, Ref: WriterRef.Server));
+
     [Fact]
     public async Task Ls_lists_the_marked_queries_and_base_files_with_their_parameters()
     {
@@ -235,6 +238,65 @@ public class QueryCommandTests
             | /V/People/Cleo.md | Cleo | error: Invalid operator between String and Number | error: Cannot find function "shout" on type String |
             | /V/People/Dora.md | Dora |  | error: Cannot find function "shout" on type String |
             """), await Run("query execute /V/Ages.base"));
+    }
+
+    [Fact]
+    public async Task Execute_tells_an_error_on_one_line_however_many_lines_the_note_text_in_it_has()
+    {
+        _store.AddTextFile("/V/Numbers.base", """
+            filters: file.name == "Eve"
+            formulas:
+              n: number(age)
+            views:
+              - type: table
+                name: Numbers
+                order: [formula.n]
+            """);
+        AddNote("/V/People/Eve.md", "---\nage: \"1\\n| /V/Fake.md | injected |\\n\"\n---\n");
+
+        var lines = (await Run("query execute /V/Numbers.base")).Output.Split('\n');
+
+        Assert.Equal("Numbers: 1 row", lines[0]);
+        Assert.StartsWith("1 error in formula.n: ", lines[1]);
+        Assert.Contains("1 | /V/Fake.md | injected |", lines[1]);
+        Assert.Equal("| path | formula.n |", lines[2]);
+        Assert.Equal(5, lines.Length);
+    }
+
+    [Fact]
+    public async Task Execute_clips_a_long_error_message_and_still_shows_the_table()
+    {
+        _store.AddTextFile("/V/Numbers.base", """
+            filters: file.name == "Eve"
+            formulas:
+              n: number(age)
+            views:
+              - type: table
+                name: Numbers
+                order: [formula.n]
+            """);
+        AddNote("/V/People/Eve.md", $"---\nage: {new string('x', 30_000)}\n---\n");
+
+        var result = await Run("query execute /V/Numbers.base");
+
+        Assert.False(result.IsError, result.Output);
+        var lines = result.Output.Split('\n');
+        Assert.StartsWith("1 error in formula.n: Unable to parse", lines[1]);
+        Assert.EndsWith("…", lines[1]);
+        Assert.True(lines[1].Length <= 300, $"{lines[1].Length} characters");
+        Assert.Equal("| path | formula.n |", lines[2]);
+    }
+
+    [Fact]
+    public async Task Check_says_an_error_in_a_multi_line_expression_on_one_line()
+    {
+        _store.AddTextFile("/V/Broken.base", "views:\n  - type: table\n    name: Broken\n    filters: |\n      a &&\n      b &\n");
+
+        var broken = await Run("query check /V/Broken.base");
+
+        Assert.True(broken.IsError);
+        Assert.DoesNotContain('\n', broken.Output);
+        Assert.StartsWith("query: /V/Broken.base: view Broken: syntax in 'a && b &", broken.Output);
     }
 
     [Fact]

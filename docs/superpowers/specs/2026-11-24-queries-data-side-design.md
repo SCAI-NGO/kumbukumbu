@@ -102,4 +102,4 @@ A system skill **`create-query`** (as `create-skill`) teaches the format, the `p
 
 ## 9. Later
 
-The web UI (a form from `params:`, results as table and cards; UX session first); views beyond the table; summaries.
+The web UI (a form from `params:`, results as table and cards; UX session first); embeddable text properties and semantic queries; views beyond the table; summaries.

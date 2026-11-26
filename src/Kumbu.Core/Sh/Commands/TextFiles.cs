@@ -51,7 +51,8 @@ internal static partial class TextFiles
     /// an element's HTML or a node's XML holds all below it, and all of them together can be the file's size squared.</summary>
     public static ShellResult Listed(string command, int count, IEnumerable<string> items, string separator, string noun, string narrow, int reserve = 0)
     {
-        var budget = OutputLimit.MaxChars - 200 - reserve;
+        // A caller's header past the limit leaves no room, never less than none.
+        var budget = Math.Max(0, OutputLimit.MaxChars - 200 - reserve);
         var output = new StringBuilder();
         var shown = 0;
         string? first = null;

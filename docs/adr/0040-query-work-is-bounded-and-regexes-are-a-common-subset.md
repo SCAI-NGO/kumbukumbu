@@ -15,7 +15,7 @@ Linear-time matching (0034) was not enough either. .NET's `RegexOptions.NonBackt
 
 ## Decision
 
-A query's work is bounded deterministically and identically in both engines: 10,000 characters and 64 levels of nesting for an expression, one budget of 512 levels for an expression and the formulas it uses added up, 1,000,000 in size and 128 levels of nesting for a value, 1,000,000 steps for a note, and 5,000,000 steps and 10,000,000 in size for a run. Past a bound the call fails with `too-deep` or `too-large`. The server also stops a cancelled run between rows.
+A query's work is bounded deterministically and identically in both engines: 10,000 characters and 64 levels of nesting for an expression, one budget of 512 levels for an expression and the formulas it uses added up, 1,000,000 in size and 128 levels of nesting for a value, 1,000,000 steps for one note and expression, and 5,000,000 steps and 10,000,000 in size for a run. Past a bound the call fails with `too-deep` or `too-large`. The server also stops a cancelled run between rows.
 
 A query's regular expressions are the common subset of RE2 and .NET that a strict reader (`RegexShape`, the same in both engines) accepts, with RE2's bound on counts, at most 64 positions written out (loops counted twice), and a charge in steps for building a pattern (128 × size²) and for each search (1 + read × (4 + size) / 20). Any other pattern is null, with a `query check` warning. The server rewrites an accepted pattern to mean what RE2 means.
 

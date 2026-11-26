@@ -128,3 +128,9 @@ Both engines run only the part of RE2's syntax they read the same way (`RegexSha
 
 One difference is a bug of .NET's linear engine, pinned as pending for C# (`expressions/regex-leftmost-match.yaml`).
 
+
+## Known differences
+
+Where the engines still give different results outside regular expressions, so no case pins them:
+
+- `lower()` lowers a text as each platform does without a culture: the server by .NET's `ToLowerInvariant`, offline by JavaScript's `toLowerCase`. They differ on a few letters: `İ` (U+0130) becomes `i̇` (an `i` with a combining dot) offline and `i` on the server, and a capital sigma at the end of a word becomes `ς` offline and `σ` on the server.
