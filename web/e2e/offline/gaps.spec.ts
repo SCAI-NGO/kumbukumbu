@@ -104,7 +104,8 @@
 // The new tests, gaps #1 to #11, in Chromium (desktop) and Firefox (offline-firefox), except #4: it shows Home with
 // the PIN in a session of its own, so it is @serial (plan review point 2: offline-firefox runs in the parallel phase
 // and leaves @serial out), Chromium only. It also covers Task 8's fifth place, the offline copy's vault list. #8 to
-// #11 take steps off the 0.7.0 hand-test list: A4, A12, A6 with A10, and A1.
+// #11 take steps off the 0.7.0 hand-test list: A4, A12, A6 with A10, and A1; #12a, #12b and #13 its B19a (a trash
+// against an edit, both ways) and B19b (an upload cut off halfway, finding F-15).
 import type { Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { crc32, deflateSync } from "node:zlib";
@@ -720,4 +721,133 @@ test("gaps #11: after Keep me signed in the invitation comes once; Not now keeps
   } finally {
     await context.close();
   }
+});
+
+type Tree = { folders: Tree[]; notes: { path: string }[] };
+
+/** The paths of the notes below `/Work/<folder>/`, as the server has them. */
+async function notesBelow(api: Api, folder: string): Promise<string[]> {
+  const all = (f: Tree): string[] => [...f.notes.map((n) => n.path), ...f.folders.flatMap(all)];
+  return all((await api.json<{ root: Tree }>("GET", "/api/vaults/Work/tree")).root).filter((p) => p.includes(`/${folder}/`)).sort();
+}
+
+/** What the page tells the person in its status lines, for the report: whether they were told, in their words. */
+async function told(page: Page): Promise<string> {
+  const lines = await page.getByRole("status").allInnerTexts();
+  return lines.map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean).join(" | ") || "(nothing)";
+}
+
+test("gaps #12a: a note trashed offline that was edited elsewhere comes back with the edit, nothing lost @offline", async ({ page, aliceApi, folder }) => {
+  const y = `/Work/${folder}/Y.md`;
+  await aliceApi.putNote(y, "# Y\n\nBefore.\n");
+  await turnOn(page);
+  await page.goto(notePage(y));
+  await expect(article(page)).toContainText("Before.");
+
+  // As B19a of the hand test: this device trashes Y offline, another edits it online meanwhile.
+  await goOffline(page);
+  await page.getByRole("button", { name: "Note actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete note", exact: true }).click();
+  await page.getByRole("dialog", { name: "Delete Y?" }).getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(bar(page)).toContainText("1 change will upload when you're back.");
+  await aliceApi.putNote(y, "# Y\n\nEdited elsewhere.\n");
+
+  await page.context().setOffline(false);
+  await expect(bar(page)).toHaveCount(0, { timeout: 60_000 });
+  // The edit made elsewhere is not in the trash: Y stays on the server with it, and comes back on this device.
+  await expect.poll(async () => (await aliceApi.getNote(y)).content, { timeout: 30_000 }).toBe("# Y\n\nEdited elsewhere.\n");
+  expect(await notesBelow(aliceApi, folder), "no other note made from it").toEqual([y]);
+  test.info().annotations.push({ type: "told", description: await told(page) });
+  await page.goto(notePage(y));
+  await expect(article(page)).toContainText("Edited elsewhere.", { timeout: 30_000 });
+});
+
+test("gaps #12b: a note edited offline that was trashed elsewhere comes back with this device's edit, nothing lost @offline", async ({ page, aliceApi, folder }) => {
+  const z = `/Work/${folder}/Z.md`;
+  await aliceApi.putNote(z, "# Z\n\nBefore.\n");
+  await turnOn(page);
+  await page.goto(notePage(z));
+  await expect(article(page)).toContainText("Before.");
+
+  // The other way round: trashed elsewhere online, edited here offline.
+  await goOffline(page);
+  await write(page, "# Z\n\nEdited offline.\n");
+  await expect(bar(page)).toContainText("1 change will upload when you're back.");
+  await aliceApi.deleteNote(z);
+
+  await page.context().setOffline(false);
+  await expect(bar(page)).toHaveCount(0, { timeout: 60_000 });
+  // This device's edit is kept: Z restored, or a conflict copy beside it.
+  await expect
+    .poll(async () => {
+      for (const path of await notesBelow(aliceApi, folder)) {
+        const content = (await aliceApi.getNote(path)).content;
+        if (content.includes("Edited offline.")) return content;
+      }
+      return "(not on the server)";
+    }, { message: "the offline edit is on the server", timeout: 30_000 })
+    .toContain("Edited offline.");
+  test.info().annotations.push({ type: "told", description: await told(page) });
+  test.info().annotations.push({ type: "notes after", description: (await notesBelow(aliceApi, folder)).join(", ") });
+});
+
+test("gaps #13: an upload cut off after its first change goes on once back, and each change reaches the server once @offline", async ({ page, aliceApi, folder }) => {
+  test.fail(true, "F-15: a new note whose upload was cut off waits until a reload");
+  test.setTimeout(240_000);
+  const plan = `/Work/${folder}/Plan.md`;
+  const old = `/Work/${folder}/Old.md`;
+  await aliceApi.putNote(plan, "# Plan\n\nBefore. [[Old]]\n");
+  await aliceApi.putNote(old, "# Old\n\nBye.\n");
+  await turnOn(page);
+  await page.goto(notePage(plan));
+  await expect(article(page)).toContainText("Before.");
+  const versions = (await aliceApi.history(plan)).length;
+
+  // As B19b of the hand test: three changes offline (an edit, a new note, a trash).
+  await goOffline(page);
+  await write(page, "# Plan\n\nWritten offline. [[Old]]\n");
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New note" }).click();
+  await expect(source(page)).toBeVisible();
+  await source(page).fill("# Made offline\n\nNew here.\n");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("button", { name: "Done" })).toHaveCount(0);
+  const created = decodeURIComponent(new URL(page.url()).pathname.replace(/^\/notes/, ""));
+  await page.goBack();
+  await expect(article(page)).toContainText("Written offline.");
+  await article(page).getByRole("link", { name: "Old" }).click();
+  await expect(article(page)).toContainText("Bye.");
+  await page.getByRole("button", { name: "Note actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete note", exact: true }).click();
+  await page.getByRole("dialog", { name: "Delete Old?" }).getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(bar(page)).toContainText("3 changes will upload when you're back.");
+
+  // Back, and the network goes again once the first change has reached the server; the rest is refused.
+  let passed = 0;
+  await page.context().route(/\/api\/notes\//, async (route) => {
+    if (!["PUT", "DELETE", "POST"].includes(route.request().method())) return route.continue();
+    if (passed >= 1) return route.abort("internetdisconnected");
+    passed++;
+    const response = await route.fetch();
+    await route.fulfill({ response });
+    await page.context().setOffline(true);
+  });
+  await page.context().setOffline(false);
+  await expect.poll(() => passed, { message: "one change went up before the cut", timeout: 60_000 }).toBe(1);
+  await expect(bar(page)).toContainText(/2 changes will upload/, { timeout: 30_000 });
+  // No error dialog: losing the network halfway is not a failure.
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+  // Back for good.
+  await page.context().unrouteAll({ behavior: "ignoreErrors" });
+  await page.context().setOffline(false);
+  // F-15: the new note whose upload was cut off stays "Uploading 1 change…" (watched for six minutes, past the
+  // engine's longest retry); a reload online uploads it at once, so nothing is lost, but nothing says it waits.
+  await expect(page.getByRole("status", { name: "Uploaded" }), "F-15: a new note whose upload was cut off uploads once back").toContainText("All changes uploaded", { timeout: 60_000 });
+  expect((await aliceApi.getNote(plan)).content).toBe("# Plan\n\nWritten offline. [[Old]]\n");
+  expect((await aliceApi.history(plan)).length, "the edit applied once").toBe(versions + 1);
+  expect((await aliceApi.getNote(created)).content).toBe("# Made offline\n\nNew here.\n");
+  expect((await aliceApi.send("GET", `/api/notes/${old.slice(1).split("/").map(encodeURIComponent).join("/")}`)).status(), "Old trashed").toBe(404);
+  // Each change once: no duplicate of the new note, no conflict copy against this device itself.
+  expect(await notesBelow(aliceApi, folder)).toEqual([plan, created].sort());
 });
