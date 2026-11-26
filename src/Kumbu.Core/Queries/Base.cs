@@ -90,8 +90,8 @@ public sealed class Base
         return new Base(map, Child(map, "filters"), formulas, views);
     }
 
-    /// <summary>Runs a view (by name; the first when null) over the notes.</summary>
-    public QueryResult Run(string? viewName, IEnumerable<QueryNote> notes, QueryNote? self, DateTime now)
+    /// <summary>Runs a view (by name; the first when null) over the notes; a cancelled token stops it at the next row.</summary>
+    public QueryResult Run(string? viewName, IEnumerable<QueryNote> notes, QueryNote? self, DateTime now, CancellationToken ct = default)
     {
         // A view without a name is called by the name ViewNames gives it.
         var index = viewName is null ? 0 : ViewNames.ToList().IndexOf(viewName);
@@ -119,7 +119,11 @@ public sealed class Base
         var vault = new QueryVault(files);
         var rows = files
             .OrderBy(note => note.Path, StringComparer.Ordinal)
-            .Select(note => new Scope(note, self, now) { Vault = vault })
+            .Select(note =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return new Scope(note, self, now) { Vault = vault };
+            })
             .Where(scope => filter.All(f => f(scope) == true))
             .Select(scope => (Scope: scope, Keys: sort.Select(k => evaluator.Evaluate(k.Expr, scope)).ToList()))
             .ToList();
@@ -128,7 +132,11 @@ public sealed class Base
 
         return new QueryResult(name, columns, sorted
             .Take(limit)
-            .Select(r => new QueryRow(r.Scope.Note, cells.Select(c => evaluator.Evaluate(c, r.Scope)).ToList()))
+            .Select(r =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return new QueryRow(r.Scope.Note, cells.Select(c => evaluator.Evaluate(c, r.Scope)).ToList());
+            })
             .ToList(), evaluator.Warnings);
     }
 

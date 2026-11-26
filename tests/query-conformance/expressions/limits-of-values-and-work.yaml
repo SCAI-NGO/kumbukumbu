@@ -35,3 +35,9 @@ cases:
   # Comparing or joining long values is work in their size, each time.
   - { expression: '"x".repeat(5000).split("").map("y".repeat(500000) == "y".repeat(500000)).length', error: too-large }
   - { expression: '"x".repeat(5000).split("").map(["y".repeat(500000)].toString().length).length', error: too-large }
+  # A search for a pattern whose matches have a longest length reads up to the match and that length on, so splitting
+  # a long text by such a pattern stays linear; one without (a*) may read the rest of the text at each search.
+  - { expression: '"a\r\n".repeat(30000).split(/\r?\n/).length', values: { Ann.md: number 30001 } }
+  - { expression: '"a\r\n".repeat(30000).replace(/\r?\n/g, " ").length', values: { Ann.md: number 60000 } }
+  - { expression: '"a\n".repeat(30000).split(/\n+/).length', error: too-large }
+

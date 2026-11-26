@@ -17,6 +17,7 @@ import {
   NULL, asMilliseconds, booleanValue, dateValue, durationValue, errorValue, fileValue, formatNumber, linkValue, listValue,
   noteRefValue, numberValue, objectValue, regexValue, textValue, type Value,
 } from "./value";
+import { MAX_COUNT, MAX_EXPANDED, regexShape, runs } from "./regexShape";
 import { trimSlashes } from "./tags";
 import { QueryVault } from "./vault";
 
@@ -226,6 +227,9 @@ type Frame = { readonly value: Value; readonly index: number; readonly acc: Valu
 export class Evaluator {
   private readonly formulaExprs = new Map<string, Expr>();
   private readonly regexes = new Map<Expr, RegexOf | null>();
+  // One value for each pattern and its flags in a run, wherever it is written, and the ones searched in this run so far.
+  private readonly regexesOfRun = new Map<string, RegexOf>();
+  private readonly searchedInRun = new Set<RegexOf>();
   private readonly checkedLevels = new Map<string, number>();
   private deepest = 0;
   private readonly found: QueryWarning[] = [];
@@ -300,9 +304,20 @@ export class Evaluator {
       throw new QueryError("too-large", `The query takes more than ${MAX_RUN_STEPS.toLocaleString("en")} steps over its notes.`, at.position);
   }
 
-  // A regular expression's search from a place may read the rest of the text (/(?:a*c)?/ on "aaa…" does, for each match),
-  // so each search counts what it may read: a global replace or split on a long text can't take quadratic time.
-  private readonly searched = (text: string, from: number, at: Expr): void => this.step(1 + Math.floor((text.length - from) / 16), at);
+  // One search of a regular expression from a place. It counts what it may read, one step for each 16 characters: up to
+  // the match's end and on by the longest match, or, when it fails or a match has no longest, the rest of the text
+  // (/(?:a*c)?/ on "aaa…" reads it for each match), so a global replace or split can't take quadratic time. The first
+  // search of a pattern in a run also counts the states the server's engine builds for it (regexShape), as the server does.
+  private readonly search: Search = (r, m, text, from, at) => {
+    if (!this.searchedInRun.has(r)) {
+      this.searchedInRun.add(r);
+      this.step(10 * r.expanded * r.expanded, at);
+    }
+    const found = m.find(from);
+    const read = found && r.longest !== null ? Math.min(m.end() - from + r.longest, text.length - from) : text.length - from;
+    this.step(1 + Math.floor(read / 16), at);
+    return found;
+  };
 
   // Counted here, not only in the check: a check cut short by a cycle, or by a formula checked before, can't see how deep
   // the formulas really go along this path.
@@ -320,10 +335,10 @@ export class Evaluator {
   private valueOf(expr: Expr, scope: Scope): Value {
     switch (expr.kind) {
       case "literal": return expr.value;
-      case "name": return this.name(expr.name, scope);
+      case "name": return this.name(expr.name, scope, expr);
       case "member":
         if (expr.target.kind === "name" && expr.target.name === "formula") return this.formulaValue(expr.name, scope);
-        return this.field(this.eval(expr.target, scope), expr.name, scope);
+        return this.field(this.eval(expr.target, scope), expr.name, scope, expr);
       case "index": return index(this.eval(expr.target, scope), this.eval(expr.index, scope));
       case "call":
         if (expr.callee.kind === "name") return this.call(expr.callee.name, expr.args, scope, expr);
@@ -548,21 +563,32 @@ export class Evaluator {
       this.warn("regex", `The regular expression has the unknown or repeated flag '${flag}' (flags are g, i, m, s, u), so it is null.`, position);
       return null;
     }
+    const shape = regexShape(pattern);
+    if (!runs(shape)) {
+      this.warn("regex", shape.countTooLarge
+        ? `The regular expression counts a repetition more than ${MAX_COUNT} times (alone or multiplied through nesting), which RE2 doesn't run, so it is null.`
+        : `The regular expression's counted repetitions expand to ${shape.expanded} parts, more than the ${MAX_EXPANDED} that run in time, so it is null.`, position);
+      return null;
+    }
+    // As JavaScript's toString: the pattern, then the flags in their own order.
+    const written = `/${pattern}/${[..."gimsu"].filter((f) => flags.includes(f)).join("")}`;
+    const known = this.regexesOfRun.get(written);
+    if (known !== undefined) return known;
     let options = 0;
     if (flags.includes("i")) options |= RE2JS.CASE_INSENSITIVE;
     if (flags.includes("m")) options |= RE2JS.MULTILINE;
     if (flags.includes("s")) options |= RE2JS.DOTALL;
     try {
-      // As JavaScript's toString: the pattern, then the flags in their own order.
-      const written = `/${pattern}/${[..."gimsu"].filter((f) => flags.includes(f)).join("")}`;
-      return regexValue(RE2JS.compile(pattern, options), flags.includes("g"), written) as RegexOf;
+      const value = regexValue(RE2JS.compile(pattern, options), flags.includes("g"), written, shape.longest, shape.expanded) as RegexOf;
+      this.regexesOfRun.set(written, value);
+      return value;
     } catch (e) {
       this.warn("regex", `The regular expression doesn't compile or needs backtracking, which runs here in linear time only (no lookaround, no backreferences), so it is null: ${e instanceof Error ? e.message : String(e)}`, position);
       return null;
     }
   }
 
-  private name(propertyName: string, scope: Scope): Value {
+  private name(propertyName: string, scope: Scope, at: Expr): Value {
     // value, index and acc are the lambda's where there is one; elsewhere they are properties.
     const frame = this.frames[this.frames.length - 1];
     if (frame !== undefined && propertyName === "value") return frame.value;
@@ -572,7 +598,7 @@ export class Evaluator {
     }
     switch (propertyName) {
       case "file": return fileValue(scope.note);
-      case "note": return objectValue(scope.note.properties.values);
+      case "note": return this.kept(scope, scope.note, "properties", () => objectValue(scope.note.properties.values), at);
       case "this": return scope.this !== null ? noteRefValue(scope.this) : NULL;
       case "formula": return NULL;
       default: return property(scope.note, propertyName);
@@ -586,7 +612,18 @@ export class Evaluator {
     return this.alone.vault;
   }
 
-  private field(value: Value, fieldName: string, scope: Scope): Value {
+  // A file's list or object field is built once a run, and counts its work then; after, it is the same value, which costs
+  // nothing to give again, and whatever reads it (a lambda, a method, a comparison) counts its own work.
+  private kept(scope: Scope, note: QueryNote, fieldName: string, build: () => Value, at: Expr): Value {
+    const vault = this.vault(scope);
+    const known = vault.keptOf(note, fieldName);
+    if (known !== undefined) return known;
+    const value = build();
+    this.step(work(value), at);
+    return vault.keep(note, fieldName, value);
+  }
+
+  private field(value: Value, fieldName: string, scope: Scope, at: Expr): Value {
     switch (value.kind) {
       case "error":
       case "null": return value;
@@ -600,18 +637,26 @@ export class Evaluator {
           case "size": return numberValue(value.note.size);
           case "ctime": return value.note.created === null ? NULL : dateValue(value.note.created);
           case "mtime": return value.note.modified === null ? NULL : dateValue(value.note.modified);
-          case "tags": return listValue(value.note.tags.map(textValue));
-          case "properties": return objectValue(value.note.properties.values);
+          case "tags": return this.kept(scope, value.note, fieldName, () => listValue(value.note.tags.map(textValue)), at);
+          case "properties": return this.kept(scope, value.note, fieldName, () => objectValue(value.note.properties.values), at);
           case "links":
-          case "embeds":
-            return listValue(this.vault(scope).linksOf(value.note).filter((l) => l.embed === (fieldName === "embeds")).map((l) => linkValue(l.path, null)));
-          case "backlinks": return listValue(this.vault(scope).backlinksOf(value.note).map(fileValue));
+          case "embeds": {
+            const note = value.note;
+            return this.kept(scope, note, fieldName, () => listValue(this.vault(scope).linksOf(note).filter((l) => l.embed === (fieldName === "embeds")).map((l) => linkValue(l.path, null))), at);
+          }
+          case "backlinks": {
+            const note = value.note;
+            return this.kept(scope, note, fieldName, () => listValue(this.vault(scope).backlinksOf(note).map(fileValue)), at);
+          }
           case "file": return value;
           default: return noField(value, fieldName);
         }
       case "noteRef":
         if (fieldName === "file") return fileValue(value.note);
-        if (fieldName === "note") return objectValue(value.note.properties.values);
+        if (fieldName === "note") {
+          const note = value.note;
+          return this.kept(scope, note, "properties", () => objectValue(note.properties.values), at);
+        }
         return property(value.note, fieldName);
       case "object": return value.values.get(fieldName) ?? NULL;
       case "text": return fieldName === "length" ? numberValue(value.text.length) : noField(value, fieldName);
@@ -755,7 +800,7 @@ export class Evaluator {
           case "lower": return textValue(text.toLowerCase());
           case "title": return textValue(title(text));
           case "trim": return textValue(trim(text));
-          case "replace": return replace(text, argument(0), argument(1), at, this.searched);
+          case "replace": return replace(text, argument(0), argument(1), at, this.search);
           case "repeat": {
             const count = numberArgument(0);
             return count === null ? NULL : repeat(text, count, at);
@@ -768,7 +813,7 @@ export class Evaluator {
           case "split": {
             const limit = argument(1);
             if (limit.kind !== "number" && limit.kind !== "null") return NULL;
-            return split(text, argument(0), limit, at, this.searched) ?? NULL;
+            return split(text, argument(0), limit, at, this.search) ?? NULL;
           }
           default: return missing();
         }
@@ -848,8 +893,7 @@ export class Evaluator {
       case "regex":
         if (methodName !== "matches") return missing();
         if (textArgument(0) === null) return NULL;
-        this.searched(textArgument(0)!, 0, at);
-        return bool((target.regex as RE2JS).matcher(textArgument(0)!).find());
+        return bool(this.search(target, (target.regex as RE2JS).matcher(textArgument(0)!), textArgument(0)!, 0, at));
       default: return missing();
     }
   }
@@ -1044,9 +1088,9 @@ function join(list: ListOf, separator: string, at: Expr): Value {
 // A match as JavaScript's replace and split see it: where it starts, its text, and its groups (null where a group took no part).
 type Found = { index: number; text: string; groups: Array<string | null>; named: Map<string, string | null> | null };
 
-type Searched = (text: string, from: number, at: Expr) => void;
+type Search = (r: RegexOf, m: ReturnType<RE2JS["matcher"]>, text: string, from: number, at: Expr) => boolean;
 
-function* matches(text: string, pattern: Value, all: boolean, at: Expr, searched: Searched): Generator<Found> {
+function* matches(text: string, pattern: Value, all: boolean, at: Expr, search: Search): Generator<Found> {
   if (pattern.kind === "text") {
     // A text matches where it stands, the empty one before every character and at the end.
     const step = Math.max(pattern.text.length, 1);
@@ -1061,8 +1105,7 @@ function* matches(text: string, pattern: Value, all: boolean, at: Expr, searched
   const names = Object.entries(regex.namedGroups());
   const m = regex.matcher(text);
   for (let start = 0; start <= text.length;) {
-    searched(text, start, at);
-    if (!m.find(start)) return;
+    if (!search(pattern as RegexOf, m, text, start, at)) return;
     const groups = Array.from({ length: m.groupCount() }, (_, i) => m.group(i + 1));
     yield { index: m.start(), text: m.group()!, groups, named: names.length === 0 ? null : new Map(names.map(([n, i]) => [n, m.group(i)])) };
     if (!all) return;
@@ -1071,11 +1114,11 @@ function* matches(text: string, pattern: Value, all: boolean, at: Expr, searched
   }
 }
 
-function replace(text: string, pattern: Value, replacement: Value, at: Expr, searched: Searched): Value {
+function replace(text: string, pattern: Value, replacement: Value, at: Expr, search: Search): Value {
   if ((pattern.kind !== "text" && pattern.kind !== "regex") || replacement.kind !== "text") return NULL;
   let result = "";
   let done = 0;
-  for (const found of matches(text, pattern, pattern.kind === "text" || pattern.global, at, searched)) {
+  for (const found of matches(text, pattern, pattern.kind === "text" || pattern.global, at, search)) {
     result += text.slice(done, found.index) + substitute(replacement.text, text, found);
     if (result.length > MAX_SIZE) throw tooLarge(at);
     done = found.index + found.text.length;
@@ -1121,7 +1164,7 @@ function substitute(template: string, text: string, found: Found): string {
 
 // JavaScript's split: by a text (the empty one splits every character) or a regular expression, whose groups join the
 // parts; at most limit parts, which counts as JavaScript's ToUint32 does.
-function split(text: string, separator: Value, limit: Value, at: Expr, searched: Searched): Value | null {
+function split(text: string, separator: Value, limit: Value, at: Expr, search: Search): Value | null {
   const most = limit.kind === "number" ? (Number.isFinite(limit.number) ? ((Math.trunc(limit.number) % 4294967296) + 4294967296) % 4294967296 : 0) : 4294967295;
   const parts: Value[] = [];
   let size = 1;
@@ -1143,7 +1186,7 @@ function split(text: string, separator: Value, limit: Value, at: Expr, searched:
         return listValue(parts);
       }
       let done = 0;
-      for (const found of matches(text, separator, true, at, searched)) {
+      for (const found of matches(text, separator, true, at, search)) {
         if (!add(textValue(text.slice(done, found.index)))) return listValue(parts);
         done = found.index + found.text.length;
       }
@@ -1153,11 +1196,10 @@ function split(text: string, separator: Value, limit: Value, at: Expr, searched:
     case "regex": {
       const regex = separator.regex as RE2JS;
       const m = regex.matcher(text);
-      if (text.length === 0) return listValue(m.find(0) ? [] : [textValue(text)]);
+      if (text.length === 0) return listValue(search(separator, m, text, 0, at) ? [] : [textValue(text)]);
       let [p, q] = [0, 0];
       while (q < text.length) {
-        searched(text, q, at);
-        if (!m.find(q)) break;
+        if (!search(separator, m, text, q, at)) break;
         const [start, e] = [m.start(), m.end()];
         // An empty match where the part starts, or one at the very end, splits nothing.
         if (e === p || start >= text.length) {

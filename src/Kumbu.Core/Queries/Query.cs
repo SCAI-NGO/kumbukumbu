@@ -59,14 +59,15 @@ public sealed partial class Query
     }
 
     /// <summary>Runs a view (by name; the first when null) with the call's arguments: each name a parameter, each value
-    /// a text read as the parameter's type (a list takes one per item). Throws <see cref="QueryError"/>.</summary>
-    public QueryResult Run(string? view, IReadOnlyDictionary<string, IReadOnlyList<string>> arguments, IEnumerable<QueryNote> notes, DateTime now)
+    /// a text read as the parameter's type (a list takes one per item). Throws <see cref="QueryError"/>, and
+    /// <see cref="OperationCanceledException"/> at the next row once the token is cancelled.</summary>
+    public QueryResult Run(string? view, IReadOnlyDictionary<string, IReadOnlyList<string>> arguments, IEnumerable<QueryNote> notes, DateTime now, CancellationToken ct = default)
     {
         var self = Bind(arguments);
         var (base_, name) = view is null
             ? views[0]
             : views.FirstOrDefault(v => v.View == view) is { Base: not null } found ? found : throw new QueryError("unknown-view", $"The query has no view '{view}'.", 0);
-        return base_.Run(name, notes, self, now);
+        return base_.Run(name, notes, self, now, ct);
     }
 
     /// <summary>Compiles every view without running it (no note is read, no argument needed): by view, in order, the

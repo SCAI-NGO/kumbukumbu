@@ -23,8 +23,9 @@ export type Value =
   /** A note as `this` gives it: `this.file`, `this.note`, and its properties by name. */
   | { readonly kind: "noteRef"; readonly note: QueryNote }
   /** A regular expression, whether it has the flag g, which only `replace` reads, and how JavaScript writes it (`/a+b/gi`),
-   * which `toString()` gives. */
-  | { readonly kind: "regex"; readonly regex: RegexMatcher; readonly global: boolean; readonly written: string }
+   * which `toString()` gives, and what its text says of its cost (regexShape): the longest match, if
+   * there is one, and the parts its counts expand to. */
+  | { readonly kind: "regex"; readonly regex: RegexMatcher; readonly global: boolean; readonly written: string; readonly longest: number | null; readonly expanded: number }
   /**
    * A link: the path in the vault of the file it leads to, or its target as written when it leads to none, and the text
    * it shows, if it was given one. Links are equal when their paths are, so two that lead to one file are (bases spec
@@ -55,7 +56,8 @@ export const listValue = (items: readonly Value[]): Value => ({ kind: "list", it
 export const objectValue = (values: ReadonlyMap<string, Value>): Value => ({ kind: "object", values });
 export const fileValue = (note: QueryNote): Value => ({ kind: "file", note });
 export const noteRefValue = (note: QueryNote): Value => ({ kind: "noteRef", note });
-export const regexValue = (regex: RegexMatcher, global: boolean, written: string): Value => ({ kind: "regex", regex, global, written });
+export const regexValue = (regex: RegexMatcher, global: boolean, written: string, longest: number | null, expanded: number): Value =>
+  ({ kind: "regex", regex, global, written, longest, expanded });
 export const linkValue = (path: string, display: string | null): Value => ({ kind: "link", path, display });
 export const errorValue = (message: string): Value => ({ kind: "error", message });
 export const durationValue = (months: number, days: number, milliseconds: number): Value => ({ kind: "duration", months, days, milliseconds });

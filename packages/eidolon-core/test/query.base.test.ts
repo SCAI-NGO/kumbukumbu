@@ -7,6 +7,7 @@ import { QuerySyntaxError } from "../src/query/errors";
 import { Evaluator } from "../src/query/evaluator";
 import { QueryNote } from "../src/query/note";
 import { ExpressionParser } from "../src/query/parser";
+import { QueryVault } from "../src/query/vault";
 import { Properties } from "../src/query/properties";
 
 const note = new QueryNote("a.md", "", Properties.read(""));
@@ -193,4 +194,27 @@ test("a run whose cells each stay within their size still ends at the size of th
   const yaml = `formulas:\n  big: '"x".repeat(900000)'\nviews:\n  - type: table\n    order: [formula.big]\n`;
   expect(Base.parse(yaml).run(null, notes(1), null, NOW).rows).toHaveLength(1);
   expect(thrown(() => Base.parse(yaml).run(null, notes(12), null, NOW))).toMatchObject({ code: "too-large", message: expect.stringContaining("over its notes") });
+});
+
+// A note with many tags, whose list a lambda asks for again for each of them.
+const tagged = (count: number) => new QueryNote("a.md", Array.from({ length: count }, (_, i) => `#t${i} `).join(""), Properties.read(""));
+
+test("a file's list and object fields are built once a run", () => {
+  const n = tagged(3);
+  const vault = new QueryVault([n]);
+  const evaluator = new Evaluator();
+  for (const field of ["file.tags", "file.links", "file.embeds", "file.backlinks", "file.properties", "note"]) {
+    const expr = evaluator.compile(field);
+    expect(evaluator.evaluate(expr, { note: n, this: null, now: NOW, vault })).toBe(evaluator.evaluate(expr, { note: n, this: null, now: NOW, vault }));
+  }
+});
+
+test("a lambda that asks for a long list of tags again for each takes no longer than one pass", () => {
+  const n = tagged(20_000);
+  const evaluator = new Evaluator();
+  const started = performance.now();
+  const value = evaluator.evaluate(evaluator.compile("file.tags.map(file.tags.length).length"), { note: n, this: null, now: NOW, vault: new QueryVault([n]) });
+  expect(value).toEqual({ kind: "number", number: 20_000 });
+  // 25.8 s when each access built the list again; a pass of 20,000 items takes milliseconds.
+  expect(performance.now() - started).toBeLessThan(5000);
 });

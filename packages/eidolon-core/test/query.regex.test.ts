@@ -36,3 +36,16 @@ test("what RE2 can't do is null, with a warning: lookaround, backreferences, a b
     expect(evaluator.warnings.map((w) => w.code), pattern).toEqual(["regex"]);
   }
 });
+
+test("a pattern whose counts expand too far is null, with a warning that says why, as on the server", () => {
+  const cases: Array<[string, string]> = [
+    ["/(?:a|aa|aaa|aaaa){0,300}c/", "The regular expression's counted repetitions expand to 3000 parts, more than the 200 that run in time, so it is null."],
+    ["/(?:(?:){100}){100}/", "The regular expression counts a repetition more than 1000 times (alone or multiplied through nesting), which RE2 doesn't run, so it is null."],
+  ];
+  for (const [pattern, message] of cases) {
+    const evaluator = new Evaluator();
+    const expr = evaluator.compile(`${pattern}.matches("a")`);
+    expect(evaluator.evaluate(expr, { note, this: null, now: "2026-01-01T12:00:00" }), pattern).toEqual({ kind: "null" });
+    expect(evaluator.warnings.map((w) => w.message), pattern).toEqual([message]);
+  }
+});

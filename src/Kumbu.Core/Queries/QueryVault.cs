@@ -18,6 +18,7 @@ public sealed class QueryVault
     private readonly Dictionary<QueryNote, IReadOnlyList<QueryLink>> links = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, double> randoms = new(StringComparer.Ordinal);
     private readonly Random random = new();
+    private readonly Dictionary<(string Path, string Field), Value> kept = [];
     private LinkResolver? resolver;
     private Dictionary<string, List<QueryNote>>? backlinks;
 
@@ -80,6 +81,12 @@ public sealed class QueryVault
 
         return backlinks.GetValueOrDefault(note.Path) ?? [];
     }
+
+    /// <summary>A file's field as a list or an object (its tags, links, backlinks, properties), built the first time the run
+    /// asks for it; the same value after, so asking again costs nothing and its measure is kept.</summary>
+    public Value? Kept(QueryNote note, string field) => kept.GetValueOrDefault((note.Path, field));
+
+    public Value Keep(QueryNote note, string field, Value value) => kept[(note.Path, field)] = value;
 
     /// <summary>The row's random number in [0, 1): the same for every use in the run.</summary>
     public double Random(QueryNote note)

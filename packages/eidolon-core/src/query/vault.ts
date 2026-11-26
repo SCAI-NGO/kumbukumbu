@@ -6,6 +6,7 @@ import { aliasesOf } from "../links/aliases";
 import { parseLinks } from "../links/parse";
 import { LinkResolver, type LinkResolution } from "../links/resolve";
 import type { QueryNote } from "./note";
+import type { Value } from "./value";
 
 // The resolver works on paths with a vault; the files of one run are of one vault, whatever its name.
 const VAULT = "vault";
@@ -19,6 +20,7 @@ export class QueryVault {
   private readonly byPath = new Map<string, QueryNote>();
   private readonly linkCache = new Map<QueryNote, readonly QueryLink[]>();
   private readonly randoms = new Map<string, number>();
+  private readonly kept = new Map<string, Value>();
   private resolverCache: LinkResolver | null = null;
   private backlinkCache: Map<string, QueryNote[]> | null = null;
 
@@ -68,6 +70,17 @@ export class QueryVault {
       this.backlinkCache = backlinks;
     }
     return this.backlinkCache.get(note.path) ?? [];
+  }
+
+  /** A file's field as a list or an object (its tags, links, backlinks, properties), built the first time the run asks for
+   * it; the same value after, so asking again costs nothing and its measure is kept. */
+  keptOf(note: QueryNote, field: string): Value | undefined {
+    return this.kept.get(`${field}\u0000${note.path}`);
+  }
+
+  keep(note: QueryNote, field: string, value: Value): Value {
+    this.kept.set(`${field}\u0000${note.path}`, value);
+    return value;
   }
 
   /** The row's random number in [0, 1): the same for every use in the run. */

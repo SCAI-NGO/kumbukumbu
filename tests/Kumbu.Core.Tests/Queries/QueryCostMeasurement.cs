@@ -96,8 +96,8 @@ public class QueryCostMeasurement
                  })
         {
             var query = Query.Read(new QueryNote("Queries/q.md", text, Properties.Read(text)));
-            var rows = query.Run(null, args, parsed, now).Rows.Count;
-            output.WriteLine($"  evaluate {name,-19} {Time(() => query.Run(null, args, parsed, now))}  ({rows:N0} rows)");
+            var rows = query.Run(null, args, parsed, now, ct).Rows.Count;
+            output.WriteLine($"  evaluate {name,-19} {Time(() => query.Run(null, args, parsed, now, ct))}  ({rows:N0} rows)");
         }
 
         foreach (var line in new[] { "query execute /V/Queries/Birthdays.md --param month=11", "query execute '/V/Queries/Open tasks.md'" })

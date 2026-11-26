@@ -191,7 +191,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             // The query note as this, with its size and times as its row has them.
             if (vault.Keys.FirstOrDefault(n => n.Path == note.Path) is { } row)
                 query = Query.Read(new QueryNote(note.Path, note.Content, note.Properties, row.Size, row.Created, row.Modified));
-            result = query.Run(options.Value("view"), arguments.ToDictionary(a => a.Key, a => (IReadOnlyList<string>)a.Value), vault.Keys, await LocalNowAsync(ct));
+            result = query.Run(options.Value("view"), arguments.ToDictionary(a => a.Key, a => (IReadOnlyList<string>)a.Value), vault.Keys, await LocalNowAsync(ct), ct);
         }
         catch (QueryError e)
         {

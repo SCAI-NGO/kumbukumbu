@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -127,6 +128,19 @@ public sealed partial class Evaluator
     private readonly IReadOnlyDictionary<string, string> formulaTexts;
     private readonly Dictionary<string, Expr> formulas = new(StringComparer.Ordinal);
     private readonly Dictionary<RegexExpr, RegexValue?> regexes = new(ReferenceEqualityComparer.Instance);
+    // One value for each pattern and its flags in a run, wherever it is written, and the ones searched in this run so far.
+    private readonly Dictionary<string, RegexValue> regexesOfRun = new(StringComparer.Ordinal);
+    private readonly HashSet<RegexValue> searchedInRun = new(ReferenceEqualityComparer.Instance);
+
+    // Compiled patterns, shared by runs: .NET's linear engine builds its states as it matches and keeps them, so a row, or
+    // the query run again, finds them built. Emptied when full, so a stream of patterns can't fill the memory.
+    private static readonly ConcurrentDictionary<(string Pattern, RegexOptions Options), Regex> Compiled = new();
+    private const int MaxCompiled = 256;
+
+    /// <summary>How long one search of a regular expression may take before the query fails (too-large): the net under
+    /// <see cref="RegexShape"/>. The costliest pattern it lets run takes 0.2 s the first time on a text of 1,000,000
+    /// characters, and a search of an ordinary one milliseconds, so a second fails nothing that ought to run.</summary>
+    public static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
     private readonly Dictionary<string, int> checkedLevels = new(StringComparer.Ordinal);
     private int deepest;
     private readonly List<QueryWarning> warnings = [];
@@ -224,9 +238,9 @@ public sealed partial class Evaluator
         var value = expr switch
         {
             LiteralExpr l => l.Value,
-            NameExpr n => Name(n.Name, scope),
+            NameExpr n => Name(n.Name, scope, n),
             MemberExpr { Target: NameExpr { Name: "formula" } } m => FormulaValue(m.Name, scope),
-            MemberExpr m => Field(Eval(m.Target, scope), m.Name, scope),
+            MemberExpr m => Field(Eval(m.Target, scope), m.Name, scope, m),
             IndexExpr i => Index(Eval(i.Target, scope), Eval(i.Index, scope)),
             CallExpr { Callee: NameExpr f } c => Function(f.Name, c.Arguments, scope, c),
             CallExpr { Callee: MemberExpr { Name: "filter" or "map" or "reduce" } m } c => Lambda(Eval(m.Target, scope), m.Name, c, scope),
@@ -267,9 +281,28 @@ public sealed partial class Evaluator
     /// <summary>The steps reading, comparing or building a value takes: one for each 64 of its characters and items.</summary>
     private static long Work(Value value) => value is TextValue or ListValue or ObjectValue ? Measure(value).Size / 64 : 0;
 
-    // A regular expression's search from a place may read the rest of the text (/(?:a*c)?/ on "aaa…" does, for each
-    // match), so each search counts what it may read: a global replace or split on a long text can't take quadratic time.
-    private void Searched(string text, int from, Expr at) => Step(1 + (text.Length - from) / 16, at);
+    // One search of a regular expression from a place. It counts what it may read, one step for each 16 characters: up to
+    // the match's end and on by the longest match, or, when it fails or a match has no longest, the rest of the text
+    // (/(?:a*c)?/ on "aaa…" reads it for each match), so a global replace or split can't take quadratic time. The first
+    // search of a pattern in a run also counts the states .NET builds for it, which grow with the square of its counts'
+    // expansion (RegexShape): 10 × 200² steps, 0.2 s, for the largest that runs. The timeout is the net under both.
+    private Match Search(RegexValue r, string text, int from, Expr at)
+    {
+        if (searchedInRun.Add(r)) Step(10 * r.Expanded * r.Expanded, at);
+        Match m;
+        try
+        {
+            m = r.Regex.Match(text, from);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            throw new QueryError("too-large", $"A regular expression takes more than {RegexTimeout.TotalSeconds:0} second for one search.", at.Position);
+        }
+
+        var read = m.Success && r.Longest is { } longest ? Math.Min(m.Index + m.Length - from + longest, text.Length - from) : text.Length - from;
+        Step(1 + read / 16, at);
+        return m;
+    }
 
     private static void Bounded(Value value, Expr at)
     {
@@ -569,15 +602,32 @@ public sealed partial class Evaluator
             return null;
         }
 
+        var shape = RegexShape.Of(r.Pattern);
+        if (!shape.Runs)
+        {
+            Warn("regex", shape.CountTooLarge
+                ? $"The regular expression counts a repetition more than {RegexShape.MaxCount} times (alone or multiplied through nesting), which RE2 doesn't run, so it is null."
+                : $"The regular expression's counted repetitions expand to {shape.Expanded} parts, more than the {RegexShape.MaxExpanded} that run in time, so it is null.", r.Position);
+            return null;
+        }
+
+        // As JavaScript's toString: the pattern, then the flags in their own order.
+        var written = $"/{r.Pattern}/{string.Concat(RegexFlags.Where(r.Flags.Contains))}";
+        if (regexesOfRun.TryGetValue(written, out var known)) return known;
         var options = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant;
         if (r.Flags.Contains('i')) options |= RegexOptions.IgnoreCase;
         if (r.Flags.Contains('m')) options |= RegexOptions.Multiline;
         if (r.Flags.Contains('s')) options |= RegexOptions.Singleline;
         try
         {
-            // As JavaScript's toString: the pattern, then the flags in their own order.
-            var written = $"/{r.Pattern}/{string.Concat(RegexFlags.Where(r.Flags.Contains))}";
-            return new RegexValue(new Regex(r.Pattern, options), r.Flags.Contains('g'), written);
+            if (!Compiled.TryGetValue((r.Pattern, options), out var regex))
+            {
+                regex = new Regex(r.Pattern, options, RegexTimeout);
+                if (Compiled.Count >= MaxCompiled) Compiled.Clear();
+                Compiled[(r.Pattern, options)] = regex;
+            }
+
+            return regexesOfRun[written] = new RegexValue(regex, r.Flags.Contains('g'), written, shape.Longest, shape.Expanded);
         }
         catch (Exception e) when (e is ArgumentException or NotSupportedException)
         {
@@ -586,7 +636,7 @@ public sealed partial class Evaluator
         }
     }
 
-    private Value Name(string name, Scope scope)
+    private Value Name(string name, Scope scope, Expr at)
     {
         // value, index and acc are the lambda's where there is one; elsewhere they are properties.
         if (frames.Count > 0 && name is "value" or "index") return name == "value" ? frames[^1].Value : new NumberValue(frames[^1].Index);
@@ -594,7 +644,7 @@ public sealed partial class Evaluator
         return name switch
         {
             "file" => new FileValue(scope.Note),
-            "note" => new ObjectValue(scope.Note.Properties.Values),
+            "note" => Kept(scope, scope.Note, "properties", () => new ObjectValue(scope.Note.Properties.Values), at),
             "this" => scope.This is { } self ? new NoteRefValue(self) : NullValue.Instance,
             "formula" => NullValue.Instance,
             _ => Property(scope.Note, name),
@@ -612,7 +662,18 @@ public sealed partial class Evaluator
         return alone.Value.Vault;
     }
 
-    private Value Field(Value value, string name, Scope scope) => (value, name) switch
+    // A file's list or object field is built once a run, and counts its work then; after, it is the same value, which costs
+    // nothing to give again, and whatever reads it (a lambda, a method, a comparison) counts its own work.
+    private Value Kept(Scope scope, QueryNote note, string field, Func<Value> build, Expr at)
+    {
+        var vault = Vault(scope);
+        if (vault.Kept(note, field) is { } known) return known;
+        var value = build();
+        Step(Work(value), at);
+        return vault.Keep(note, field, value);
+    }
+
+    private Value Field(Value value, string name, Scope scope, Expr at) => (value, name) switch
     {
         (ErrorValue or NullValue, _) => value,
         (FileValue f, "name") => new TextValue(f.Note.IsNote ? FileName(f.Note.Path)[..^".md".Length] : FileName(f.Note.Path)),
@@ -623,14 +684,14 @@ public sealed partial class Evaluator
         (FileValue f, "size") => new NumberValue(f.Note.Size),
         (FileValue f, "ctime") => f.Note.Created is { } created ? new DateValue(created, true) : NullValue.Instance,
         (FileValue f, "mtime") => f.Note.Modified is { } modified ? new DateValue(modified, true) : NullValue.Instance,
-        (FileValue f, "tags") => new ListValue(f.Note.Tags.Select(t => (Value)new TextValue(t)).ToList()),
-        (FileValue f, "properties") => new ObjectValue(f.Note.Properties.Values),
-        (FileValue f, "links" or "embeds") => new ListValue(Vault(scope).LinksOf(f.Note).Where(l => l.Embed == (name == "embeds")).Select(l => (Value)new LinkValue(l.Path, null)).ToList()),
-        (FileValue f, "backlinks") => new ListValue(Vault(scope).BacklinksOf(f.Note).Select(n => (Value)new FileValue(n)).ToList()),
+        (FileValue f, "tags") => Kept(scope, f.Note, name, () => new ListValue(f.Note.Tags.Select(t => (Value)new TextValue(t)).ToList()), at),
+        (FileValue f, "properties") => Kept(scope, f.Note, name, () => new ObjectValue(f.Note.Properties.Values), at),
+        (FileValue f, "links" or "embeds") => Kept(scope, f.Note, name, () => new ListValue(Vault(scope).LinksOf(f.Note).Where(l => l.Embed == (name == "embeds")).Select(l => (Value)new LinkValue(l.Path, null)).ToList()), at),
+        (FileValue f, "backlinks") => Kept(scope, f.Note, name, () => new ListValue(Vault(scope).BacklinksOf(f.Note).Select(n => (Value)new FileValue(n)).ToList()), at),
         (FileValue, "file") => value,
         (FileValue, _) => NoField(value, name),
         (NoteRefValue r, "file") => new FileValue(r.Note),
-        (NoteRefValue r, "note") => new ObjectValue(r.Note.Properties.Values),
+        (NoteRefValue r, "note") => Kept(scope, r.Note, "properties", () => new ObjectValue(r.Note.Properties.Values), at),
         (NoteRefValue r, _) => Property(r.Note, name),
         (ObjectValue o, _) => o.Values.GetValueOrDefault(name) ?? NullValue.Instance,
         (TextValue t, "length") => new NumberValue(t.Text.Length),
@@ -987,11 +1048,7 @@ public sealed partial class Evaluator
     // A match as JavaScript's replace and split see it: where it starts, its text, and its groups (null where a group took no part).
     private sealed record Found(int Index, string Text, IReadOnlyList<string?> Groups, IReadOnlyDictionary<string, string?>? Named);
 
-    private bool Matches(RegexValue r, string text, Expr at)
-    {
-        Searched(text, 0, at);
-        return r.Regex.IsMatch(text);
-    }
+    private bool Matches(RegexValue r, string text, Expr at) => Search(r, text, 0, at).Success;
 
     private IEnumerable<Found> Matches(string text, Value pattern, bool all, Expr at)
     {
@@ -1009,12 +1066,11 @@ public sealed partial class Evaluator
             yield break;
         }
 
-        var regex = ((RegexValue)pattern).Regex;
-        var names = regex.GetGroupNames().Where(n => !int.TryParse(n, out _)).ToList();
+        var regex = (RegexValue)pattern;
+        var names = regex.Regex.GetGroupNames().Where(n => !int.TryParse(n, out _)).ToList();
         for (var start = 0; start <= text.Length;)
         {
-            Searched(text, start, at);
-            var m = regex.Match(text, start);
+            var m = Search(regex, text, start, at);
             if (!m.Success) yield break;
             var groups = Enumerable.Range(1, m.Groups.Count - 1).Select(i => m.Groups[i].Success ? m.Groups[i].Value : null).ToList();
             yield return new Found(m.Index, m.Value, groups, names.Count == 0 ? null : names.ToDictionary(n => n, n => m.Groups[n].Success ? m.Groups[n].Value : null));
@@ -1127,12 +1183,11 @@ public sealed partial class Evaluator
                 Add(new TextValue(text[done..]));
                 return new ListValue(parts);
             case RegexValue r:
-                if (text.Length == 0) return new ListValue(r.Regex.Match(text).Success ? [] : [new TextValue(text)]);
+                if (text.Length == 0) return new ListValue(Search(r, text, 0, at).Success ? [] : [new TextValue(text)]);
                 var (p, q) = (0, 0);
                 while (q < text.Length)
                 {
-                    Searched(text, q, at);
-                    var m = r.Regex.Match(text, q);
+                    var m = Search(r, text, q, at);
                     if (!m.Success) break;
                     var e = m.Index + m.Length;
                     // An empty match where the part starts, or one at the very end, splits nothing.
