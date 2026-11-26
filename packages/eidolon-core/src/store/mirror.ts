@@ -191,6 +191,9 @@ export class SealedMirror {
 
   get locked(): boolean { return this.r.locked; }
 
+  /** A contact went through since this copy was unlocked: what it may keep is the slot's word, not only the vault list's. */
+  get contacted(): boolean { return this.listed !== null; }
+
   /** The vaults this device holds a mirror of. */
   held(): VaultMirror[] {
     this.assertOpen();

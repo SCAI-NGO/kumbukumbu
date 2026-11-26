@@ -211,3 +211,40 @@ describe("a vault's mirror removed for the server's reasons is told, whichever p
     await engines.stop();
   });
 });
+
+describe("a vault the vault list leaves out, in a copy unlocked offline", () => {
+  /** Both vaults in the copy, then locked and opened again with the password, as the offline sign-in form does. */
+  async function unlockedOffline() {
+    const s = await setup();
+    await s.engines.start();
+    await vi.waitFor(() => expect(s.mirror.held().map((v) => v.id).sort()).toEqual([work.id, team.id].sort()));
+    await s.engines.stop();
+    s.mirror.lock();
+    const mirror = (await s.copies.unlockOffline((await s.copies.forUsername(signIn.username))!, signIn.password))!;
+    const listed: ListedVault[] = [{ id: work.id, name: "Work", canWrite: true }];
+    const engines = new MirrorEngines({
+      mirror, device: "Firefox on Linux", clock: realClock, listVaults: () => Promise.resolve(listed), remote: (name) => s.servers.get(name)!,
+    });
+    return { ...s, mirror, engines, listed };
+  }
+
+  test("stays until a contact of the copy went through", async () => {
+    const { browser, mirror, engines } = await unlockedOffline();
+    await engines.start();
+    expect(mirror.vault(team.id)).toBeDefined();
+
+    browser.slots.vaults = [work];
+    expect(await mirror.contact()).toEqual({ vaults: 1, lost: 0 });
+    expect(mirror.vault(team.id)).toBeUndefined();
+    await engines.stop();
+  });
+
+  test("goes once a contact went through, though the contact still listed it", async () => {
+    const { mirror, engines } = await unlockedOffline();
+    await engines.start();
+    await mirror.contact();
+    await engines.refresh();
+    expect(mirror.vault(team.id)).toBeUndefined();
+    await engines.stop();
+  });
+});

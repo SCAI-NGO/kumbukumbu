@@ -43,7 +43,11 @@ export class MirrorEngines {
       held: () => m.held().map((v) => v.id),
       mirrors: (vault) => mirrors(m.choice, vault.id),
       createEngine: (vault) => this.engineFor(vault),
-      onLeft: (id) => void m.purge(id),
+      // Unlocked offline, the vault list may be another session's (the cookie is the browser's, not the copy's): a vault
+      // it leaves out goes only once a contact of this copy has gone through, which is the copy's own word.
+      onLeft: (id, because) => {
+        if (because === "discreet" || m.contacted) void m.purge(id);
+      },
     });
     // The host may listen too (the mode counts the changes waiting): both hear it.
     const heard = m.onChanged;
