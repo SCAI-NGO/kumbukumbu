@@ -40,9 +40,10 @@ export function conflictSentence(uploaded: number | null, conflicts: number): st
 /**
  * The offline mode's line, in the page's flow under the top bar like the update bar: always there while offline and
  * never dismissable; it leads to Settings, Offline. After it, the done line for four seconds, the conflicts until
- * seen, and a purge's notice.
+ * seen, and a purge's notice. The conflicts name notes: only the signed-in shell (`inShell`) lists them, never the
+ * sign-in page or another page outside it.
  */
-export default function OfflineBar() {
+export default function OfflineBar({ inShell = false }: { inShell?: boolean }) {
   const offline = useOfflineMode((s) => s.offline);
   const phase = useOfflineMode((s) => s.phase);
   const waiting = useOfflineMode((s) => s.waiting);
@@ -66,7 +67,7 @@ export default function OfflineBar() {
     );
   }
 
-  if (conflicts.length > 0) return <ConflictsLine uploaded={done?.uploaded ?? null} />;
+  if (inShell && conflicts.length > 0) return <ConflictsLine uploaded={done?.uploaded ?? null} />;
 
   if (done !== null) {
     return (

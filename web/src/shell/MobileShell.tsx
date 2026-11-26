@@ -561,7 +561,7 @@ export default function MobileShell() {
           <DiscreetPill />
         </div>
       )}
-      <OfflineBar />
+      <OfflineBar inShell />
       <UpdateBar />
       <MemberNotices />
       <StorageNotice />

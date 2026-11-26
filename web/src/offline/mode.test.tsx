@@ -13,7 +13,7 @@ import { fakeApi, json, user } from "../test/app";
 import { useOfflineCopy } from "./copy";
 import { conflictSentence, offlineSentence } from "./OfflineBar";
 import OfflineBar from "./OfflineBar";
-import { useOfflineMode, WIPED } from "./mode";
+import { resetOfflineMode, useOfflineMode, WIPED } from "./mode";
 
 const header = { copy: "c1", slot: { id: "s1", token: "tok-1" } } as CopyHeader;
 
@@ -21,6 +21,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useOfflineCopy.getState().clear();
   useSession.getState().reset();
+  resetOfflineMode();
 });
 
 describe("the API client", () => {
@@ -96,11 +97,12 @@ describe("the bar's sentences", () => {
   });
 });
 
-function renderBar() {
+/** The bar as the pages outside the shell show it, or, `inShell`, as the signed-in shell does. */
+function renderBar(inShell = false) {
   render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
-        <OfflineBar />
+        <OfflineBar inShell={inShell} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -130,9 +132,16 @@ describe("the bar", () => {
 
   test("conflicts stay until dismissed", async () => {
     useOfflineMode.getState().conflict({ vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" });
-    renderBar();
+    renderBar(true);
     expect(await screen.findByRole("status", { name: "Changed elsewhere" })).toHaveTextContent("One note was also changed elsewhere");
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("status", { name: "Changed elsewhere" })).toBeNull();
+  });
+
+  test("conflicts are listed only inside the signed-in shell", async () => {
+    useOfflineMode.getState().conflict({ vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" });
+    await vi.waitFor(() => expect(useOfflineMode.getState().conflicts).toHaveLength(1));
+    renderBar();
     expect(screen.queryByRole("status", { name: "Changed elsewhere" })).toBeNull();
   });
 
@@ -144,5 +153,54 @@ describe("the bar", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("status", { name: "Offline copy" })).toBeNull();
+  });
+});
+
+describe("what the mode keeps of a person", () => {
+  const alice = { ...user, id: "u1", username: "alice", display: "Alice" };
+  const bob = { ...user, id: "u2", username: "bob", display: "Bob" };
+
+  /** Two conflict copies and three changes waiting, from Alice's session. */
+  async function alicesConflicts() {
+    useSession.getState().signedIn({ user: alice, previousSignInAt: null });
+    useOfflineMode.getState().conflict({ vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" });
+    useOfflineMode.getState().conflict({ vault: "v1", original: "Letters/To Carol.md", copy: "Letters/To Carol (conflict 2026-11-22 21-05).md" });
+    useOfflineMode.setState({ waiting: 3 });
+    await vi.waitFor(() => expect(useOfflineMode.getState().conflicts).toHaveLength(2));
+  }
+
+  test("a sign-out forgets the conflicts listed for the previous person", async () => {
+    await alicesConflicts();
+    useSession.getState().signOut();
+    await vi.waitFor(() => expect(useOfflineMode.getState()).toMatchObject({ conflicts: [], waiting: 0, done: null }));
+  });
+
+  test("a session's end forgets them too", async () => {
+    await alicesConflicts();
+    useSession.getState().end();
+    await vi.waitFor(() => expect(useOfflineMode.getState().conflicts).toEqual([]));
+  });
+
+  test("someone else signing in forgets them", async () => {
+    await alicesConflicts();
+    useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+    await vi.waitFor(() => expect(useOfflineMode.getState().conflicts).toEqual([]));
+  });
+
+  test("the same person's offline sign-in, once the session is read, keeps them", async () => {
+    useSession.getState().signedIn({ user: { ...alice, id: "" }, previousSignInAt: null });
+    useOfflineMode.getState().conflict({ vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" });
+    await vi.waitFor(() => expect(useOfflineMode.getState().conflicts).toHaveLength(1));
+    useSession.getState().signedIn({ user: alice, previousSignInAt: null });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(useOfflineMode.getState().conflicts).toHaveLength(1);
+  });
+
+  test("the copy locking forgets them", async () => {
+    useOfflineCopy.getState().set(header, { header, locked: false } as unknown as SealedMirror);
+    useOfflineMode.getState().conflict({ vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" });
+    await vi.waitFor(() => expect(useOfflineMode.getState().conflicts).toHaveLength(1));
+    useOfflineCopy.getState().set(header, null);
+    await vi.waitFor(() => expect(useOfflineMode.getState().conflicts).toEqual([]));
   });
 });

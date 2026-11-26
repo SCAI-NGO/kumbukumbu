@@ -292,7 +292,20 @@ async function removeCopy(): Promise<void> {
   await (await mirrorCopies()).wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
 }
 
-onSessionEnd((how) => void (how === "wipe" ? removeCopy() : lockCopy(how === "lockEverywhere")));
+/** What the mode knows of the person (conflict copies' paths, the done line, the count waiting) goes with them. */
+const forget = () => send({ type: "forget" });
+
+onSessionEnd((how) => {
+  forget();
+  void (how === "wipe" ? removeCopy() : lockCopy(how === "lockEverywhere"));
+});
+useSession.subscribe((s, before) => {
+  // Someone else signed in where another person's session was; the same person's offline sign-in confirmed is no change.
+  if (s.user !== null && before.user !== null && s.user.username.toLowerCase() !== before.user.username.toLowerCase()) forget();
+});
+useOfflineCopy.subscribe((s, before) => {
+  if (before.mirror !== null && s.mirror !== before.mirror) forget();
+});
 
 /** For the tests: a fresh mode, as in a new tab. */
 export function resetOfflineMode() {
