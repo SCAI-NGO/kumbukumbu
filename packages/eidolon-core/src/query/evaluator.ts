@@ -154,7 +154,7 @@ const firstError = (values: readonly Value[]): ErrorOf | undefined => values.fin
 export const MAX_SIZE = 1_000_000;
 /** How many steps evaluating an expression for a note may take: each part evaluated, each item a method goes through,
  * and each 64 characters and items of what an operation reads or builds (`work`); a regular expression's search counts
- * each 16 characters it may read. Lambdas multiply the work (a map in a map), so it is bounded as the size is. */
+ * 4 + its size steps for each 20 characters it may read. Lambdas multiply the work (a map in a map), so it is bounded as the size is. */
 export const MAX_STEPS = 1_000_000;
 /** How many steps one run may take over all its notes and expressions: the bound on one note times the notes would let a
  * large vault keep the tab busy for hours. */

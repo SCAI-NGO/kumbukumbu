@@ -163,7 +163,7 @@ public sealed partial class Evaluator
 
     /// <summary>How many steps evaluating an expression for a note may take: each part evaluated, each item a method
     /// goes through, and each 64 characters and items of what an operation reads or builds (<see cref="Work"/>); a regular
-    /// expression's search counts each 16 characters it may read. Lambdas multiply the work (a map in a map), so it is
+    /// expression's search counts 4 + its size steps for each 20 characters it may read. Lambdas multiply the work (a map in a map), so it is
     /// bounded as the size is.</summary>
     public const int MaxSteps = 1_000_000;
 
