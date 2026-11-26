@@ -10,6 +10,14 @@ namespace Kumbu.Core.Queries;
 /// it takes when left out, the values it is held to, and what it means.</summary>
 public sealed record QueryParam(string Name, PropertyType Type, bool Required, Value? Default, IReadOnlyList<string> Options, string? Description);
 
+/// <summary>A query note's <c>meaning:</c>: the property (<c>summary</c> or <c>description</c>) whose vector each note
+/// is scored by, the text it is compared with (a parameter's, or a literal: exactly one is set), the least score a row
+/// needs, if any, and the name the score has in the base.</summary>
+public sealed record QueryMeaning(string Property, string? Param, string? Text, double? Min, string As);
+
+/// <summary>The vectors a run with meaning takes: the text's, and each note's vector of the property, by its path.</summary>
+public sealed record MeaningVectors(float[] Query, IReadOnlyDictionary<string, float[]> ByPath);
+
 /// <summary>A named query: a query note (frontmatter <c>type: query</c>, a <c>params:</c> schema, prose and one or more
 /// <c>```base</c> blocks) or a <c>.base</c> file. A call's arguments are bound into <c>this</c> over the query note's own
 /// properties, so the same base renders in Obsidian through the note it is embedded in. The cases are in
@@ -19,18 +27,24 @@ public sealed partial class Query
     private readonly QueryNote note;
     private readonly IReadOnlyList<(Base Base, string? View)> views;
 
-    private Query(QueryNote note, bool marked, IReadOnlyList<QueryParam> parameters, IReadOnlyList<(Base Base, string? View)> views)
+    private Query(QueryNote note, bool marked, IReadOnlyList<QueryParam> parameters, QueryMeaning? meaning, IReadOnlyList<(Base Base, string? View)> views)
     {
         this.note = note;
         IsMarked = marked;
         Params = parameters;
+        Meaning = meaning;
         this.views = views;
     }
+
+    /// <summary>The most characters the text to embed may have: it is anyone's input, and a question needs no more.</summary>
+    public const int MaxMeaningText = 2000;
 
     /// <summary>Whether the note says it is a query (<c>type: query</c>), or is a <c>.base</c> file: what <c>query ls</c> lists.</summary>
     public bool IsMarked { get; }
 
     public IReadOnlyList<QueryParam> Params { get; }
+
+    public QueryMeaning? Meaning { get; }
 
     /// <summary>The views of its bases, in the order they are written; the first is the one a call without a view runs.</summary>
     public IReadOnlyList<string> ViewNames => views.Where(v => v.View is not null).Select(v => v.View!).ToList();
@@ -44,31 +58,60 @@ public sealed partial class Query
     public static bool IsQuery(QueryNote note) =>
         IsBaseFile(note.Path) || note.Properties.Values.TryGetValue("type", out var type) && type is TextValue { Text: "query" };
 
-    /// <summary>Reads a query; throws <see cref="QueryError"/> (code <c>no-base</c>, <c>params</c> or <c>base</c>) when it can't run.</summary>
+    /// <summary>Reads a query; throws <see cref="QueryError"/> (code <c>no-base</c>, <c>params</c>, <c>meaning</c> or <c>base</c>) when it can't run.</summary>
     public static Query Read(QueryNote note)
     {
         if (IsBaseFile(note.Path))
         {
             var base_ = Base.Parse(note.Content);
-            return new Query(note, true, [], Views([base_]));
+            return new Query(note, true, [], null, Views([base_]));
         }
 
         var blocks = Blocks(note.Content);
         if (blocks.Count == 0) throw new QueryError("no-base", "The note has no ```base block to run.", 0);
-        return new Query(note, IsQuery(note), Parameters(note), Views(blocks.Select(Base.Parse).ToList()));
+        var parameters = Parameters(note);
+        return new Query(note, IsQuery(note), parameters, ReadMeaning(note, parameters), Views(blocks.Select(Base.Parse).ToList()));
+    }
+
+    /// <summary>The text a run with meaning embeds: the parameter's argument or default, or the literal. Throws
+    /// <see cref="QueryError"/> as <see cref="Run"/> does for the arguments, and <c>param-value</c> for a text that is
+    /// blank or longer than <see cref="MaxMeaningText"/>.</summary>
+    public string MeaningText(IReadOnlyDictionary<string, IReadOnlyList<string>> arguments) => MeaningText(Bind(arguments));
+
+    private string MeaningText(QueryNote self)
+    {
+        var meaning = Meaning ?? throw new InvalidOperationException("The query has no meaning.");
+        var text = meaning.Text ?? (self.Properties.Values[meaning.Param!] as TextValue)?.Text ?? "";
+        if (text.Trim().Length == 0) throw new QueryError("param-value", "The text to compare the notes with is blank.", 0);
+        if (text.Length > MaxMeaningText)
+            throw new QueryError("param-value", $"The text to compare the notes with has {text.Length} characters; it may have {MaxMeaningText}.", 0);
+        return text;
     }
 
     /// <summary>Runs a view (by name; the first when null) with the call's arguments: each name a parameter, each value
-    /// a text read as the parameter's type (a list takes one per item). Throws <see cref="QueryError"/>, and
-    /// <see cref="OperationCanceledException"/> at the next row once the token is cancelled.</summary>
-    public QueryResult Run(string? view, IReadOnlyDictionary<string, IReadOnlyList<string>> arguments, IEnumerable<QueryNote> notes, DateTime now, CancellationToken ct = default)
+    /// a text read as the parameter's type (a list takes one per item). A query with <see cref="Meaning"/> takes the
+    /// vectors of <see cref="MeaningText"/> and the notes (<c>meaning-unavailable</c> without them). Throws
+    /// <see cref="QueryError"/>, and <see cref="OperationCanceledException"/> at the next row once the token is cancelled.</summary>
+    public QueryResult Run(string? view, IReadOnlyDictionary<string, IReadOnlyList<string>> arguments, IEnumerable<QueryNote> notes, DateTime now, CancellationToken ct = default, MeaningVectors? meaning = null)
     {
         var self = Bind(arguments);
-        var (base_, name) = view is null
-            ? views[0]
-            : views.FirstOrDefault(v => v.View == view) is { Base: not null } found ? found : throw new QueryError("unknown-view", $"The query has no view '{view}'.", 0);
+        if (Meaning is { } m)
+        {
+            MeaningText(self);
+            notes = Scored(m, meaning ?? throw new QueryError("meaning-unavailable", "The query ranks by meaning, and no vectors were given for it.", 0), notes, ct);
+        }
+
+        var (base_, name) = ResolveView(view);
         return base_.Run(name, notes, self, now, ct);
     }
+
+    /// <summary>Throws <c>unknown-view</c> when the query has no view of that name (the first when null), before anything is sent or read.</summary>
+    public void CheckView(string? view) => ResolveView(view);
+
+    private (Base Base, string? View) ResolveView(string? view) =>
+        view is null
+            ? views[0]
+            : views.FirstOrDefault(v => v.View == view) is { Base: not null } found ? found : throw new QueryError("unknown-view", $"The query has no view '{view}'.", 0);
 
     /// <summary>Compiles every view without running it (no note is read, no argument needed): by view, in order, the
     /// error of each view that can't run, or the warnings of one that runs with them; empty when all run without.</summary>
@@ -110,6 +153,46 @@ public sealed partial class Query
         }
 
         return new QueryNote(note.Path, note.Content, new NoteProperties(values, null), note.Size, note.Created, note.Modified);
+    }
+
+    // Each note once, its score set as the property named by As (null without a vector), so that one file is one
+    // QueryNote for the whole run: the vault's caches key by the instance. A file that isn't a note has no properties
+    // and no vector, so it stays as it is, or goes with Min.
+    private static List<QueryNote> Scored(QueryMeaning meaning, MeaningVectors vectors, IEnumerable<QueryNote> notes, CancellationToken ct)
+    {
+        var scored = new List<QueryNote>();
+        foreach (var note in notes)
+        {
+            ct.ThrowIfCancellationRequested();
+            var score = note.IsNote && vectors.ByPath.TryGetValue(note.Path, out var vector) ? Cosine(vectors.Query, vector) : null;
+            if (meaning.Min is { } min && !(score >= min)) continue;
+            if (!note.IsNote)
+            {
+                scored.Add(note);
+                continue;
+            }
+
+            var values = new Dictionary<string, Value>(note.Properties.Values) { [meaning.As] = score is { } s ? new NumberValue(s) : NullValue.Instance };
+            scored.Add(new QueryNote(note.Path, note.Content, new NoteProperties(values, note.Properties.Problem), note.Size, note.Created, note.Modified));
+        }
+
+        return scored;
+    }
+
+    // Rounded to six places: the vectors are single precision, so further digits are noise of how the vector was
+    // stored, and [0.6, 0.8] should score 0.6, not 0.6000000095367432.
+    private static double? Cosine(float[] a, float[] b)
+    {
+        if (a.Length != b.Length) return null;
+        double dot = 0, aa = 0, bb = 0;
+        for (var i = 0; i < a.Length; i++)
+        {
+            dot += (double)a[i] * b[i];
+            aa += (double)a[i] * a[i];
+            bb += (double)b[i] * b[i];
+        }
+
+        return aa == 0 || bb == 0 ? null : Math.Round(dot / Math.Sqrt(aa * bb), 6);
     }
 
     private static Value Argument(QueryParam param, IReadOnlyList<string> given)
@@ -162,16 +245,21 @@ public sealed partial class Query
     [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})\s*base\s*$")]
     private static partial Regex BaseFence();
 
+    // The frontmatter as YAML's tree, for what the typed properties don't keep (a scalar's style, a map's keys).
+    private static YamlMappingNode Frontmatter(QueryNote note)
+    {
+        var lines = Lines.Split(note.Content);
+        var stream = new YamlStream();
+        stream.Load(new StringReader(string.Join('\n', lines.Skip(1).Take(Outline.FrontmatterEnd(lines) - 2))));
+        return (YamlMappingNode)stream.Documents[0].RootNode;
+    }
+
     // The params: map of the frontmatter, each entry a map of type, required, default, options and description.
     private static List<QueryParam> Parameters(QueryNote note)
     {
         if (!note.Properties.Values.ContainsKey("params")) return [];
         if (note.Properties.Problem is { } problem) throw Invalid(problem);
-        var lines = Lines.Split(note.Content);
-        var stream = new YamlStream();
-        stream.Load(new StringReader(string.Join('\n', lines.Skip(1).Take(Outline.FrontmatterEnd(lines) - 2))));
-        var root = (YamlMappingNode)stream.Documents[0].RootNode;
-        if (root.Children["params"] is not YamlMappingNode map) throw Invalid("params is not a map of parameters by name.");
+        if (Frontmatter(note).Children["params"] is not YamlMappingNode map) throw Invalid("params is not a map of parameters by name.");
 
         var parameters = new List<QueryParam>();
         foreach (var (key, value) in map.Children)
@@ -228,6 +316,49 @@ public sealed partial class Query
             throw Invalid($"The default of the parameter '{name}' doesn't fit: {e.Message}");
         }
     }
+
+    // The meaning: map of the frontmatter. Its text is a parameter's name when plain, and a literal when quoted.
+    private static QueryMeaning? ReadMeaning(QueryNote note, IReadOnlyList<QueryParam> parameters)
+    {
+        if (!note.Properties.Values.ContainsKey("meaning")) return null;
+        if (note.Properties.Problem is { } problem) throw Wrong(problem);
+        if (Frontmatter(note).Children["meaning"] is not YamlMappingNode map) throw Wrong("meaning is not a map of property, text, min and as.");
+        foreach (var key in map.Children.Keys)
+        {
+            if (key is not YamlScalarNode { Value: "property" or "text" or "min" or "as" })
+                throw Wrong($"meaning has '{(key as YamlScalarNode)?.Value ?? ""}', which is none of property, text, min and as.");
+        }
+
+        YamlScalarNode? Scalar(string key) => map.Children.TryGetValue(key, out var node)
+            ? node as YamlScalarNode ?? throw Wrong($"The {key} of meaning is not a single value.")
+            : null;
+
+        var property = Scalar("property")?.Value switch
+        {
+            null => throw Wrong("meaning needs a property: summary or description."),
+            var p and ("summary" or "description") => p,
+            var p => throw Wrong($"'{p}' is no property meaning compares: summary or description."),
+        };
+
+        var text = Scalar("text") ?? throw Wrong("meaning needs a text: a parameter's name, or a text in quotes.");
+        string? param = null, literal = null;
+        if (text.Style == YamlDotNet.Core.ScalarStyle.Plain)
+        {
+            param = text.Value ?? "";
+            var declared = parameters.FirstOrDefault(p => p.Name == param) ?? throw Wrong($"The text of meaning names no parameter '{param}'; a text of its own goes in quotes.");
+            if (declared.Type != PropertyType.Text) throw Wrong($"The text of meaning names the parameter '{param}', which is a {Name(declared.Type)}, not a text.");
+        }
+        else literal = text.Value ?? "";
+
+        double? min = Scalar("min")?.Value is { } m
+            ? Properties.Typed(m, PropertyType.Number) is NumberValue { Number: >= -1 and <= 1 } n ? n.Number : throw Wrong($"The min of meaning is '{m}', not a number from -1 to 1.")
+            : null;
+        var name = Scalar("as")?.Value ?? "closeness";
+        if (!NameShape().IsMatch(name)) throw Wrong($"'{name}' is no name for the score: a letter or _, then letters, digits or _.");
+        return new QueryMeaning(property, param, literal, min, name);
+    }
+
+    private static QueryError Wrong(string message) => new("meaning", message, 0);
 
     [GeneratedRegex(@"^[\p{L}_][\p{L}\p{N}_]*$")]
     private static partial Regex NameShape();

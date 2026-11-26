@@ -48,6 +48,12 @@ public sealed record ChunkVector(VaultPath Path, int StartLine, int Part, string
 /// <param name="Reason">Why the state isn't <see cref="SemanticState.Ready"/>; when Ready, the vaults left out and why.</param>
 public sealed record StoredVectors(SemanticState State, IReadOnlyList<ChunkVector> Chunks, int Pending, string? Reason = null);
 
+/// <summary>What a query with <c>meaning:</c> compares (embeddable properties design, decision 6): the text's vector, and
+/// each note's vector of the property, by its path in the caller's view; only vectors of the vault's current model whose
+/// text is the note's current one. The arrays are the index's own: read them, never write to them.</summary>
+/// <param name="Reason">Why the state isn't <see cref="SemanticState.Ready"/>, for the error.</param>
+public sealed record MeaningResult(SemanticState State, float[]? Query, IReadOnlyDictionary<VaultPath, float[]> Vectors, string? Reason);
+
 /// <summary>Search by meaning over the embeddings of the caller's vaults. <c>limit</c> caps the hits; pass
 /// <see cref="int.MaxValue"/> to get a cosine for every chunk.</summary>
 public interface ISearchIndex
@@ -61,6 +67,11 @@ public interface ISearchIndex
     /// (<c>similar</c>). Nothing is embedded, so nothing is sent to an embedding provider.</summary>
     Task<StoredVectors> VectorsAsync(VaultPath scope, CancellationToken ct) =>
         Task.FromResult(new StoredVectors(SemanticState.Off, [], 0, "search by meaning is off on this server"));
+
+    /// <summary>Embeds <paramref name="text"/> once with the provider of <paramref name="vault"/> (a vault's root path) and
+    /// gives it with the notes' current vectors of <paramref name="property"/>: nothing else is sent.</summary>
+    Task<MeaningResult> MeaningAsync(VaultPath vault, string property, string text, CancellationToken ct) =>
+        Task.FromResult(new MeaningResult(SemanticState.Off, null, new Dictionary<VaultPath, float[]>(), "search by meaning is off on this server"));
 }
 
 public sealed class NoSearchIndex : ISearchIndex

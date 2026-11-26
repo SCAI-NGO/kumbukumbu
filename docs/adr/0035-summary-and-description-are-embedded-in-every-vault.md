@@ -17,7 +17,7 @@ The text values of two properties, `summary` and `description`, are embedded in 
 
 - The two names already mean "what this is about": `description` is the field of skills and memory files.
 - A fixed pair needs no setting, no UI and no new sealed field before anyone asks for a third name.
-- One document per note keeps the seal, the lifetime (trash, move, re-key) and the size the database shows as they are.
+- One document per note keeps the seal and the lifetime (trash, move, re-key) as they are, with no new collection. A note's sealed size now grows by one vector when it has a text summary or description, much as its chunk count already shows.
 
 Lost: a marker in `types.json` (Obsidian rewrites the file and drops keys it doesn't know); a per-vault list now (a UI and a stored setting for a need not yet seen); a separate collection (a second size that would show which notes have a summary).
 

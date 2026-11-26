@@ -92,8 +92,23 @@ runs:
     rows:
       - [text Ann, date 1980-11-23]
   - args: {}
-    error: missing-param   # or no-base, params, unknown-param, param-value, and the bases' codes
+    error: missing-param   # or no-base, params, unknown-param, param-value, meaning, and the bases' codes
 ```
+
+A query note with `meaning:` ranks its rows by vectors no case can compute without a model, so the case gives them. The offline engine has none, and a case says what it gives instead:
+
+```yaml
+vectors:             # optional: the vectors a run with meaning takes
+  query: [1, 0]      # the text's
+  notes:             # path: the vector of the meaning's property, for each note that has one
+    Notes/Same.md: [1, 0]
+offline:             # optional: what the offline engine gives for every run instead of what the run expects
+  error: meaning-offline
+```
+
+A score is the cosine rounded to six decimals, in both engines. `text` names a parameter when it is a plain scalar, and that parameter must be of type text; any other scalar (quoted, or a block) is the literal text.
+
+The server's runner passes `vectors` to every run, and the offline runner holds every run to `offline` when the case has it. A query whose `meaning:` can't be read fails at reading on both engines, so a case of such errors needs no `offline`.
 
 `source: spec` marks our own reading where Obsidian hasn't been checked; a case moves to `obsidian <version>` once someone has seen the same result in Obsidian. Where Obsidian gives another result, the case takes Obsidian's ([ADR 0039](../../docs/adr/0039-bases-follow-obsidian.md)).
 

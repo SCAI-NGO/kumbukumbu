@@ -250,6 +250,7 @@ public sealed class OpenAiCompatibleDriverTests
         var e = await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => driver.EmbedAsync(["a"], query: true, Ct));
 
         Assert.Contains($"didn't answer within {OpenAiCompatibleDriver.QueryTimeout.TotalSeconds:0} s", e.Message);
+        Assert.True(e.TimedOut);
         Assert.Equal(1, hanging.Requests);
         Assert.InRange(watch.Elapsed.TotalSeconds, 4, 15);
     }

@@ -156,11 +156,11 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
                 throw Fail("answered with something that isn't an embeddings response", providerDown: true, query);
             }
 
-            if (attempt >= retries) throw Fail(problem, providerDown: true, query);
+            if (attempt >= retries) throw Fail(problem, providerDown: true, query, timedOut);
 
             // A search fails fast and ranks by words: no retry after it has waited out a timeout, nor a long wait.
             var delay = query ? retryAfter ?? QueryRetryDelay : retryAfter ?? Backoff(attempt);
-            if (query && (timedOut || delay > TimeSpan.FromSeconds(1))) throw Fail(problem, providerDown: true, query);
+            if (query && (timedOut || delay > TimeSpan.FromSeconds(1))) throw Fail(problem, providerDown: true, query, timedOut);
             _log.LogWarning("Embedding provider {Provider} {Problem}; attempt {Attempt} of {Attempts}, again in {Seconds:0.0} s",
                 _name, problem, attempt + 1, retries + 1, delay.TotalSeconds);
             await _delay(delay, ct);
@@ -189,7 +189,7 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
         return result;
     }
 
-    private EmbeddingUnavailableException Fail(string problem, bool providerDown, bool query)
+    private EmbeddingUnavailableException Fail(string problem, bool providerDown, bool query, bool timedOut = false)
     {
         var message = Unavailable(problem);
         if (providerDown)
@@ -200,7 +200,7 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
         }
 
         _log.LogError("Embedding provider {Provider} {Problem}", _name, problem);
-        return new EmbeddingUnavailableException(message, providerDown);
+        return new EmbeddingUnavailableException(message, providerDown) { TimedOut = timedOut };
     }
 
     private string Unavailable(string problem) => $"the embedding provider {_options.Label ?? _name} {problem}";

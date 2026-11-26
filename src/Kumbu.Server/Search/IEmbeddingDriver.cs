@@ -47,6 +47,9 @@ public interface IEmbeddingDriver
 public sealed class EmbeddingUnavailableException(string message, bool providerDown) : Exception(message)
 {
     public bool ProviderDown { get; } = providerDown;
+
+    /// <summary>The provider didn't answer in time: a query with meaning tries once more (embeddable properties design §4).</summary>
+    public bool TimedOut { get; init; }
 }
 
 /// <summary>An embedding provider of this instance, as the admin configured it and the vault owner picks it.</summary>

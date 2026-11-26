@@ -481,7 +481,8 @@ public sealed class UnlockedVault
         Seal($"embeddings:{Id}:{Convert.ToBase64String(PathId(path))}", new EmbeddingsPayload(
             path.Value, embeddings.Version,
             [.. embeddings.Chunks.Select(c => new EmbeddedChunkPayload(c.StartLine, c.Hash, Convert.ToBase64String(Halves(c.Vector)), c.Part))],
-            embeddings.Model, embeddings.Scheme));
+            embeddings.Model, embeddings.Scheme,
+            embeddings.Properties?.Select(e => new EmbeddedPropertyPayload(e.Name, e.Hash, Convert.ToBase64String(Halves(e.Vector)))).ToList()));
 
     public (VaultPath Path, NoteEmbeddings Embeddings) OpenEmbeddings(SealedDocument doc)
     {
@@ -493,7 +494,8 @@ public sealed class UnlockedVault
         }
 
         return (path, new NoteEmbeddings(
-            p.Model ?? "arctic-m", p.Version, [.. p.Chunks.Select(c => new EmbeddedChunk(c.StartLine, c.Hash, Floats(Convert.FromBase64String(c.Vector)), c.Part))], p.Scheme));
+            p.Model ?? "arctic-m", p.Version, [.. p.Chunks.Select(c => new EmbeddedChunk(c.StartLine, c.Hash, Floats(Convert.FromBase64String(c.Vector)), c.Part))], p.Scheme,
+            p.Properties?.Select(e => new EmbeddedProperty(e.Name, e.Hash, Floats(Convert.FromBase64String(e.Vector)))).ToList()));
     }
 
     /// <summary>
@@ -969,9 +971,12 @@ internal sealed record VaultMeta(
 /// <remarks>Part is missing in embeddings written before structural chunking: they had one chunk per start line.</remarks>
 internal sealed record EmbeddedChunkPayload(int StartLine, string Hash, string Vector, int Part = 0);
 
+internal sealed record EmbeddedPropertyPayload(string Name, string Hash, string Vector);
+
 /// <remarks>Model is missing in embeddings written before step 7b; step 7 had only arctic-m. Scheme is missing in
-/// embeddings written before structural chunking.</remarks>
-internal sealed record EmbeddingsPayload(string Path, string Version, List<EmbeddedChunkPayload> Chunks, string? Model = null, string? Scheme = null);
+/// embeddings written before structural chunking, Properties in those written before embeddable properties.</remarks>
+internal sealed record EmbeddingsPayload(
+    string Path, string Version, List<EmbeddedChunkPayload> Chunks, string? Model = null, string? Scheme = null, List<EmbeddedPropertyPayload>? Properties = null);
 
 /// <summary>
 /// A note's extract as sealed (graph backend spec §4.1): its path and the SHA-256 of the content it was made from (null in
@@ -1035,8 +1040,13 @@ public sealed record EmbeddedChunk(int StartLine, string Hash, float[] Vector, i
 
 /// <summary>The embeddings of one note at one version, made by one model (its key): vectors of different models
 /// don't compare. <paramref name="Scheme"/> is the chunking they were made with (<see cref="Kumbu.Core.Search.ChunkBound.Scheme"/>),
-/// null before there was one: chunks of another scheme have other boundaries.</summary>
-public sealed record NoteEmbeddings(string Model, string Version, IReadOnlyList<EmbeddedChunk> Chunks, string? Scheme = null);
+/// null before there was one: chunks of another scheme have other boundaries. <paramref name="Properties"/> are the
+/// vectors of its embedded properties (<see cref="Kumbu.Core.Search.PropertyTexts"/>), null in embeddings stored before
+/// there were any.</summary>
+public sealed record NoteEmbeddings(string Model, string Version, IReadOnlyList<EmbeddedChunk> Chunks, string? Scheme = null, IReadOnlyList<EmbeddedProperty>? Properties = null);
+
+/// <summary>A property's vector, by its name, with the hash of the text it was made from, as a chunk's.</summary>
+public sealed record EmbeddedProperty(string Name, string Hash, float[] Vector);
 
 internal sealed record AttachmentStatePayload(string MediaType, long Size, int? Width, int? Height, string Version, string BlobId)
 {

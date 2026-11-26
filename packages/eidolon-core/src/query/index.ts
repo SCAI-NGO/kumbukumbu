@@ -6,5 +6,5 @@ export { QueryError, QuerySyntaxError, type QueryWarning } from "./errors";
 export { QueryNote } from "./note";
 export { Properties, type NoteProperties } from "./properties";
 export { PropertyTypes, type PropertyType, type PropertyTypeMap } from "./propertyTypes";
-export { Query, type QueryParam } from "./query";
+export { MAX_MEANING_TEXT, Query, type MeaningVectors, type QueryMeaning, type QueryParam } from "./query";
 export type { Value } from "./value";

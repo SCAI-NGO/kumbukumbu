@@ -5,6 +5,7 @@ using Kumbu.Core.Calendar;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Queries;
+using Kumbu.Core.Search;
 using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
@@ -12,7 +13,7 @@ namespace Kumbu.Core.Sh.Commands;
 /// <summary><c>query</c> (queries spec §7): the named queries, one surface for every one of them, so an agent finds and
 /// calls them as it finds notes. A query runs over every file of its own vault, as Obsidian's Bases do (bases spec
 /// 2026-11-25 §1): its notes, archived ones too, typed by their YAML alone (§2), and its other files.</summary>
-public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZone zone) : ICommand
+public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZone zone, ISearchIndex search) : ICommand
 {
     private const string TypesFile = ".obsidian/types.json";
 
@@ -106,6 +107,23 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
           past 1,000,000 steps or characters for one note and expression, or 5,000,000 steps for
           the run.
 
+        By meaning: a query note may rank its rows by how close each note's summary (or
+        description) is to a text, beside params:
+          meaning:
+            property: summary       summary or description
+            text: topic             a text parameter's name, or a text of its own in quotes
+            min: 0.5                optional: leaves out the notes less close (or without one)
+            as: closeness           optional: the score's name in the base, default closeness
+        The text, at most 2,000 characters, is embedded once with the vault's provider, as a
+        search's query is; each note gets its score (the cosine, -1 to 1, null for a note
+        without that property's vector, or whose property changed and isn't embedded yet) as the
+        property named by as, which the base filters, sorts and shows as any property:
+        sort by closeness DESC. The score hides a note's own property of that name for the run,
+        and query check warns of the notes in the query's folder that have one. When the provider
+        can't be reached, or doesn't answer (5 seconds, one retry after a timeout), the query fails with
+        meaning-unavailable; offline it fails with meaning-offline. In Obsidian the same note
+        renders, unranked.
+
           query ls
           query inspect Birthdays
           query execute Birthdays --param month=11
@@ -171,6 +189,12 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         var prose = string.Join('\n', lines.Skip(Outline.FrontmatterEnd(lines))).Trim('\n');
         var output = new List<string> { path.Value, "", prose, "" };
         if (query.Params.Count > 0) output.AddRange(["Parameters:", .. query.Params.Select(p => $"  {Long(p)}")]);
+        if (query.Meaning is { } meaning)
+        {
+            var to = meaning.Param is { } param ? $"the parameter {param}" : $"\"{Clip(OneLine(meaning.Text!))}\"";
+            output.Add($"Meaning: {meaning.As}, how close {meaning.Property} is to {to}" + (meaning.Min is { } min ? $"; at least {min.ToString(CultureInfo.InvariantCulture)}" : ""));
+        }
+
         output.Add($"Views: {(query.ViewNames.Count > 0 ? string.Join(", ", query.ViewNames) : "one table of every note")}");
         output.Add($"Run it: query execute {SectionLookup.Quote(path)}" + string.Concat(query.Params.Where(p => p.Required).Select(p => $" --param {p.Name}=<{Query.Name(p.Type)}>")));
         return ShellResult.Ok(Lines.Join(output));
@@ -198,11 +222,16 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         try
         {
             var query = Query.Read(note);
+            var given = arguments.ToDictionary(a => a.Key, a => (IReadOnlyList<string>)a.Value);
+            // Before anything is read or sent: a text that may not go to the provider fails here.
+            var text = query.Meaning is null ? null : query.MeaningText(given);
+            query.CheckView(options.Value("view"));
             vault = await VaultAsync(path, query.Mentions("ctime") || query.Mentions("mtime"), ct);
             // The query note as this, with its size and times as its row has them.
             if (vault.Keys.FirstOrDefault(n => n.Path == note.Path) is { } row)
                 query = Query.Read(new QueryNote(note.Path, note.Content, note.Properties, row.Size, row.Created, row.Modified));
-            result = query.Run(options.Value("view"), arguments.ToDictionary(a => a.Key, a => (IReadOnlyList<string>)a.Value), vault.Keys, await LocalNowAsync(ct), ct);
+            var vectors = query.Meaning is { } meaning ? await VectorsAsync(path, meaning, text!, vault, ct) : null;
+            result = query.Run(options.Value("view"), given, vault.Keys, await LocalNowAsync(ct), ct, vectors);
         }
         catch (QueryError e)
         {
@@ -216,9 +245,26 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             .Where(c => c.Errors.Count > 0)
             .Select(c => $"{(c.Errors.Count == 1 ? "1 error" : $"{c.Errors.Count:N0} errors")} in {c.Column}: {Clip(c.Errors[0].Message)}");
         string[] header = [$"{result.View}: {count}", .. errors, Row(["path", .. result.Columns]), Row([.. Enumerable.Repeat("---", result.Columns.Count + 1)])];
-        var rows = result.Rows.Select(r => Row([vault[r.Note].Value, .. r.Cells.Select(Evaluator.Display)])).ToList();
+        // By path, not by instance: a run with meaning gives each note anew, with its score.
+        var stored = vault.ToDictionary(v => v.Key.Path, v => v.Value, StringComparer.Ordinal);
+        var rows = result.Rows.Select(r => Row([stored[r.Note.Path].Value, .. r.Cells.Select(Evaluator.Display)])).ToList();
         var listed = TextFiles.Listed(Name, rows, "\n", "rows", "a limit in the view, or a filter, narrows it", Lines.Join(header).Length + 1);
         return ShellResult.Ok(Lines.Join(header) + "\n" + listed.Output);
+    }
+
+    // The text's vector and each file's, by its path in the vault as the query reads it.
+    private async Task<MeaningVectors> VectorsAsync(VaultPath query, QueryMeaning meaning, string text, Dictionary<QueryNote, VaultPath> vault, CancellationToken ct)
+    {
+        var found = await search.MeaningAsync(VaultPath.Root.Child(query.Segments[0]), meaning.Property, text, ct);
+        if (found.State != SemanticState.Ready || found.Query is null)
+            throw new QueryError("meaning-unavailable", $"Search by meaning isn't available: {found.Reason ?? "the server didn't say why"}.", 0);
+        var byPath = new Dictionary<string, float[]>(StringComparer.Ordinal);
+        foreach (var (file, stored) in vault)
+        {
+            if (found.Vectors.TryGetValue(stored, out var vector)) byPath[file.Path] = vector;
+        }
+
+        return new MeaningVectors(found.Query, byPath);
     }
 
     private async Task<ShellResult> CheckAsync(List<string> args, CancellationToken ct)
@@ -232,6 +278,7 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
             var query = Query.Read(note);
             var problems = query.Check(await LocalNowAsync(ct));
             var warnings = problems.SelectMany(p => p.Warnings.Select(w => $"view {p.View ?? "(the table)"}: {Says(w.Code, w.Message, w.Expression, w.Position)}")).ToList();
+            if (query.Meaning is { } meaning) warnings.AddRange(await ShadowedAsync(path, meaning.As, ct));
             // Warnings leave a query that runs: each names what gives an error value in the cells it touches.
             if (problems.Any(p => p.Error is not null))
                 return ShellResult.Error(Lines.Join(problems.Where(p => p.Error is not null).Select(p => $"query: {path.Value}: view {p.View ?? "(the table)"}: {Says(p.Error!)}")
@@ -246,6 +293,17 @@ public sealed class QueryCommand(INoteStore notes, Func<DateTime> now, ICallerZo
         {
             return Failed(path, e);
         }
+    }
+
+    // The notes in the query's folder or below with a property the score hides for the run (decision 7): a warning, as
+    // notes elsewhere may use the word for other things.
+    private async Task<IEnumerable<string>> ShadowedAsync(VaultPath query, string name, CancellationToken ct)
+    {
+        var folder = query.Segments.SkipLast(1).Aggregate(VaultPath.Root, (p, s) => p.Child(s));
+        return (await notes.ReadNotesUnderAsync(folder, ct))
+            .Where(n => n.Path != query && Properties.Read(n.Content).Values.ContainsKey(name))
+            .OrderBy(n => n.Path.Value, TextOrder.Default)
+            .Select(n => $"meaning: {n.Path.Value} has a property {name} of its own, which the score hides in a run");
     }
 
     private async Task<ShellResult> PropertiesAsync(List<string> args, CancellationToken ct)

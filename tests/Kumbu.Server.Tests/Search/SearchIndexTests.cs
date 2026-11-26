@@ -832,4 +832,116 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     {
         public HttpClient CreateClient(string name) => throw new InvalidOperationException("The test must not download");
     }
+
+    // ---- Embeddable properties ----
+
+    private const string Summarised = "---\nsummary: Offline sync conflicts\n---\n# Sync\nTwo copies meet.\n";
+
+    /// <summary>The texts sent to be embedded (not queries) after the first <paramref name="from"/>.</summary>
+    private static List<string> SentSince(Setup s, int from) => [.. s.Embedder.Seen.Skip(from).Where(t => !t.Query).Select(t => t.Text)];
+
+    [Fact]
+    public async Task A_note_with_a_summary_stores_its_vector()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/Sync.md", Summarised), Ct);
+        await IdleAsync(s);
+
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct)).Vault;
+        var held = Assert.Single(vault.Embeddings[P("/Work/Sync.md")].Properties!);
+        Assert.Equal(("summary", SearchIndex.Hash("Sync\nOffline sync conflicts")), (held.Name, held.Hash));
+        Assert.Contains(s.Embedder.Seen, t => t.Text == "Sync\nOffline sync conflicts" && !t.Query);
+
+        var opened = Assert.Single(Assert.Single(await StoredEmbeddingsAsync(s)).Properties!);
+        Assert.Equal((held.Name, held.Hash, held.Vector.Length), (opened.Name, opened.Hash, opened.Vector.Length));
+        Assert.All(held.Vector.Zip(opened.Vector), v => Assert.Equal(v.First, v.Second, 0.01f));
+    }
+
+    [Fact]
+    public async Task Editing_the_body_reuses_the_summary_vector()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/Sync.md", Summarised), Ct);
+        await IdleAsync(s);
+        var before = s.Embedder.Seen.Count;
+
+        var current = (await s.Store.GetAsync(P("/Work/Sync.md"), Ct))!;
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, Summarised.Replace("Two copies meet.", "Two copies meet and merge."), Writers.Dev, WriterRef.Server, T0), Ct);
+        await IdleAsync(s);
+
+        var sent = SentSince(s, before);
+        Assert.NotEmpty(sent);
+        Assert.DoesNotContain(sent, t => t.Contains("Offline sync conflicts"));
+        Assert.Equal("summary", Assert.Single(Assert.Single(await StoredEmbeddingsAsync(s)).Properties!).Name);
+    }
+
+    [Fact]
+    public async Task Editing_the_summary_embeds_only_the_summary()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/Sync.md", Summarised), Ct);
+        await IdleAsync(s);
+        var before = s.Embedder.Seen.Count;
+
+        var current = (await s.Store.GetAsync(P("/Work/Sync.md"), Ct))!;
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, Summarised.Replace("Offline sync conflicts", "When copies disagree"), Writers.Dev, WriterRef.Server, T0), Ct);
+        await IdleAsync(s);
+
+        Assert.Equal(["Sync\nWhen copies disagree"], SentSince(s, before));
+        Assert.Equal(SearchIndex.Hash("Sync\nWhen copies disagree"), Assert.Single(Assert.Single(await StoredEmbeddingsAsync(s)).Properties!).Hash);
+    }
+
+    [Fact]
+    public async Task A_blob_without_properties_is_caught_up_once()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/Sync.md", Summarised), Ct);
+        await s.Store.TryCreateAsync(New("/Work/plain.md", "# Plain\nNo properties here.\n"), Ct);
+        await IdleAsync(s);
+
+        // Sealed as a server before embeddable properties stored them: at the current version, without the list.
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct)).Vault;
+        var collection = s.World.Db.GetCollection<SealedDocument>("embeddings");
+        foreach (var (path, embeddings) in vault.Embeddings)
+        {
+            await collection.UpdateOneAsync(d => d.Vault == vault.Id && d.PathId == vault.PathId(path),
+                Builders<SealedDocument>.Update.Set(d => d.Blob, vault.SealEmbeddings(path, embeddings with { Properties = null })), cancellationToken: Ct);
+        }
+
+        Assert.All(await StoredEmbeddingsAsync(s), e => Assert.Null(e.Properties));
+
+        var later = await StartAsync(s.World);
+        await IdleAsync(later);
+
+        Assert.Equal(["Sync\nOffline sync conflicts"], SentSince(later, 0));
+        var stored = await StoredEmbeddingsAsync(later);
+        Assert.Equal(2, stored.Count);
+        Assert.All(stored, e => Assert.NotNull(e.Properties));
+        Assert.Equal(["summary"], stored.SelectMany(e => e.Properties!).Select(p => p.Name));
+
+        later.Index.CatchUp(Assert.Single(await later.Catalog.OpenAsync(Token, Ct)).Vault);
+        Assert.Equal(0, later.Index.Queued);
+        await IdleAsync(later);
+        Assert.Single(SentSince(later, 0));
+    }
+
+    [Fact]
+    public async Task Moving_a_note_keeps_its_property_vectors()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/Sync.md", Summarised), Ct);
+        await IdleAsync(s);
+
+        var current = (await s.Store.GetAsync(P("/Work/Sync.md"), Ct))!;
+        var moved = await s.Store.TryCommitAsync(new NoteBatch { Moves = { (current, current with { Path = P("/Work/Archive/Sync.md"), Revision = current.Revision + 1 }) } },
+            Writers.Dev, WriterRef.Server, T0, Ct);
+        Assert.Empty(moved);
+        await IdleAsync(s);
+
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct)).Vault;
+        Assert.False(vault.Embeddings.ContainsKey(P("/Work/Sync.md")));
+        var property = Assert.Single(vault.Embeddings[P("/Work/Archive/Sync.md")].Properties!);
+        Assert.Equal(("summary", SearchIndex.Hash("Sync\nOffline sync conflicts")), (property.Name, property.Hash));
+        Assert.Equal("summary", Assert.Single(Assert.Single(await StoredEmbeddingsAsync(s)).Properties!).Name);
+    }
 }
