@@ -31,6 +31,16 @@ test.each([
   ["---\ntags: [x]\n---\naliases: [Kumbu]\n", []],
   ["aliases: [Kumbu]\n", []],
   ["---\nnested:\n  aliases: [Kumbu]\n---\n", []],
+  ["---\naliases  : [Kumbu]\n---\n", ["Kumbu"]],
+  ["---\naliases:\t[Kumbu]\n---\n", ["Kumbu"]],
+  ["---\n'aliases' :  Kumbu\n---\n", ["Kumbu"]],
+  ["---\ntitle: a: b\naliases: Kumbu\n---\n", ["Kumbu"]],
+  ["---\ntitle:a: b\naliases: Kumbu\n---\n", ["Kumbu"]],
+  ["---\naliases:x: Kumbu\n---\n", []],
+  ["---\n-x: 1\naliases: Kumbu\n---\n", ["Kumbu"]],
+  ["---\nkey: value\n\nthe end of it:\naliases: [Kumbu]\n---\n", ["Kumbu"]],
+  ["---\nno colon here\naliases: [Kumbu]\n---\n", []],
+  ["---\naliases:\n  - a: b\n  - Kumbu\n---\n", ["Kumbu"]],
   ["---\naliases: [Kumbu]\n", []],
 ])("%j", (content, expected) => expect(aliasesOf(content)).toEqual(expected));
 

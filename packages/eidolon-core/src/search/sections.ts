@@ -12,8 +12,31 @@ interface Heading { level: number; text: string; line: number; parent: Heading |
 const MAX_CHARS = 2000;
 const SNIPPET_LENGTH = 160;
 
-// Up to three spaces, 1-6 hashes, then a space and the text, or nothing; a closing hash run is dropped.
-const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+// Up to three spaces and 1-6 hashes, then a space or tab, or the line's end.
+const OPENING = /^ {0,3}(#{1,6})(?=[ \t]|$)/;
+// The server's pattern reads its text with ".", which takes no line break.
+const BREAK = /[\r\u2028\u2029]/;
+
+const isTab = (c: string | undefined) => c === " " || c === "\t";
+
+/**
+ * A heading as the server's pattern `^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$` reads it, without a pattern:
+ * its level and text, a closing hash run and the spaces around the text dropped; null for a line that is no heading.
+ */
+function headingOf(line: string): { level: number; text: string } | null {
+  const opening = OPENING.exec(line);
+  if (opening === null || BREAK.test(line)) return null;
+  let start = opening[0].length;
+  while (isTab(line[start])) start++;
+  let end = line.length;
+  while (end > start && isTab(line[end - 1])) end--;
+  let hashes = end;
+  while (hashes > start && line[hashes - 1] === "#") hashes--;
+  let gap = hashes;
+  while (gap > start && isTab(line[gap - 1])) gap--;
+  // A closing run: hashes up to the end, after a space or tab that follows some text.
+  return { level: opening[1]!.length, text: line.slice(start, hashes < end && gap < hashes ? gap : end) };
+}
 // CommonMark: a backslash before ASCII punctuation makes it literal.
 const ESCAPED = /\\([!-/:-@[-`{-~])/g;
 
@@ -31,11 +54,11 @@ function headingsOf(lines: readonly string[]): Heading[] {
   const found: { level: number; text: string; line: number; parent: number }[] = [];
   const open: number[] = [];
   for (let i = frontmatterEnd(lines); i < lines.length; i++) {
-    const h = code[i] ? null : HEADING.exec(lines[i]!);
+    const h = code[i] ? null : headingOf(lines[i]!);
     if (h === null) continue;
-    const level = h[1]!.length;
+    const level = h.level;
     while (open.length > 0 && found[open[open.length - 1]!]!.level >= level) open.pop();
-    found.push({ level, text: trim(h[2] ?? "").replace(ESCAPED, "$1"), line: i, parent: open[open.length - 1] ?? -1 });
+    found.push({ level, text: trim(h.text).replace(ESCAPED, "$1"), line: i, parent: open[open.length - 1] ?? -1 });
     open.push(found.length - 1);
   }
   // Siblings with the same text get 1-based indexes.
@@ -110,7 +133,7 @@ function emit(sections: Section[], address: string, context: string, lines: read
 function body(section: Section): string[] {
   const lines = section.text.split("\n");
   const code = codeLines(lines);
-  return lines.filter((l, i) => !blank(l) && (code[i] || !HEADING.test(l)));
+  return lines.filter((l, i) => !blank(l) && (code[i] || headingOf(l) === null));
 }
 
 /** A section that holds only its heading. */

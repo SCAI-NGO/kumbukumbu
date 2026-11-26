@@ -2,6 +2,7 @@
 // Kumbu.Core.Tests Links/WikiLinkTests and MarkdownLinkTests: the server reads a note's links the same way.
 import { describe, expect, test } from "vitest";
 import { type NoteLink, parseLinks } from "../src/links/parse";
+import { frontmatterEnd, trim } from "../src/links/text";
 
 const one = (text: string): NoteLink => {
   const links = parseLinks(text);
@@ -143,4 +144,21 @@ test("both kinds in source order", () => {
   expect(parseLinks("[[a]] [b](b.md) [[c]]\n[d](d.md)").map((l) => [l.wiki, l.target, l.line])).toEqual([
     [true, "a", 0], [false, "b.md", 0], [true, "c", 0], [false, "d.md", 1],
   ]);
+});
+
+test("trims as .NET's string.Trim does", () => {
+  expect(trim("\t a  b \u00a0\u0085")).toBe("a  b");
+  expect(trim("\u3000\u2028x\u2029\r\n")).toBe("x");
+  expect(trim("\ufeffa\ufeff")).toBe("\ufeffa\ufeff");
+  expect(trim("   ")).toBe("");
+  expect(trim("")).toBe("");
+  expect(trim("a")).toBe("a");
+});
+
+test("stops looking for the front matter's end at its length limit", () => {
+  const lines = ["---", "title: Plan", "---", "Text"];
+  expect(frontmatterEnd(lines)).toBe(3);
+  expect(frontmatterEnd(lines, 20)).toBe(3);
+  expect(frontmatterEnd(lines, 19)).toBe(0);
+  expect(frontmatterEnd(["---", "title: Plan"], 1000)).toBe(0);
 });

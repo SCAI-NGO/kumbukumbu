@@ -41,10 +41,9 @@ export function aliasesOf(content: string): string[] {
 export function frontmatterTexts(content: string, key: string): string[] {
   if (!content.startsWith("---")) return [];
   const lines = splitLines(content);
-  const end = frontmatterEnd(lines);
+  const end = frontmatterEnd(lines, MAX_FRONTMATTER_LENGTH);
   // Most notes don't have the key; skip reading their front matter.
   if (end === 0 || !lines.slice(0, end).some((l) => l.includes(key))) return [];
-  if (lines.slice(0, end).reduce((sum, l) => sum + l.length + 1, 0) > MAX_FRONTMATTER_LENGTH) return [];
 
   let value: Yaml;
   try {
@@ -68,8 +67,47 @@ function fail(): never {
   throw new Unreadable();
 }
 
-/** `key: "quoted"`, `'quoted': x`, `plain key:`, and what follows the colon. */
-const KEY = /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)'|([^\s#'"[\]{},&*!|>%@`-][^\n]*?|-[^\s][^\n]*?))[ \t]*:(?:[ \t]+(.*))?$/;
+const QUOTED_KEY = /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')/;
+const PLAIN_KEY = /^(?:[^\s#'"[\]{},&*!|>%@`-]|-\S)/;
+
+interface Key { double?: string; single?: string; plain?: string; value?: string }
+
+const isTab = (c: string | undefined) => c === " " || c === "\t";
+
+/**
+ * `key: "quoted"`, `'quoted': x`, `plain key:`, and what follows the colon, as the pattern
+ * `^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)'|([^\s#'"[\]{},&*!|>%@`-][^\n]*?|-[^\s][^\n]*?))[ \t]*:(?:[ \t]+(.*))?$` reads
+ * a line, without the pattern: a plain key ends before the first colon that ends the line or has a space or tab after it.
+ */
+function keyOf(line: string): Key | null {
+  // The value is read as "." reads it, which takes no line break.
+  const lastBreak = Math.max(line.lastIndexOf("\r"), line.lastIndexOf("\u2028"), line.lastIndexOf("\u2029"));
+  // What follows the colon at `colon`: undefined for nothing, null when the line doesn't go on as a key's line does.
+  const after = (colon: number): string | undefined | null => {
+    if (colon + 1 === line.length) return undefined;
+    if (!isTab(line[colon + 1]) || lastBreak > colon) return null;
+    let start = colon + 1;
+    while (isTab(line[start])) start++;
+    return line.slice(start);
+  };
+  const quoted = QUOTED_KEY.exec(line);
+  if (quoted !== null) {
+    let colon = quoted[0].length;
+    while (isTab(line[colon])) colon++;
+    const value = line[colon] === ":" ? after(colon) : null;
+    return value === null ? null : { double: quoted[1], single: quoted[2], value };
+  }
+  const first = PLAIN_KEY.exec(line);
+  if (first === null) return null;
+  for (let colon = line.indexOf(":", first[0].length); colon >= 0; colon = line.indexOf(":", colon + 1)) {
+    const value = after(colon);
+    if (value === null) continue;
+    let end = colon;
+    while (end > first[0].length && isTab(line[end - 1])) end--;
+    return { plain: line.slice(0, end), value };
+  }
+  return null;
+}
 
 /** How many flow brackets a line opens and doesn't close, quotes and comments aside. */
 function depthOf(line: string): number {
@@ -102,14 +140,14 @@ function topLevel(lines: readonly string[], name: string): Yaml {
       i++;
       continue;
     }
-    const m = KEY.exec(line);
+    const m = keyOf(line);
     if (m === null || indentOf(line) > 0) fail();
-    const key = m[1] !== undefined ? unquoteDouble(m[1]) : m[2] !== undefined ? m[2].replace(/''/g, "'") : m[3]!;
+    const key = m.double !== undefined ? unquoteDouble(m.double) : m.single !== undefined ? m.single.replace(/''/g, "'") : m.plain!;
     if (keys.has(key)) fail();
     keys.add(key);
     // The key's lines: those indented under it, its block sequence's items, and the blank lines between them.
     // A flow collection may close at the start of a line: "]".
-    let open = /^[[{]/.test(m[4] ?? "") ? depthOf(m[4]!) : 0;
+    let open = /^[[{]/.test(m.value ?? "") ? depthOf(m.value!) : 0;
     let last = i;
     for (let j = i + 1; j < lines.length; j++) {
       const next = lines[j]!;
@@ -118,7 +156,7 @@ function topLevel(lines: readonly string[], name: string): Yaml {
       if (open > 0) open += depthOf(next);
       last = j;
     }
-    if (key === name) found = value(m[4] ?? "", lines.slice(i + 1, last + 1));
+    if (key === name) found = value(m.value ?? "", lines.slice(i + 1, last + 1));
     i = last + 1;
   }
   return found;
@@ -132,7 +170,7 @@ function value(inline: string, below: readonly string[]): Yaml {
     if (body.length === 0) return null;
     const first = body[0]!.trimStart();
     if (isItem(first)) return blockSequence(body);
-    if (KEY.test(first)) return MAP;
+    if (keyOf(first) !== null) return MAP;
     return scalar(body.map((l) => l.trim()).join(" "));
   }
   if (rest[0] === "[" || rest[0] === "{") {
@@ -159,7 +197,7 @@ function blockSequence(lines: readonly string[]): Yaml {
     const more = lines.slice(i + 1, j);
     if (inline.length === 0) items.push(more.length === 0 ? null : isItem(more[0]!.trimStart()) ? blockSequence(more) : MAP);
     else if (isItem(inline)) items.push([]);
-    else if (KEY.test(inline)) items.push(MAP);
+    else if (keyOf(inline) !== null) items.push(MAP);
     else items.push(value(text, more));
     i = j;
   }
