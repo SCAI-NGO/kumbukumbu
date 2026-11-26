@@ -80,14 +80,17 @@ export class MirrorEngines {
   /**
    * Brings the engines in line with the vault list and the device's choice: on start, every reconnect, and each
    * change of the choice (`recheck`: the engines look at every path again, as the fetch policy may say yes now). A
-   * vault no longer chosen is dropped from the copy (Settings has said what that loses).
+   * vault no longer chosen is dropped from the copy (Settings has said what that loses). The vault list answered, so
+   * the engines that ran before send what waits now rather than at their next retry, which a run of failures puts
+   * minutes away.
    */
   async refresh(recheck = false): Promise<void> {
     if (!this.leading || this.stopped || this.o.mirror.locked) return;
+    const running = new Set(this.engines.values());
     await this.host.refresh();
     const m = this.o.mirror;
     for (const vault of m.held()) if (!mirrors(m.choice, vault.id)) await m.purge(vault.id, false);
-    if (recheck) await Promise.all([...this.engines.values()].map((e) => e.check(true)));
+    await Promise.all([...this.engines.values()].filter((e) => recheck || running.has(e)).map((e) => e.check(recheck)));
     await this.keepBudget();
   }
 

@@ -2,7 +2,7 @@
 // The engines of an unlocked copy (offline mode design §3, §6): the vaults chosen, attachments opened online within
 // the budget, and the copy's other tabs' writes.
 import { describe, expect, test, vi } from "vitest";
-import type { ListedVault } from "../src/engine/ports";
+import { OfflineError, type ListedVault } from "../src/engine/ports";
 import { MirrorEngines } from "../src/store/engines";
 import { IDLE_MS, MirrorCopies, type SealedMirror } from "../src/store/mirror";
 import { FakeServer } from "./fakes/fakeServer";
@@ -96,6 +96,23 @@ describe("the engines of a copy", () => {
     await servers.get("Work")!.seedFile("Scans/big.pdf", new Uint8Array(2 * MB));
     await other.choose((c) => ({ ...c, kept: { [work.id]: ["Scans"] } }));
     await vi.waitFor(() => expect(held(mirror, work.id)).toContain("Scans/big.pdf"));
+    await engines.stop();
+  });
+
+  test("on a reconnect, send what waits at once rather than at the engine's next retry: a new note cut off by the network goes up once", async () => {
+    const { mirror, servers, engines } = await setup([work]);
+    const server = servers.get("Work")!;
+    await engines.start();
+    server.failNext("put", new OfflineError("The server can't be reached."));
+    await mirror.vault(work.id)!.files().writeIf("new.md", null, "# New\n");
+    engines.localChanged(work.id, "new.md");
+    await vi.waitFor(() => expect(server.count("put")).toBe(1), { timeout: 5000 });
+    expect(mirror.waiting()).toBe(1);
+
+    await engines.refresh();
+    await vi.waitFor(() => expect(server.notes.get("new.md")?.content).toBe("# New\n"), { timeout: 1000 });
+    expect(server.count("put")).toBe(2);
+    await vi.waitFor(() => expect(mirror.waiting()).toBe(0), { timeout: 1000 });
     await engines.stop();
   });
 });

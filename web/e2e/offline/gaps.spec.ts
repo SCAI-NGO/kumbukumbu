@@ -793,7 +793,6 @@ test("gaps #12b: a note edited offline that was trashed elsewhere comes back wit
 });
 
 test("gaps #13: an upload cut off after its first change goes on once back, and each change reaches the server once @offline", async ({ page, aliceApi, folder }) => {
-  test.fail(true, "F-15: a new note whose upload was cut off waits until a reload");
   test.setTimeout(240_000);
   const plan = `/Work/${folder}/Plan.md`;
   const old = `/Work/${folder}/Old.md`;
@@ -842,9 +841,8 @@ test("gaps #13: an upload cut off after its first change goes on once back, and 
   // Back for good.
   await page.context().unrouteAll({ behavior: "ignoreErrors" });
   await page.context().setOffline(false);
-  // F-15: the new note whose upload was cut off stays "Uploading 1 change…" (watched for six minutes, past the
-  // engine's longest retry); a reload online uploads it at once, so nothing is lost, but nothing says it waits.
-  await expect(page.getByRole("status", { name: "Uploaded" }), "F-15: a new note whose upload was cut off uploads once back").toContainText("All changes uploaded", { timeout: 60_000 });
+  // The socket's reconnect has the engine send at once what the cut left, rather than at its next retry.
+  await expect(page.getByRole("status", { name: "Uploaded" }), "a new note whose upload was cut off uploads once back").toContainText("All changes uploaded", { timeout: 60_000 });
   expect((await aliceApi.getNote(plan)).content).toBe("# Plan\n\nWritten offline. [[Old]]\n");
   expect((await aliceApi.history(plan)).length, "the edit applied once").toBe(versions + 1);
   expect((await aliceApi.getNote(created)).content).toBe("# Made offline\n\nNew here.\n");
