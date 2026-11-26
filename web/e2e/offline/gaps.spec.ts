@@ -23,17 +23,18 @@
 //   gaps; the pane's sentence is the graph's, asserted in gaps #6); sharing, publishing, keys, admin → left out: the
 //   same rule as gaps #2 (F-05: an item that needs a connection declares it, the menu dims it), so each would repeat it.
 // §3a Turning it on
-// - Off by default, invited once (Keep me signed in or installed) → Vitest OfflineInvite.test.tsx (both tests); the
-//   suite answers the invitation "Not now" (its own devices turn it on through Settings).
+// - Off by default, invited once (Keep me signed in or installed) → gaps #11; Vitest OfflineInvite.test.tsx (both
+//   tests); the rest of the suite answers the invitation "Not now" (its own devices turn it on through Settings).
 // - Easy to reach: Settings, Offline; the bar leads there → Vitest mode.test.tsx "offline it leads to Settings,
 //   Offline, and can't be put away".
 // - Size before choosing, progress while it comes, inventory first, an interrupted download resumes → the vault's
 //   line ("N notes · …") in every turnOn here; inventory order: core store.mirror.test.ts "downloads the inventory
-//   first, then every note's text, then the small attachments"; an interrupted download → left out (no way to cut a
-//   download midway from the page without a fixed wait).
+//   first, then every note's text, then the small attachments"; an interrupted download resumes → gaps #8 (the network
+//   cut after the third text, by routing the texts).
 // §3a Unlocking
 // - The sign-in form opens the copy offline, its line above, Keep me signed in hidden → offline.spec #1; Vitest
-//   unlock.test.tsx "says what signing in does offline, and hides Keep me signed in".
+//   unlock.test.tsx "says what signing in does offline, and hides Keep me signed in"; a wrong password refused
+//   plainly, without a lockout → gaps #9.
 // - An offline unlock ends like a session (idle limit) → offline.spec #4; Vitest life.test.tsx.
 // §3a The bar and the mark
 // - The bar's states: nothing waiting → offline.spec #1, gaps #5; changes waiting → offline.spec #2; no copy →
@@ -42,7 +43,8 @@
 // - The sidebar's mark → left out (not among Task 7's gaps; no role or label tells it from the vault name).
 // - No flicker, 15 seconds a mode → core mode.test.ts "a mode holds for 15 seconds …" (a clock the page can't hold).
 // - Conflicts stay until seen → offline.spec #3; Vitest mode.test.tsx "conflicts stay until dismissed".
-// - Every tab the same → core mode.test.ts "every tab shows the same mode and count …".
+// - Every tab the same → gaps #10 (the bar and its count in a second tab, the change uploaded once); core
+//   mode.test.ts "every tab shows the same mode and count …".
 // §3a "Needs a connection"
 // - Dimmed, not hidden, "Needs a connection" as title and as a menu item's second line → gaps #2.
 // - A page reached by address or left open says one sentence in its pane → gaps #6 (the graph's); the console's,
@@ -99,16 +101,17 @@
 // - 4.11 the mode, the contacts, the copy's life with the session → offline.spec #4, #5, #6; Vitest life.test.tsx.
 // - 4.12 the wiring → every test here.
 //
-// The new tests, gaps #1 to #7, in Chromium (desktop) and Firefox (offline-firefox), except #4: it shows Home with the
-// PIN in a session of its own, so it is @serial (plan review point 2: offline-firefox runs in the parallel phase and
-// leaves @serial out), Chromium only. It also covers Task 8's fifth place, the offline copy's vault list.
+// The new tests, gaps #1 to #11, in Chromium (desktop) and Firefox (offline-firefox), except #4: it shows Home with
+// the PIN in a session of its own, so it is @serial (plan review point 2: offline-firefox runs in the parallel phase
+// and leaves @serial out), Chromium only. It also covers Task 8's fifth place, the offline copy's vault list. #8 to
+// #11 take steps off the 0.7.0 hand-test list: A4, A12, A6 with A10, and A1.
 import type { Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { crc32, deflateSync } from "node:zlib";
 import { dismissInstallHint, notePage } from "../calendar/helpers";
 import type { Api } from "../support/api";
 import { secrets, usernames, type User } from "../support/env";
-import { endHidden, hideDiscreet, limitWindow, reservePassword, revealDiscreet } from "../support/session";
+import { endHidden, hideDiscreet, limitWindow, reserve, reservePassword, revealDiscreet } from "../support/session";
 import { shareWithBob, unshare } from "../support/share";
 import { expect, shot, shotsDir070, test } from "../support/test";
 
@@ -561,4 +564,160 @@ test("gaps #7: offline, search finds words in the copy and says it finds words o
   await expect(page).toHaveURL(/Harbour%20log\.md$/);
   await expect(article(page)).toContainText("landed at dawn");
   await page.context().setOffline(false);
+});
+
+const source = (page: Page) => page.getByRole("textbox", { name: "Markdown source", exact: true });
+
+/** Write mode: replaces the text, then Done (which saves, into the copy while offline). */
+async function write(page: Page, text: string) {
+  await page.getByRole("button", { name: "Write" }).click();
+  await expect(source(page)).toBeVisible();
+  await source(page).fill(text);
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("button", { name: "Done" })).toHaveCount(0);
+}
+
+test("gaps #8: a vault's download cut off by a lost network leaves the rest Not on this device yet, and carries on once back @offline", async ({ page, aliceApi }) => {
+  test.setTimeout(240_000);
+  type Folder = { folders: Folder[]; notes: { path: string }[] };
+  const all = (f: Folder): string[] => [...f.notes.map((n) => n.path), ...f.folders.flatMap(all)];
+  const welcome = all((await aliceApi.json<{ root: Folder }>("GET", "/api/vaults/Welcome/tree")).root).filter((p) => p.endsWith(".md"));
+  expect(welcome.length, "Welcome has more notes than the three let through").toBeGreaterThan(4);
+
+  // As A4 of the hand test: the copy already keeps its vaults, then one more is ticked and the network goes halfway.
+  await turnOn(page);
+  await untilHeld(page, "Welcome");
+  await page.getByRole("checkbox", { name: "All my vaults" }).click();
+  await page.getByRole("checkbox", { name: "Keep Welcome on this device" }).click();
+  await expect(vaultLine(page, "Welcome")).toHaveText(/^Welcome\s*[1-9][\d,]* notes?$/);
+
+  // The network goes away after the third of Welcome's texts has come: the inventory (the vault's versions) has come
+  // by then, the texts are fetched one by one.
+  const came: string[] = [];
+  await page.context().route(/\/api\/notes\/Welcome\//, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (came.length >= 3) {
+      await page.context().setOffline(true);
+      return route.abort("internetdisconnected");
+    }
+    came.push(decodeURIComponent(new URL(route.request().url()).pathname).replace(/^\/api\/notes/, ""));
+    return route.continue();
+  });
+  await page.getByRole("checkbox", { name: "Keep Welcome on this device" }).click();
+  await expect(bar(page)).toBeVisible({ timeout: 30_000 });
+  expect(came).toHaveLength(3);
+  // No error dialog: losing the network is not a failure of the copy.
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  // Routing done with: in Firefox a page loaded while it is on bypasses the service worker, and offline nothing loads.
+  await page.context().unrouteAll({ behavior: "ignoreErrors" });
+
+  // A note that didn't come says so.
+  const missing = welcome.find((path) => !came.includes(path))!;
+  await unlockAt(page, notePage(missing));
+  await expect(page.getByText("Not on this device yet", { exact: false })).toBeVisible({ timeout: 30_000 });
+
+  // Back online: the download carries on by itself, with nobody asking for it. The app switches back first (a mode
+  // holds 15 seconds), which in Firefox cut off a reload begun before it.
+  await page.context().setOffline(false);
+  await expect(bar(page)).toHaveCount(0, { timeout: 60_000 });
+  // Settings, loaded again until Welcome's line says every note is here; in Firefox the app's own navigation once
+  // the download goes on may cut off a load (NS_BINDING_ABORTED), which is no answer either way.
+  await expect
+    .poll(
+      async () => {
+        await page.goto("/settings/offline").catch(() => {});
+        return (await vaultLine(page, "Welcome").innerText().catch(() => "")).replace(/\s+/g, " ");
+      },
+      { message: "every note of Welcome is on this device", timeout: 60_000, intervals: [1000, 2000] },
+    )
+    .toMatch(/ [1-9][\d,]* notes? · /);
+});
+
+test("gaps #9: offline, a wrong password is refused plainly, three times without a lockout, and the right one opens the copy @offline", async ({ page, aliceApi, folder }) => {
+  const plan = `/Work/${folder}/Plan.md`;
+  await aliceApi.putNote(plan, "# Plan\n\nBehind the right password.\n");
+  await turnOn(page);
+  await page.goto(notePage(plan));
+  await expect(article(page)).toContainText("Behind the right password.");
+  await goOffline(page);
+
+  await page.reload();
+  await expect(page).toHaveURL(/\/signin/);
+  await expect(page.getByText("You're offline. Signing in opens the notes kept on this device.")).toBeVisible();
+  const signIn = page.getByRole("button", { name: "Sign in" });
+  for (const attempt of [1, 2, 3]) {
+    await page.getByLabel("Username").fill(usernames.alice);
+    await page.getByLabel("Password", { exact: true }).fill(`not-the-password-${attempt}`);
+    await signIn.click();
+    // Argon2id runs for a wrong password too: the answer comes once the button is free again.
+    await expect(signIn).toBeEnabled({ timeout: 30_000 });
+    await expect(page.getByText("The username or password is wrong, or this device keeps no notes of this user.")).toBeVisible();
+    await expect(page).toHaveURL(/\/signin/);
+  }
+  await page.getByLabel("Password", { exact: true }).fill(secrets().passwords.alice);
+  await signIn.click();
+  await expect(page).not.toHaveURL(/\/signin/, { timeout: 30_000 });
+  await expect(article(page)).toContainText("Behind the right password.");
+  await page.context().setOffline(false);
+});
+
+test("gaps #10: offline, a second tab shows the same bar and the same count, and the change uploads once @offline", async ({ page, aliceApi, folder }) => {
+  const plan = `/Work/${folder}/Plan.md`;
+  const harbour = `/Work/${folder}/Harbour.md`;
+  await aliceApi.putNote(plan, "# Plan\n\nBefore.\n");
+  await aliceApi.putNote(harbour, "# Harbour\n\nThe lighthouse.\n");
+  await turnOn(page);
+  await page.goto(notePage(plan));
+  await expect(article(page)).toContainText("Before.");
+  const second = await page.context().newPage();
+  await prepare(second);
+  await second.goto(notePage(harbour));
+  await expect(article(second)).toContainText("The lighthouse.");
+  const versions = (await aliceApi.history(plan)).length;
+
+  await goOffline(page);
+  await expect(bar(second)).toContainText("You're offline.", { timeout: 30_000 });
+  await write(page, "# Plan\n\nWritten in the first tab.\n");
+  await expect(bar(page)).toContainText("1 change will upload when you're back.");
+  await expect(bar(second)).toContainText("1 change will upload when you're back.", { timeout: 10_000 });
+
+  // Back online: both tabs leave the offline mode, and the one change reaches the server once.
+  await page.context().setOffline(false);
+  await expect(page.getByRole("status", { name: "Uploaded" })).toContainText("All changes uploaded", { timeout: 30_000 });
+  await expect(bar(second)).toHaveCount(0, { timeout: 30_000 });
+  expect((await aliceApi.getNote(plan)).content).toBe("# Plan\n\nWritten in the first tab.\n");
+  expect((await aliceApi.history(plan)).length, "one new version, not two").toBe(versions + 1);
+  await second.close();
+});
+
+test("gaps #11: after Keep me signed in the invitation comes once; Not now keeps it away after a reload @offline", async ({ browser, projectContextOptions }) => {
+  test.setTimeout(test.info().timeout + limitWindow);
+  // A sign-in of its own with Keep me signed in (§3a: the device is plainly the person's own); never over Alice's
+  // saved session, which every other test shares.
+  const context = await browser.newContext({ ...projectContextOptions, storageState: { cookies: [], origins: [] } });
+  try {
+    const own = await context.newPage();
+    await dismissInstallHint(own);
+    await reserve("sign-in-alice");
+    await own.goto("/signin");
+    await own.getByLabel("Username").fill(usernames.alice);
+    await own.getByLabel("Password", { exact: true }).fill(secrets().passwords.alice);
+    await own.getByLabel("Keep me signed in on this device").check();
+    await own.getByRole("button", { name: "Sign in" }).click();
+    await expect(own).not.toHaveURL(/\/signin/);
+
+    const invite = own.getByRole("region", { name: "Keep your notes on this device" });
+    await expect(invite).toContainText("Keep your notes on this device for when you're offline?", { timeout: 30_000 });
+    await expect(invite.getByRole("button", { name: "Set up" })).toBeVisible();
+    await invite.getByRole("button", { name: "Not now" }).click();
+    await expect(invite).toHaveCount(0);
+
+    await own.reload();
+    await expect(own.getByRole("button", { name: /^Search/ })).toBeVisible({ timeout: 30_000 });
+    // The invitation decides from the device's own mark, before it asks the copy store: once marked, it never shows.
+    expect(await own.evaluate(() => localStorage.getItem("kumbu.offlineInvite"))).toBe("asked");
+    await expect(invite).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
 });
