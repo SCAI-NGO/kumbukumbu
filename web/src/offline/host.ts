@@ -5,6 +5,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { SealedMirror } from "eidolon-core/store/mirror";
 import { api, call } from "../api/client";
+import { useSession } from "../state/session";
 import { useOfflineCopy } from "./copy";
 import { enginesLocalChanged, listenToEngines } from "./engines";
 import { mirrorCopies, onBeforeLock, onContacted, useOfflineMode } from "./mode";
@@ -48,8 +49,10 @@ export function runOfflineHost(queryClient: QueryClient): () => void {
     useOfflineMode.subscribe(() => follow(queryClient)),
     useOfflineCopy.subscribe((s, before) => {
       follow(queryClient);
-      // Locked: what the app read from it (or online, in the session it stood for) goes from memory too.
-      if (s.mirror === null && before.mirror !== null) queryClient.clear();
+      // Locked: what the app read from it (or online, in the session it stood for) goes from memory too. Removed
+      // while an online session goes on in this tab (Settings, Offline): what it read is that session's, and stays.
+      const online = !!useSession.getState().user?.id && !useOfflineMode.getState().offline;
+      if (s.mirror === null && before.mirror !== null && !online) queryClient.clear();
       // Removed or wiped: another user's copy may still be here.
       if (s.header === null && before.header !== null) lookForCopies();
     }),

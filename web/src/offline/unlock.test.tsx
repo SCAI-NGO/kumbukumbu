@@ -14,6 +14,7 @@ import { useOfflineCopy } from "./copy";
 import { runOfflineHost } from "./host";
 import { lockCopy, onBeforeLock, useOfflineMode } from "./mode";
 import { browserPorts } from "./ports";
+import { turnOff } from "./turnOn";
 import { endPendingSignOut, signOutOffline, signOutPending, unlockOffline } from "./unlock";
 
 const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
@@ -113,6 +114,33 @@ test("locking the copy forgets what the app read", async () => {
   const queryClient = new QueryClient();
   const stop = runOfflineHost(queryClient);
   expect(await unlockOffline("ada", "pw")).toBe(true);
+  queryClient.setQueryData(["tree", "Home"], [{ path: "/Home/Diary.md" }]);
+  await lockCopy();
+  expect(queryClient.getQueryData(["tree", "Home"])).toBeUndefined();
+  stop();
+});
+
+test("removing the copy while signed in online keeps what the app read", async () => {
+  await adasCopy();
+  const queryClient = new QueryClient();
+  const stop = runOfflineHost(queryClient);
+  expect(await unlockOffline("ada", "pw")).toBe(true);
+  useSession.getState().signedIn({ user: { id: "u1", username: "Ada", display: "Ada", role: "user" }, previousSignInAt: null });
+  queryClient.setQueryData(["tree", "Home"], [{ path: "/Home/Diary.md" }]);
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(noContent())));
+  await turnOff(useOfflineCopy.getState().header!);
+  expect(useOfflineCopy.getState().mirror).toBeNull();
+  expect(queryClient.getQueryData(["tree", "Home"])).toEqual([{ path: "/Home/Diary.md" }]);
+  stop();
+});
+
+test("a lock while offline forgets what the app read, a session or not", async () => {
+  await adasCopy();
+  const queryClient = new QueryClient();
+  const stop = runOfflineHost(queryClient);
+  expect(await unlockOffline("ada", "pw")).toBe(true);
+  useSession.getState().signedIn({ user: { id: "u1", username: "Ada", display: "Ada", role: "user" }, previousSignInAt: null });
+  useOfflineMode.getState().failed();
   queryClient.setQueryData(["tree", "Home"], [{ path: "/Home/Diary.md" }]);
   await lockCopy();
   expect(queryClient.getQueryData(["tree", "Home"])).toBeUndefined();
