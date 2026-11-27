@@ -68,7 +68,7 @@ test("a server url from data.json is checked before the key is sent", () => {
   expect(serverProblem("")).not.toBeNull();
 });
 test("server url rule", () => {
-  expect(isAllowedServerUrl("https://kumbu.tidesson.net")).toBe(true);
+  expect(isAllowedServerUrl("https://kumbu.example.org")).toBe(true);
   expect(isAllowedServerUrl("http://localhost:8080")).toBe(true);
   expect(isAllowedServerUrl("http://127.0.0.1:8080")).toBe(true);
   expect(isAllowedServerUrl("http://kumbu.example.org")).toBe(false);
