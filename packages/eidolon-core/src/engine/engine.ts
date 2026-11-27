@@ -116,6 +116,11 @@ export class SyncEngine {
   private offline = false;
   private retryHandle: unknown = null;
   private retryDelay = 0;
+  /**
+   * A full check ended before it looked at every path (the network went): the next check is full too, as only a full
+   * one finds a file changed while the engine wasn't running.
+   */
+  private fullOwed = false;
   private copiesMade = 0;
   /**
    * Folders a remote delete or move took a note out of. Kumbu² has no empty folders, so each is deleted once it is
@@ -346,7 +351,7 @@ export class SyncEngine {
     if (this.stopped) return Promise.resolve();
     if (this.firstSyncChoose !== null) return this.firstSyncJob().then(() => undefined);
     const last = this.state.lastSyncAt === null ? NaN : Date.parse(this.state.lastSyncAt);
-    const asFull = full || this.state.cursor === null || !(this.o.clock.now() - last < FULL_AFTER_MS);
+    const asFull = full || this.fullOwed || this.state.cursor === null || !(this.o.clock.now() - last < FULL_AFTER_MS);
     return this.run(() => this.runCheck(asFull), asFull ? "check:full" : "check");
   }
 
@@ -404,6 +409,7 @@ export class SyncEngine {
   }
 
   private async runCheck(full: boolean): Promise<void> {
+    if (full) this.fullOwed = true;
     const answer = await this.o.remote.versions(full ? null : this.state.cursor, null);
     await this.readShared();
     if (this.checkedRights !== null && this.rights !== this.checkedRights) this.retryRefused();
@@ -426,6 +432,7 @@ export class SyncEngine {
         pathFailed = true;
       }
     }
+    this.fullOwed = false;
     // The old cursor stays while a path failed, so the next check asks for it again.
     if (!pathFailed) await this.finishCheck(answer);
   }

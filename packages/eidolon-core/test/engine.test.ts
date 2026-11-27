@@ -359,6 +359,21 @@ describe("review focus", () => {
     expect(copies(h.files.files)).toEqual([]);
     expect(h.conflicts).toEqual([]);
   });
+
+  test("a start cut off by the network finds every file changed while closed at the next check", async () => {
+    const h = await harness({ synced: { "a.md": "one", "b.md": "b" } });
+    await h.engine.stop();
+    h.files.userEdit("a.md", "edited while closed");
+    h.files.userEdit("c.md", "created while closed");
+    h.server.failNext("put", new OfflineError("lost signal"));
+    await h.engine.start();
+    expect(h.engine.status().mode).toBe("offline");
+    // The reconnect's check, or the retry's: neither is a full one of its own.
+    await h.engine.check(false);
+    expect(h.server.notes.get("a.md")!.content).toBe("edited while closed");
+    expect(h.server.notes.get("c.md")?.content).toBe("created while closed");
+    expect(h.engine.status().mode).not.toBe("offline");
+  });
 });
 
 describe("not synced", () => {
