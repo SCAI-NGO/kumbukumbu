@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { asset, type Kept, keptPage, sha256 } from "./kept";
+import { asset, type Kept, keptPage, page as appPage, sha256 } from "./kept";
 import { appPolicy, kdfWorkerPolicy } from "./policy";
 
 const script = "export const app = 1;";
@@ -49,7 +49,7 @@ describe("a kept file", () => {
 
   it("changed in the cache is never served offline: the request fails instead", async () => {
     const cache = await cacheOf({ "/assets/main.js": "the attacker's script" });
-    await expect(asset(cache, "/assets/main.js", await listed(script), offline)).rejects.toThrow("Failed to fetch");
+    expect((await asset(cache, "/assets/main.js", await listed(script), offline)).type).toBe("error");
     expect(cache.entries.has("/assets/main.js")).toBe(false);
   });
 
@@ -63,7 +63,7 @@ describe("a kept file", () => {
   it("kept with another status than 200 counts as changed", async () => {
     const cache = await cacheOf({});
     cache.entries.set("/assets/main.js", new Response(script, { status: 203 }));
-    await expect(asset(cache, "/assets/main.js", await listed(script), offline)).rejects.toThrow();
+    expect((await asset(cache, "/assets/main.js", await listed(script), offline)).type).toBe("error");
     expect(cache.entries.has("/assets/main.js")).toBe(false);
   });
 });
@@ -78,6 +78,24 @@ describe("the kept page, for a start without a network", () => {
     const cache = await cacheOf({ "/index.html": "<script>steal()</script>" });
     expect(await keptPage(cache, await listed(page, "text/html"))).toBeUndefined();
     expect(cache.entries.has("/index.html")).toBe(false);
+  });
+});
+
+describe("offline, a file it can't fetch", () => {
+  it("answers an error response, with no uncaught rejection", async () => {
+    const answer = await asset(await cacheOf({}), "/assets/main.js", await listed(script), offline);
+    expect([answer.type, answer.status]).toEqual(["error", 0]);
+  });
+
+  it("answers an error response for a page it neither fetches nor keeps", async () => {
+    const answer = await appPage(await cacheOf({}), await listed(page, "text/html"), offline);
+    expect([answer.type, answer.status]).toEqual(["error", 0]);
+  });
+
+  it("answers a page from the network first, and the kept one only without a network", async () => {
+    const cache = await cacheOf({ "/index.html": page });
+    expect(await (await appPage(cache, await listed(page, "text/html"), network("the server's page"))).text()).toBe("the server's page");
+    expect(await (await appPage(cache, await listed(page, "text/html"), offline)).text()).toBe(page);
   });
 });
 

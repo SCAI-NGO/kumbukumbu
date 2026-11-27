@@ -54,11 +54,14 @@ async function checked(cache: Kept, path: string, file: Listed): Promise<Respons
   return undefined;
 }
 
-/** A file of the build: kept, if it is the build's; else the network's, which is kept again when it is. */
+/**
+ * A file of the build: kept, if it is the build's; else the network's, which is kept again when it is. Without a
+ * network, the error response a failed fetch is, so the browser gets an answer and nothing is left uncaught.
+ */
 export async function asset(cache: Kept, path: string, file: Listed, fetchIt: () => Promise<Response>): Promise<Response> {
   const kept = await checked(cache, path, file);
   if (kept !== undefined) return kept;
-  const fresh = await fetchIt();
+  const fresh = await fetchIt().catch(() => Response.error());
   const bytes = await fresh.clone().arrayBuffer();
   if (!(await isBuilds(fresh.status, bytes, file))) return fresh;
   await cache.put(path, answer(path, bytes, file));
@@ -67,3 +70,16 @@ export async function asset(cache: Kept, path: string, file: Listed, fetchIt: ()
 
 /** The kept app page, for a start without a network, if it is the build's. */
 export const keptPage = (cache: Kept, file: Listed): Promise<Response | undefined> => checked(cache, "/index.html", file);
+
+/**
+ * A page of the app: the server's whenever it answers, an error page included, so an online reload is always the
+ * server's build; the kept one only when there is no network at all, and only if it is the build's; else the error
+ * response a failed fetch is.
+ */
+export async function page(cache: Kept, file: Listed, fetchIt: () => Promise<Response>): Promise<Response> {
+  try {
+    return await fetchIt();
+  } catch {
+    return (await keptPage(cache, file)) ?? Response.error();
+  }
+}

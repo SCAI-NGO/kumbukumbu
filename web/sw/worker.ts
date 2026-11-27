@@ -3,7 +3,7 @@
 // connection, and nothing else. Built as /sw.js by vite.config.ts, which writes the build's list into it, each file
 // with its SHA-256 and type: a kept file is served only while its bytes are the build's, with headers of the
 // worker's own (kept.ts).
-import { asset, keptPage, type Listed } from "./kept";
+import { asset, type Listed, page } from "./kept";
 import { route } from "./shell";
 
 declare const self: ServiceWorkerGlobalScope;
@@ -45,11 +45,7 @@ self.addEventListener("fetch", (event) => {
       break;
     }
     case "page":
-      // The server's page whenever it answers, an error page included, so an online reload is always the server's
-      // build; the kept one only when there is no network at all, and only if it is the build's.
-      event.respondWith(
-        fetch(request).catch(async (error: unknown) => (await keptPage(await caches.open(shell.name), shell.files["/index.html"]!)) ?? Promise.reject(error)),
-      );
+      event.respondWith(caches.open(shell.name).then((cache) => page(cache, shell.files["/index.html"]!, () => fetch(request))));
       break;
   }
 });
