@@ -507,6 +507,53 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(Changed("Arbeit"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
     }
 
+    private const string MirrorFrame = """{"type":"mirror"}""";
+
+    [Fact]
+    public async Task A_reencryption_sends_the_mirror_frame_to_the_kept_sessions_socket()
+    {
+        var alice = await NewAsync(Api);
+        using var socket = await SyncSockets.OpenAsync(Api, alice);
+
+        using (var reencrypted = await alice.SendAsync(HttpMethod.Post, "/api/account/reencrypt", new { password = Password })) Assert.Equal(HttpStatusCode.OK, reencrypted.StatusCode);
+
+        // Its copy's slot went with the others: the tab makes contact now, while it is online.
+        Assert.Contains(MirrorFrame, await SyncSockets.DrainAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task A_recovery_sends_the_mirror_frame()
+    {
+        var alice = await NewAsync(Api);
+        var bob = await NewAsync(Api);
+        var recoveryKey = await Api.Services.GetRequiredService<UserCatalog>().RegenerateRecoveryKeyAsync(alice.User.Id, alice.UserKey, Password, Ct);
+        using var socket = await SyncSockets.OpenAsync(Api, alice);
+
+        using (var recovered = await bob.SendAsync(HttpMethod.Post, "/api/recover", new { username = alice.Username, recoveryKey, newPassword = "a new password, long enough" }))
+        {
+            Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
+        }
+
+        Assert.Contains(MirrorFrame, await SyncSockets.DrainAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task A_vaults_rekeying_sends_the_mirror_frame_to_every_members_socket_holding_it()
+    {
+        var (alice, bob, _, _) = await SharedAsync();
+        var carol = await NewAsync(Api);
+        using var owners = await SyncSockets.OpenAsync(Api, alice);
+        using var members = await SyncSockets.OpenAsync(Api, bob);
+        using var others = await SyncSockets.OpenAsync(Api, carol);
+
+        using (var rekeyed = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = Password })) Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+
+        // The vault's tag changed: each copy holding it brings it in line at once.
+        Assert.Contains(MirrorFrame, await SyncSockets.DrainAsync(owners, TimeSpan.FromSeconds(2)));
+        Assert.Contains(MirrorFrame, await SyncSockets.DrainAsync(members, TimeSpan.FromSeconds(2)));
+        Assert.DoesNotContain(MirrorFrame, await SyncSockets.DrainAsync(others, TimeSpan.FromSeconds(1)));
+    }
+
     [Fact]
     public async Task A_request_without_an_upgrade_is_400()
     {

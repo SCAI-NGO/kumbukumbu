@@ -10,6 +10,7 @@ import { storageText, useAccountStorage } from "../../api/storage";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
 import { PasswordField } from "../../components/PasswordField";
 import { useDialog } from "../../hooks/useDialog";
+import { contact } from "../../offline/mode";
 import SharedVaultsSection from "../SharedVaultsSection";
 import DeleteVaultDialog from "../../shell/DeleteVaultDialog";
 import { Done, Section } from "./Section";
@@ -133,6 +134,8 @@ function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(me
           withdrawnSentence(view),
       );
       await Promise.all(["vaults", "keys", "connections", "dav-shares"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      // The vault's tag changed: the copy here brings that vault in line now, while online.
+      void contact();
       onClose();
     },
   });

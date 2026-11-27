@@ -338,6 +338,8 @@ public static class AccountApi
         var (recoveryKey, user, userKey) = await users.RecoverWithKeyAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
             ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
         pairings.DropAll(user.Id);
+        // Before the sessions' sockets close: a tab still open learns that its copy's slot went.
+        await hub.MirrorChangedAsync(user.Id, CancellationToken.None);
         await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
         rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
@@ -459,6 +461,8 @@ public static class AccountApi
         await PasswordGivenAsync(http, sessions, ct);
         pairings.DropAll(user.Id);
         await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
+        // Every slot went, this session's too: its tabs make contact now, while online.
+        await hub.MirrorChangedAsync(user.Id, CancellationToken.None);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 

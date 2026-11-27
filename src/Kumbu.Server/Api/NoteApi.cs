@@ -519,7 +519,7 @@ public static class NoteApi
     /// that list it disconnected: they can't be given the new key without their owner.</summary>
     private static async Task<Ok<RekeyVaultView>> RekeyVaultAsync(
         string vault, RekeyVaultRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, Sessions sessions, AccountLimits limits,
-        Pairings pairings, CancellationToken ct)
+        Pairings pairings, VaultCatalog catalog, Sync.SyncHub hub, CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
@@ -546,6 +546,12 @@ public static class NoteApi
 
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         if (summary is null) throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        // Its tag changed: the copies holding it, the members' too, bring it in line now rather than at their next contact.
+        if (await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, CancellationToken.None) is { } vaultId)
+        {
+            await hub.VaultRekeyedAsync(vaultId, CancellationToken.None);
+        }
+
         return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count, summary.WithdrawnInvitations, summary.RevokedShares.Count));
     }
 

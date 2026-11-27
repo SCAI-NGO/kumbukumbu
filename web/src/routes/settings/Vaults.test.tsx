@@ -9,6 +9,9 @@ import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../../test/app";
 
+const contact = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../offline/mode", async (original) => ({ ...(await original<typeof import("../../offline/mode")>()), contact }));
+
 function api(overrides: Record<string, (r: Request) => Response | Promise<Response>> = {}) {
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
@@ -113,6 +116,22 @@ describe("Settings: Vaults", () => {
     expect(within(vaultsSection).getByRole("status")).toHaveTextContent(/^Diary is re-encrypted\. 1 WebDAV share was revoked\.$/);
   });
 
+  it("re-encrypting a vault makes contact once it succeeds", async () => {
+    contact.mockClear();
+    api({
+      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: [], members: [] }),
+      "POST /api/vaults/Diary/rekey": () => json(200, { revokedApiKeys: 0, disconnectedApps: 0, revokedShares: 0 }),
+    });
+    renderApp("/settings/vaults");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Re-encrypt Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" });
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(contact).toHaveBeenCalledTimes(1);
+  });
+
   it("names the members' keys and apps that lose the vault too", async () => {
     const member = (label: string, credentials: { name: string; kind: string }[]) => ({
       id: label, label, role: "write", status: "active", confirm: false, acceptedAt: null, redeemedAt: null, expiresAt: null,
@@ -132,6 +151,7 @@ describe("Settings: Vaults", () => {
   });
 
   it("says when a vault is busy being re-encrypted", async () => {
+    contact.mockClear();
     api({
       "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [], shares: [], members: [] }),
       "POST /api/vaults/Diary/rekey": () => json(503, { error: "This vault is being re-encrypted; try again in a moment." }),
@@ -144,6 +164,7 @@ describe("Settings: Vaults", () => {
     await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
     await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
     expect(await within(dialog).findByText("This vault is being re-encrypted; try again in a moment.")).toBeInTheDocument();
+    expect(contact).not.toHaveBeenCalled();
   });
 
   it("the vaults section says what deleting and re-encrypting do to API keys and WebDAV shares", async () => {

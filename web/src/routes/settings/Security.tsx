@@ -11,6 +11,7 @@ import { RecoveryKeyReveal } from "../../components/RecoveryKeyReveal";
 import { useMarkDiscreet } from "../../discreet/api";
 import SetPinDialog from "../../discreet/SetPinDialog";
 import { useDiscreet } from "../../discreet/state";
+import { contact } from "../../offline/mode";
 import { markPasswordChanged } from "../../offline/PasswordChangedCopies";
 import { useSession } from "../../state/session";
 import { Done, Section } from "./Section";
@@ -242,6 +243,8 @@ function ReencryptSection() {
       setDone(false);
       setRecoveryKey(view.recoveryKey);
       void Promise.all(["vaults", "keys", "connections", "dav-shares"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      // Every slot went: the copy here learns it now, while online, rather than at its next contact.
+      void contact();
     },
   });
 
