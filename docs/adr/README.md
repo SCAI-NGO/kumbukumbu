@@ -23,7 +23,7 @@ Records are public. A security decision says what we do and why, never which con
 | [0006](0006-argon2id-through-a-kdf-port.md) | Derive the offline wrap with Argon2id, through a KDF port | Accepted |
 | [0007](0007-a-version-counter-for-sealed-records.md) | Protect the offline copy's records against rollback with a version counter | Accepted |
 | [0008](0008-password-change-keeps-other-devices-copies.md) | Keep other devices' offline copies on a password change, and show them | Accepted |
-| [0009](0009-password-to-remove-a-copy-with-pending-changes.md) | Ask for the password before removing another device's copy with changes waiting | Accepted |
+| [0009](0009-password-to-remove-a-copy-with-pending-changes.md) | Ask for the password before removing another device's copy with changes waiting | Superseded by [0042](0042-removing-another-devices-copy-always-asks-for-the-password.md) |
 | [0010](0010-embeddings-stay-on-the-server.md) | Keep embeddings on the server; offline searches by words | Accepted |
 | [0011](0011-large-attachments-on-demand.md) | Fetch large attachments on demand | Accepted |
 | [0012](0012-no-move-or-rename-offline.md) | No moving or renaming while offline in 0.7.0 | Accepted |
@@ -46,6 +46,7 @@ Records are public. A security decision says what we do and why, never which con
 | [0031](0031-offline-words-search-scans-the-copy-in-memory.md) | Offline words search scans the copy's texts in memory | Accepted |
 | [0032](0032-orphans-without-tag-count-only-kept-links.md) | `graph --orphans --without-tag` counts only the links of the notes kept | Accepted |
 | [0033](0033-the-sign-in-page-asks-after-every-copy-kept-here.md) | The sign-in page asks after every copy kept here, whoever's it is | Accepted |
+| [0042](0042-removing-another-devices-copy-always-asks-for-the-password.md) | Removing another device's copy always asks for the password | Accepted |
 | [0043](0043-the-worker-answers-with-its-own-headers.md) | Let the service worker answer a kept file with headers of its own | Accepted |
 | [0044](0044-each-adoption-of-a-vault-has-its-own-epoch.md) | Give each adoption of a vault into the copy its own epoch | Accepted |
 

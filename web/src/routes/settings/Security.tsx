@@ -297,7 +297,7 @@ function SessionsSection() {
       <p className="text-text-body">Signs you out everywhere else, such as a browser you forgot to sign out of. This one stays.</p>
       {endOthers.isError && <FormError>{errorText(endOthers.error)}</FormError>}
       {endOthers.isSuccess && (
-        <Done>Every other session has ended. Offline copies with changes waiting stay until you remove them in Settings, Offline.</Done>
+        <Done>Every other session has ended. Every other device's offline copy stays until you remove it in Settings, Offline.</Done>
       )}
       <button type="button" disabled={endOthers.isPending} onClick={() => endOthers.mutate()} className={secondaryButtonClass}>
         Sign out other sessions

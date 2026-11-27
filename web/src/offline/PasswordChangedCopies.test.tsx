@@ -40,8 +40,9 @@ describe("after a password change", () => {
     const list = await screen.findByRole("list", { name: "Devices with a copy" });
     expect(within(list).queryByText("Firefox on Linux")).toBeNull();
     await userEvent.click(within(list).getByRole("button", { name: "Remove offline copy" }));
+    await userEvent.type(within(screen.getByRole("alertdialog")).getByLabelText("Your password"), "correct horse battery");
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Remove" }));
-    await vi.waitFor(() => expect(fetch.mock.calls.some(([r]) => r.method === "DELETE")).toBe(true));
+    await vi.waitFor(() => expect(fetch.mock.calls.some(([r]) => String(r) === "/api/account/mirror-slots/s2/remove")).toBe(true));
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(region()).toBeNull();
     cleanup();

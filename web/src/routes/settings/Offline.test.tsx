@@ -234,27 +234,19 @@ describe("Settings: Offline", () => {
     expect(await calls(fake, "POST /api/account/mirror-slots/s2/remove")[0]!.json()).toEqual({ password: "correct horse battery" });
   });
 
-  it("asks for the password when the device has just reported changes", async () => {
-    let asked = 0;
-    const fake = api({
-      "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: 0 }]),
-      "DELETE /api/account/mirror-slots/*": () => {
-        asked++;
-        return json(400, { error: "This device has just reported changes waiting. Enter your password to remove its offline copy.", code: "changes-waiting" });
-      },
-      "POST /api/account/mirror-slots/*/remove": () => noContent(),
-    });
+  it("the remove dialog always says changes not uploaded are lost", async () => {
+    const fake = api({ "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: 0 }]) });
     renderApp("/settings/offline");
     const devices = await screen.findByRole("list", { name: "Devices with a copy" });
     await userEvent.click(within(devices).getByRole("button", { name: "Remove offline copy" }));
-    const dialog = screen.getByRole("alertdialog");
-    expect(within(dialog).queryByLabelText("Your password")).toBeNull();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
-    expect(await within(dialog).findByText(/just reported changes waiting/)).toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog", { name: "Remove the copy on Safari on iOS?" });
+    expect(dialog).toHaveTextContent("Nothing was waiting at its last contact; any changes it has made since will be lost.");
+    expect(dialog).toHaveTextContent("Enter your password to remove it.");
+    expect(within(dialog).getByRole("button", { name: "Remove" })).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery");
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots/s2/remove")).toHaveLength(1));
-    expect(asked).toBe(1);
+    expect(calls(fake, "DELETE /api/account/mirror-slots/s2")).toHaveLength(0);
   });
 
   it("asks for the password when the device's count isn't known yet, and says so", async () => {
@@ -273,12 +265,13 @@ describe("Settings: Offline", () => {
   it("shows the server's sentence when a removal is refused", async () => {
     api({
       "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: 0 }]),
-      "DELETE /api/account/mirror-slots/*": () => json(403, { error: "Only sessions remove offline copies." }),
+      "POST /api/account/mirror-slots/s2/remove": () => json(403, { error: "Only sessions remove offline copies." }),
     });
     renderApp("/settings/offline");
     const devices = await screen.findByRole("list", { name: "Devices with a copy" });
     await userEvent.click(within(devices).getByRole("button", { name: "Remove offline copy" }));
     const dialog = screen.getByRole("alertdialog");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery");
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(await within(dialog).findByText("Only sessions remove offline copies.")).toBeInTheDocument();
   });

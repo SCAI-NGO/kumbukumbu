@@ -104,9 +104,9 @@ public static class MirrorSlotsApi
         await slots.RenameAsync(caller.User!.Id, id, Label(body.Label), ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such offline copy.");
 
     /// <summary>
-    /// "Remove offline copy". Another browser's copy with changes waiting at its last contact, or none reported yet, goes
-    /// only with the password, as a vault's deletion does: a stolen session cuts the device off by ending its session,
-    /// not by destroying what it hasn't uploaded. This browser's own copy it removes itself, having said what goes with it.
+    /// "Remove offline copy". Another browser's copy goes only with the password, whatever its last contact said, as a
+    /// vault's deletion does: what that device wrote since, the server can't count (ADR 0042). This browser's own copy it
+    /// removes itself, having said what goes with it.
     /// </summary>
     private static Task<Results<NoContent, NotFound<ApiError>>> DeleteAsync(
         string id, HttpContext http, RequestCaller caller, MirrorSlots slots, UserCatalog users, AccountLimits limits, Sessions sessions, SyncHub hub,
@@ -125,28 +125,21 @@ public static class MirrorSlotsApi
         var user = caller.User!;
         var slot = (await slots.ListAsync(user.Id, Subject(http), ct)).FirstOrDefault(s => s.Id == id);
         if (slot is null) return TypedResults.NotFound(new ApiError("There is no such offline copy."));
-        var withPassword = false;
-        if (!slot.Current && !MirrorSlots.Counted(slot.Waiting, slot.ContactAt))
+        if (!slot.Current)
         {
             if (string.IsNullOrEmpty(password))
             {
                 throw new ApiException(StatusCodes.Status400BadRequest,
-                    "This device has changes it hasn't uploaded, or hasn't said yet. Enter your password to remove its offline copy with them.",
+                    "Removing another device's offline copy needs your password: what it hasn't uploaded goes with it.",
                     code: ApiErrors.ChangesWaiting);
             }
 
             if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
             if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, password, ct)) throw new WrongPasswordException("The password is wrong.");
             await AccountApi.PasswordGivenAsync(http, sessions, ct);
-            withPassword = true;
         }
 
-        // Without the password only while nothing is waiting: a contact in between that reports changes keeps the slot.
-        if (!await slots.DeleteAsync(user.Id, id, onlyCounted: !withPassword && !slot.Current, ct))
-        {
-            throw new ApiException(StatusCodes.Status400BadRequest, "This device has just reported changes waiting. Enter your password to remove its offline copy.",
-                code: ApiErrors.ChangesWaiting);
-        }
+        if (!await slots.DeleteAsync(user.Id, id, ct)) return TypedResults.NotFound(new ApiError("There is no such offline copy."));
         await hub.MirrorChangedAsync(caller.User!.Id, CancellationToken.None);
         return TypedResults.NoContent();
     }

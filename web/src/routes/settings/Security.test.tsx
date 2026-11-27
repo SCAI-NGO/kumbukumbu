@@ -192,6 +192,16 @@ describe("Settings: Security", () => {
     expect(await within(section("Sessions")).findByText(/Every other session has ended\./)).toBeInTheDocument();
     expect(ended).toBe(1);
   });
+
+  it("End other sessions says every other device's copy stays", async () => {
+    api({ "POST /api/sessions/end-others": () => noContent() });
+    renderApp("/settings/security");
+    await screen.findByRole("region", { name: "Sessions" });
+    await userEvent.click(within(section("Sessions")).getByRole("button", { name: "Sign out other sessions" }));
+    expect(await within(section("Sessions")).findByText(/Every other session has ended\./)).toHaveTextContent(
+      "Every other device's offline copy stays until you remove it in Settings, Offline.",
+    );
+  });
 });
 
 describe("Settings: discreet vaults", () => {
