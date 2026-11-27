@@ -94,6 +94,8 @@ describe("the bar's sentences", () => {
   test("conflicts", () => {
     expect(conflictSentence(4, 1)).toBe("Uploaded 4 changes. One note was also changed elsewhere: your version is kept beside it.");
     expect(conflictSentence(null, 3)).toBe("3 notes were also changed elsewhere.");
+    expect(conflictSentence(2, 1, { vault: "v1", original: "Plan.md", copy: "Plan.md", came: "trashed-here" }))
+      .toBe("Uploaded 2 changes. “Plan” came back: it was changed elsewhere after you trashed it.");
   });
 });
 
@@ -142,6 +144,19 @@ describe("the bar", () => {
     useOfflineMode.getState().conflict({ vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" });
     await vi.waitFor(() => expect(useOfflineMode.getState().conflicts).toHaveLength(1));
     renderBar();
+    expect(screen.queryByRole("status", { name: "Changed elsewhere" })).toBeNull();
+  });
+
+  test.each([
+    ["trashed-here", "“Plan” came back: it was changed elsewhere after you trashed it."],
+    ["trashed-elsewhere", "“Plan” was trashed elsewhere; it's back with your changes."],
+  ] as const)("shows the came-back notice with Open, %s", async (came, sentence) => {
+    useOfflineMode.getState().conflict({ vault: "v1", original: "projects/Plan.md", copy: "projects/Plan.md", came });
+    renderBar(true);
+    const line = await screen.findByRole("status", { name: "Changed elsewhere" });
+    expect(line).toHaveTextContent(sentence);
+    expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(screen.queryByRole("status", { name: "Changed elsewhere" })).toBeNull();
   });
 

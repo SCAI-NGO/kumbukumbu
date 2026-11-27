@@ -6,7 +6,7 @@ import { makePlan, type Choice, type FirstSyncSummary, type MergePlan } from "./
 import { attachmentKind, conflictCopyPath, eligibility, isMarker, MARKER } from "./paths";
 import {
   AuthError, OfflineError, RejectedError, VaultChangedError,
-  type Clock, type FetchPolicy, type FileStat, type MoveResult, type VersionsAnswer, type ConnectionMode, type LocalFiles, type NotSynced, type RemoteApi,
+  type CameBack, type Clock, type FetchPolicy, type FileStat, type MoveResult, type VersionsAnswer, type ConnectionMode, type LocalFiles, type NotSynced, type RemoteApi,
   type StateStore, type SyncState, type SyncStatus, type Version,
 } from "./ports";
 import { SerialQueue } from "./queue";
@@ -16,6 +16,7 @@ export interface EngineOptions {
   vault: string; device: string; local: LocalFiles; remote: RemoteApi; state: StateStore; clock: Clock;
   onStatus(s: SyncStatus): void;
   onConflict(original: string, copy: string): void;
+  onCameBack?(path: string, why: CameBack): void;
   onAuthLost(): void;
   /** The name this engine asks by is another vault's now: the host reads the vault list again. */
   onVaultChanged?(): void;
@@ -796,8 +797,13 @@ export class SyncEngine {
         return undefined;
 
       case "upload":
-      case "reupload":
-        return this.upload(key, content!, action.kind === "upload" ? action.base : null);
+        return this.upload(key, content!, action.base);
+
+      case "reupload": {
+        const again = await this.upload(key, content!, null);
+        if (again === undefined && !isFile(key) && !this.tooLarge.has(key)) this.o.onCameBack?.(key, "trashed-elsewhere");
+        return again;
+      }
 
       case "download": {
         const theirs = await this.readRemote(key);
@@ -807,9 +813,12 @@ export class SyncEngine {
           return { remote: null };
         }
         if (!(await this.writeLocalIf(path, local, theirs.content))) return { remote: theirs.version };
+        // Gone here with a base: trashed here, and Kumbu²'s edit since brings it back.
+        const cameBack = local === null && this.state.bases[key] !== undefined && !isFile(key);
         this.localPathOf.set(key, path);
         this.forgetProblems(key);
         await this.setBase(key, theirs.version);
+        if (cameBack) this.o.onCameBack?.(key, "trashed-here");
         return undefined;
       }
 

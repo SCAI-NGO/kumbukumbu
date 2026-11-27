@@ -57,7 +57,7 @@ export function runOfflineHost(queryClient: QueryClient): () => void {
       if (s.header === null && before.header !== null) lookForCopies();
     }),
     listenToEngines({
-      conflict: (vault, original, copy) => useOfflineMode.getState().conflict({ vault, original, copy }),
+      conflict: (vault, original, copy, came) => useOfflineMode.getState().conflict({ vault, original, copy, ...(came === undefined ? {} : { came }) }),
       sessionLost: () => useOfflineMode.getState().sessionLost(),
       waitingChanged: () => useOfflineMode.getState().waitingChanged(),
     }),

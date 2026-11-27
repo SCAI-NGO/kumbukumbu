@@ -152,6 +152,36 @@ describe("normal use", () => {
     expect(h.server.notes.get("a.md")!.content).toBe("agent");
   });
 
+  test("tells when a note trashed here came back with an edit made elsewhere", async () => {
+    const h = await harness({ synced: { "a.md": "one", "b.md": "two", "c.md": "three" } });
+    await h.server.agentWrite("a.md", "agent");
+    h.files.userDelete("a.md");
+    await h.server.agentWrite("c.md", "agent");
+    await h.engine.check(false);
+    expect(h.files.files.get("a.md")).toBe("agent");
+    expect(h.cameBack).toEqual([["a.md", "trashed-here"]]);
+
+    await h.server.agentWrite("b.md", "agent");
+    h.files.userDelete("b.md");
+    h.engine.localDeleted("b.md");
+    await settle(h, 3000);
+    expect(h.files.files.get("b.md")).toBe("agent");
+    expect(h.cameBack).toEqual([["a.md", "trashed-here"], ["b.md", "trashed-here"]]);
+    expect(h.conflicts).toEqual([]);
+  });
+
+  test("tells when a note trashed elsewhere was made again with this device's text", async () => {
+    const h = await harness({ synced: { "a.md": "one", "b.md": "two" } });
+    await h.server.agentWrite("a.md", null);
+    await h.server.agentWrite("b.md", null);
+    h.files.userEdit("a.md", "mine");
+    h.files.userEdit("new.md", "new");
+    await h.engine.check(false);
+    expect(h.server.notes.get("a.md")!.content).toBe("mine");
+    expect(h.files.files.has("b.md")).toBe(false);
+    expect(h.cameBack).toEqual([["a.md", "trashed-elsewhere"]]);
+  });
+
   test("an agent delete moves the unchanged local file to the trash", async () => {
     const h = await harness({ synced: { "a.md": "one" } });
     await h.server.agentWrite("a.md", null);

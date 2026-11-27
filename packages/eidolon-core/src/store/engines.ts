@@ -4,7 +4,7 @@
 // attachments opened online kept after every change of either.
 import { SyncEngine } from "../engine/engine";
 import { SerialQueue } from "../engine/queue";
-import type { Clock, ListedVault, LocalFiles, RemoteApi, SyncStatus } from "../engine/ports";
+import type { CameBack, Clock, ListedVault, LocalFiles, RemoteApi, SyncStatus } from "../engine/ports";
 import { VaultHost, type MirrorEngine, type VaultRef } from "../host/vaults";
 import { evictions, forget, mirrors, wanted } from "./choice";
 import type { SealedMirror } from "./mirror";
@@ -24,7 +24,8 @@ export interface MirrorEnginesOptions {
   /** A vault was taken into the copy, under the name the caller gives it now. */
   adopted?(vault: VaultRef): Promise<void>;
   onStatus?(vaultId: string, status: SyncStatus): void;
-  onConflict?(vaultId: string, original: string, copy: string): void;
+  /** A conflict copy made; with `came`, no copy: the note itself came back after a trash met an edit. */
+  onConflict?(vaultId: string, original: string, copy: string, came?: CameBack): void;
   onAuthLost?(): void;
 }
 
@@ -181,6 +182,7 @@ export class MirrorEngines {
           state: vault.stateStore(), clock: o.clock,
           onStatus: (s) => o.onStatus?.(ref.id, s),
           onConflict: (original, copy) => o.onConflict?.(ref.id, original, copy),
+          onCameBack: (path, came) => o.onConflict?.(ref.id, path, path, came),
           onAuthLost: () => o.onAuthLost?.(),
           // A failed list changes nothing: the engine's own retry comes, and so does the next refresh.
           onVaultChanged: () => void this.refresh().catch(() => {}),

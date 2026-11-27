@@ -40,6 +40,12 @@ export class OfflineError extends Error {
  */
 export class VaultChangedError extends OfflineError {}
 
+/**
+ * A note back after a trash met an edit: trashed here and edited elsewhere (Kumbu²'s edit came back here), or trashed
+ * elsewhere and edited here (made again in Kumbu² with this device's text). Nothing is lost either way; the person is told.
+ */
+export type CameBack = "trashed-here" | "trashed-elsewhere";
+
 /** `id`: stays when the vault is renamed, unlike its name, which is also per member (an alias). */
 export interface ListedVault { id?: string; name: string; canWrite: boolean; shared?: boolean; level?: string; discreet?: boolean; }
 

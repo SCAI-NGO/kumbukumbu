@@ -732,13 +732,10 @@ async function notesBelow(api: Api, folder: string): Promise<string[]> {
   return all((await api.json<{ root: Tree }>("GET", "/api/vaults/Work/tree")).root).filter((p) => p.includes(`/${folder}/`)).sort();
 }
 
-/** What the page tells the person in its status lines, for the report: whether they were told, in their words. */
-async function told(page: Page): Promise<string> {
-  const lines = await page.getByRole("status").allInnerTexts();
-  return lines.map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean).join(" | ") || "(nothing)";
-}
+/** The notice of a note that came back after a trash met an edit, with Open. */
+const cameBack = (page: Page) => page.getByRole("status", { name: "Changed elsewhere" });
 
-test("gaps #12a: a note trashed offline that was edited elsewhere comes back with the edit, nothing lost @offline", async ({ page, aliceApi, folder }) => {
+test("gaps #12a: a note trashed offline that was edited elsewhere comes back with the edit, nothing lost, and the person is told @offline", async ({ page, aliceApi, folder }) => {
   const y = `/Work/${folder}/Y.md`;
   await aliceApi.putNote(y, "# Y\n\nBefore.\n");
   await turnOn(page);
@@ -758,12 +755,13 @@ test("gaps #12a: a note trashed offline that was edited elsewhere comes back wit
   // The edit made elsewhere is not in the trash: Y stays on the server with it, and comes back on this device.
   await expect.poll(async () => (await aliceApi.getNote(y)).content, { timeout: 30_000 }).toBe("# Y\n\nEdited elsewhere.\n");
   expect(await notesBelow(aliceApi, folder), "no other note made from it").toEqual([y]);
-  test.info().annotations.push({ type: "told", description: await told(page) });
-  await page.goto(notePage(y));
+  await expect(cameBack(page)).toContainText("“Y” came back: it was changed elsewhere after you trashed it.", { timeout: 30_000 });
+  await cameBack(page).getByRole("button", { name: "Open" }).click();
   await expect(article(page)).toContainText("Edited elsewhere.", { timeout: 30_000 });
+  await expect(cameBack(page)).toHaveCount(0);
 });
 
-test("gaps #12b: a note edited offline that was trashed elsewhere comes back with this device's edit, nothing lost @offline", async ({ page, aliceApi, folder }) => {
+test("gaps #12b: a note edited offline that was trashed elsewhere comes back with this device's edit, nothing lost, and the person is told @offline", async ({ page, aliceApi, folder }) => {
   const z = `/Work/${folder}/Z.md`;
   await aliceApi.putNote(z, "# Z\n\nBefore.\n");
   await turnOn(page);
@@ -778,18 +776,13 @@ test("gaps #12b: a note edited offline that was trashed elsewhere comes back wit
 
   await page.context().setOffline(false);
   await expect(bar(page)).toHaveCount(0, { timeout: 60_000 });
-  // This device's edit is kept: Z restored, or a conflict copy beside it.
-  await expect
-    .poll(async () => {
-      for (const path of await notesBelow(aliceApi, folder)) {
-        const content = (await aliceApi.getNote(path)).content;
-        if (content.includes("Edited offline.")) return content;
-      }
-      return "(not on the server)";
-    }, { message: "the offline edit is on the server", timeout: 30_000 })
-    .toContain("Edited offline.");
-  test.info().annotations.push({ type: "told", description: await told(page) });
-  test.info().annotations.push({ type: "notes after", description: (await notesBelow(aliceApi, folder)).join(", ") });
+  // This device's edit is kept: Z made again with it.
+  await expect.poll(async () => (await aliceApi.getNote(z)).content, { message: "the offline edit is on the server", timeout: 30_000 })
+    .toBe("# Z\n\nEdited offline.\n");
+  expect(await notesBelow(aliceApi, folder), "no other note made from it").toEqual([z]);
+  await expect(cameBack(page)).toContainText("“Z” was trashed elsewhere; it's back with your changes.", { timeout: 30_000 });
+  await cameBack(page).getByRole("button", { name: "Open" }).click();
+  await expect(article(page)).toContainText("Edited offline.", { timeout: 30_000 });
 });
 
 test("gaps #13: an upload cut off after its first change goes on once back, and each change reaches the server once @offline", async ({ page, aliceApi, folder }) => {

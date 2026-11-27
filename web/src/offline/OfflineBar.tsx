@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
+import type { Conflict } from "eidolon-core/mode/mode";
 import { CloudOff } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -31,9 +32,21 @@ export function offlineSentence(phase: "offline" | "uploading" | "signIn", waiti
   return "You're offline. Your notes are here; what needs a connection is marked.";
 }
 
-/** The conflicts line: it stays until opened or dismissed, unlike the done line. */
-export function conflictSentence(uploaded: number | null, conflicts: number): string {
-  const what = conflicts === 1 ? "One note was also changed elsewhere: your version is kept beside it." : `${conflicts} notes were also changed elsewhere.`;
+/** The note's name as the tree shows it: its file name without ".md". */
+const noteName = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
+
+/** What one came-back note says: why a note the person or someone else trashed is there again. */
+function cameBackSentence(c: Conflict): string {
+  return c.came === "trashed-here"
+    ? `“${noteName(c.copy)}” came back: it was changed elsewhere after you trashed it.`
+    : `“${noteName(c.copy)}” was trashed elsewhere; it's back with your changes.`;
+}
+
+/** The conflicts line: it stays until opened or dismissed, unlike the done line. `only`: the one conflict, if one. */
+export function conflictSentence(uploaded: number | null, conflicts: number, only?: Conflict): string {
+  const what = conflicts !== 1 ? `${conflicts} notes were also changed elsewhere.`
+    : only?.came !== undefined ? cameBackSentence(only)
+    : "One note was also changed elsewhere: your version is kept beside it.";
   return uploaded === null ? what : `Uploaded ${changes(uploaded)}. ${what}`;
 }
 
@@ -106,7 +119,7 @@ function ConflictsLine({ uploaded }: { uploaded: number | null }) {
   return (
     <div role="status" aria-label="Changed elsewhere" className={barClass}>
       <Dot />
-      <span className="min-w-0 flex-1 py-2 pl-1.5">{conflictSentence(uploaded, conflicts.length)}</span>
+      <span className="min-w-0 flex-1 py-2 pl-1.5">{conflictSentence(uploaded, conflicts.length, conflicts[0])}</span>
       <BarButton onClick={() => (conflicts.length === 1 ? open(conflicts[0]!) : setListing(!listing))}>Open</BarButton>
       <BarButton onClick={() => useOfflineMode.getState().seen()}>Dismiss</BarButton>
       {listing && (

@@ -5,12 +5,15 @@
 // and every change made offline has uploaded, so the app never shows the server's older text right after reconnecting.
 // A mode, once entered, holds at least HOLD_MS: a connection that switches more often is broken anyway, and the bar
 // should not mirror its noise. The hold delays the mode only; the count of changes waiting follows at once.
-import type { Clock } from "../engine/ports";
+import type { CameBack, Clock } from "../engine/ports";
 
 export const HOLD_MS = 15_000;
 
-/** A conflict copy the engines made: Kumbu²'s version kept the path, this device's went beside it. */
-export interface Conflict { vault: string; original: string; copy: string; }
+/**
+ * A conflict copy the engines made: Kumbu²'s version kept the path, this device's went beside it. With `came`, a note
+ * that came back after a trash met an edit, without a copy: `copy` is the note itself.
+ */
+export interface Conflict { vault: string; original: string; copy: string; came?: CameBack; }
 
 export interface ModeState {
   /** The app reads from the copy on this device: while away, and after it until the uploads are through. */

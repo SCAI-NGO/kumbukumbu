@@ -2,7 +2,7 @@
 // The sync engines of this tab's unlocked copy (offline mode design §3, §6), over fetch and the session cookie. They run
 // while the copy is open and this tab leads it; the app hears their conflicts, lost sessions and changes waiting.
 import { KumbuApi, type HttpFn } from "eidolon-core/api/client";
-import { AuthError, type ListedVault } from "eidolon-core/engine/ports";
+import { AuthError, type CameBack, type ListedVault } from "eidolon-core/engine/ports";
 import type { OfflineChoice } from "eidolon-core/store/choice";
 import { MirrorEngines } from "eidolon-core/store/engines";
 import type { SealedMirror } from "eidolon-core/store/mirror";
@@ -15,7 +15,8 @@ import { nameVaults } from "./source";
 import { draftsFor } from "./writing";
 
 export interface EngineEvents {
-  conflict(vaultId: string, original: string, copy: string): void;
+  /** With `came`, no copy: the note itself came back after a trash met an edit. */
+  conflict(vaultId: string, original: string, copy: string, came?: CameBack): void;
   sessionLost(): void;
   waitingChanged(): void;
 }
@@ -88,7 +89,7 @@ function follow(mirror: SealedMirror | null): void {
     remote: (name, id) => new KumbuApi(mirrorHttp, window.location.origin, name, null, id),
     clock: { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as number) },
     onStatus: () => listeners.forEach((l) => l.waitingChanged()),
-    onConflict: (vault, original, copy) => listeners.forEach((l) => l.conflict(vault, original, copy)),
+    onConflict: (vault, original, copy, came) => listeners.forEach((l) => l.conflict(vault, original, copy, came)),
     onAuthLost: () => listeners.forEach((l) => l.sessionLost()),
   });
   running = { mirror, engines };
