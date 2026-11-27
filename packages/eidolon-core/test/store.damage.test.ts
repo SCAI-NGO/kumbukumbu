@@ -425,15 +425,33 @@ describe("each adoption of a vault has its own life", () => {
     expect(mirror.vault(work.id)!.entry("a.md")).toBeUndefined();
   });
 
-  test("a vault synced afresh at an opening goes from the other tabs that hold it", async () => {
+  test("a vault synced afresh at an opening is taken up afresh by the other tabs that hold it", async () => {
     const s = await headRemoved();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const mirror = await reload(s.browser, s.copies);
     warn.mockRestore();
-    await delivered();
-    expect(s.mirror.vault(work.id)).toBeUndefined();
+    await vi.waitFor(() => expect(s.mirror.vault(work.id) ?? s.vault).not.toBe(s.vault));
+    expect(s.mirror.vault(work.id)!.list()).toEqual([]);
     await expect(s.vault.files().writeIf("b.md", null, "two")).rejects.toThrow();
     expect(mirror.vault(work.id)!.list()).toEqual([]);
+  });
+
+  test("notes written in both tabs after a vault was synced afresh at an opening are all kept", async () => {
+    const s = await headRemoved();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const other = await reload(s.browser, s.copies);
+    await vi.waitFor(() => expect(s.mirror.vault(work.id) ?? s.vault).not.toBe(s.vault));
+    const vault = s.mirror.vault(work.id)!;
+    await vault.files().writeIf("x.md", null, "written in the first tab");
+    await delivered();
+    await other.vault(work.id)!.files().writeIf("b.md", null, "written in the second tab");
+    // Each tab has heard of the other's note before it locks.
+    await vi.waitFor(() => expect([vault.entry("b.md"), other.vault(work.id)!.entry("x.md")]).not.toContain(undefined));
+    s.mirror.lock();
+    other.lock();
+    const again = await reload(s.browser, s.copies);
+    warn.mockRestore();
+    expect(again.vault(work.id)!.list().map((e) => e.path).sort()).toEqual(["b.md", "x.md"]);
   });
 
   test("a copy written before lives had epochs opens as it was", async () => {

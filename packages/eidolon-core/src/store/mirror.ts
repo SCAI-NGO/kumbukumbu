@@ -462,6 +462,9 @@ export class SealedMirror {
         await this.onDrop?.(m.vault);
         // Not again where this tab's own contact removed it first.
         if (held !== undefined && m.left !== undefined) this.removed({ vaults: 1, lost: m.left.lost });
+        // Synced afresh at another tab's opening, its meta still stored: this tab takes up the new life. A purge
+        // removed the meta, so nothing opens.
+        await this.reopen(m.vault);
       }
       this.onPurged?.(m.vault);
       return;
