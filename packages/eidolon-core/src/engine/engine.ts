@@ -432,7 +432,7 @@ export class SyncEngine {
         pathFailed = true;
       }
     }
-    this.fullOwed = false;
+    if (full) this.fullOwed = false;
     // The old cursor stays while a path failed, so the next check asks for it again.
     if (!pathFailed) await this.finishCheck(answer);
   }
