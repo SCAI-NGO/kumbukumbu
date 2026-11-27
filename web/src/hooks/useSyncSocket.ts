@@ -206,9 +206,11 @@ export function useSyncSocket() {
     // so the offline mode, which waits for the socket to be down, switches (offline mode design §3a).
     const lost = () => socket?.close();
     window.addEventListener("offline", lost);
+    useSyncStatus.setState({ drop: lost });
     void connect();
     return () => {
       window.removeEventListener("offline", lost);
+      useSyncStatus.setState({ drop: () => {} });
       stopped = true;
       clearTimeout(timer);
       const s = socket;
