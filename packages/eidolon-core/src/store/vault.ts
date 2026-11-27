@@ -479,7 +479,7 @@ class MirrorFiles implements LocalFiles {
   async read(path: string): Promise<string | null> {
     this.v.assertHeld();
     if (this.v.damaged(path)) throw new DamagedRecordError(path);
-    const draft = this.drafts?.text(path) ?? null;
+    const draft = this.draft(path);
     if (draft !== null && this.v.entry(path)?.local !== undefined) return draft;
     const bytes = await this.v.bytes(path);
     return bytes === null ? null : decoder.decode(bytes);
@@ -555,6 +555,14 @@ class MirrorFiles implements LocalFiles {
   isEmptyFolder(): Promise<boolean> { return Promise.resolve(false); }
   madeFolder(): boolean { return false; }
 
+  /**
+   * The open editor's unsaved text, which the engine reads as the file. None in a vault held read-only (a role
+   * lowered while the person typed): that text stays in the editor, and nothing of it is uploaded or copied here.
+   */
+  private draft(path: string): string | null {
+    return this.v.canWrite ? (this.drafts?.text(path) ?? null) : null;
+  }
+
   private held(): string[] {
     return this.v.list().filter((e) => e.local !== undefined).map((e) => e.path);
   }
@@ -570,7 +578,7 @@ class MirrorFiles implements LocalFiles {
   /** The version of the text the user sees: the draft's if one is open, else the stored text's. */
   private async textVersion(path: string, entry: Entry | undefined): Promise<Version | null> {
     if (entry?.local === undefined) return null;
-    const draft = this.drafts?.text(path) ?? null;
+    const draft = this.draft(path);
     if (draft !== null) return versionOf(draft);
     if (entry.local.text) return entry.local.version;
     const bytes = await this.v.bytes(path);

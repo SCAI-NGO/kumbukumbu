@@ -8,6 +8,7 @@ import { versionOf } from "../src/engine/version";
 import type { OfflineChoice } from "../src/store/choice";
 import { MirrorCopies, IDLE_MS, type SealedMirror } from "../src/store/mirror";
 import { IdleLock } from "../src/store/idle";
+import { EditorDrafts } from "../src/store/writing";
 import { MirrorLockedError, SMALL_ATTACHMENT_BYTES, type VaultMirror } from "../src/store/vault";
 import { FakeServer } from "./fakes/fakeServer";
 import { delivered, fakeKdf, FakeBrowser, nodeCrypto, realClock } from "./fakeStore";
@@ -246,6 +247,59 @@ describe("the engine over the mirror", () => {
     await expect(vault.files().read("a.md")).rejects.toThrow(/damaged/);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  describe("in a vault held read-only", () => {
+    /** Bob's read-only vault, mirrored, with text in an open editor; `changed`: a writer changed the note since. */
+    async function readOnly(changed: boolean) {
+      const { mirror } = await setup([team]);
+      const server = new FakeServer();
+      server.refuse = () => "You can only read Work.";
+      await server.seed("plan.md", "one");
+      const vault = await mirror.adopt(team.id);
+      const first = engineFor(vault, server);
+      await first.start();
+      await first.idle();
+      await first.stop();
+      if (changed) await server.agentWrite("plan.md", "two, by Alice");
+      const drafts = new EditorDrafts();
+      const replaced: (string | null)[] = [];
+      drafts.open("plan.md", { text: () => "one, and Bob's typing", replaced: (c) => replaced.push(c) });
+      const engine = new SyncEngine({
+        vault: "Work", device: "Firefox on Linux", local: vault.files(drafts), remote: vault.inventory(server), state: vault.stateStore(), clock: realClock,
+        onStatus: () => {}, onConflict: () => {}, onAuthLost: () => {}, fetchPolicy: vault.downloadOrder(() => {}),
+      });
+      await engine.start();
+      await engine.idle();
+      await engine.stop();
+      const held = vault.list().filter((e) => e.local).map((e) => e.path);
+      return { vault, server, held, replaced };
+    }
+
+    test("the engine reads no editor's text, so it plans no upload", async () => {
+      const { vault, server, held } = await readOnly(false);
+      expect(server.count("put")).toBe(0);
+      expect(held).toEqual(["plan.md"]);
+      expect(vault.waiting()).toBe(0);
+    });
+
+    test("a writer's change comes down without a conflict copy, and the editor is offered it", async () => {
+      const { vault, server, held, replaced } = await readOnly(true);
+      expect(server.count("put")).toBe(0);
+      expect(held).toEqual(["plan.md"]);
+      expect(await vault.files().read("plan.md")).toBe("two, by Alice");
+      expect(replaced).toEqual(["two, by Alice"]);
+      expect(vault.waiting()).toBe(0);
+    });
+  });
+
+  test("in a vault held to write, the engine still reads the editor's text", async () => {
+    const { mirror } = await setup([work]);
+    const vault = await mirror.adopt(work.id);
+    await vault.files().writeIf("plan.md", null, "one");
+    const drafts = new EditorDrafts();
+    drafts.open("plan.md", { text: () => "one, and Ada's typing", replaced: () => {} });
+    expect(await vault.files(drafts).read("plan.md")).toBe("one, and Ada's typing");
   });
 });
 
