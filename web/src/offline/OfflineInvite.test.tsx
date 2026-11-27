@@ -41,6 +41,30 @@ describe("the invitation to keep the notes offline", () => {
     expect(screen.queryByRole("region", { name: "Keep your notes on this device" })).not.toBeInTheDocument();
   });
 
+  test("marks the invitation asked on Set up", async () => {
+    rememberSignIn(true);
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: "Set up" }));
+    expect(localStorage.getItem("kumbu.offlineInvite")).toBe("asked");
+  });
+
+  test("marks the invitation asked on Not now", async () => {
+    rememberSignIn(true);
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    expect(screen.queryByRole("region", { name: "Keep your notes on this device" })).not.toBeInTheDocument();
+    expect(localStorage.getItem("kumbu.offlineInvite")).toBe("asked");
+  });
+
+  test("an invitation shown and not answered comes again at the next start", async () => {
+    rememberSignIn(true);
+    show();
+    await screen.findByRole("region", { name: "Keep your notes on this device" });
+    cleanup();
+    show();
+    expect(await screen.findByRole("region", { name: "Keep your notes on this device" })).toBeInTheDocument();
+  });
+
   test("never comes on a device that may not be the person's own", async () => {
     rememberSignIn(false);
     show();

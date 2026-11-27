@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The one invitation to keep the notes on this device (design §3a, "Turning it on"): only where the device plainly is
-// the person's own (an installed app, or "Keep me signed in" at the last sign-in), once per device, answered or not.
+// the person's own (an installed app, or "Keep me signed in" at the last sign-in), once per device: it counts as asked
+// only once answered, so one that appeared and wasn't answered comes again at the next start.
 import { MirrorCopies } from "eidolon-core/store/mirror";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -39,7 +40,6 @@ export default function OfflineInvite() {
       .then((ports) => new MirrorCopies(ports).forUser(user.id))
       .then((copy) => {
         if (!live || copy !== null) return;
-        markAsked();
         setShown(true);
       })
       .catch(() => {});
@@ -57,13 +57,21 @@ export default function OfflineInvite() {
       <span className="min-w-0 flex-1 py-2 pl-1.5 text-text">Keep your notes on this device for when you're offline?</span>
       <BarButton
         onClick={() => {
+          markAsked();
           setShown(false);
           navigate("/settings/offline");
         }}
       >
         Set up
       </BarButton>
-      <BarButton onClick={() => setShown(false)}>Not now</BarButton>
+      <BarButton
+        onClick={() => {
+          markAsked();
+          setShown(false);
+        }}
+      >
+        Not now
+      </BarButton>
     </section>
   );
 }
