@@ -31,8 +31,8 @@ public sealed record MirrorContactView(
     string Id, string Key, IReadOnlyList<MirrorVaultView> Vaults,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Token = null);
 
-/// <summary><c>password</c>, for <c>POST /{id}/remove</c>: needed to remove another browser's slot whose last contact reported changes waiting, or
-/// that hasn't reported yet: those changes are the one thing in Kumbu² without a trash or a history.</summary>
+/// <summary><c>password</c>, for <c>POST /{id}/remove</c>: needed to remove any browser's slot but this one's: what that
+/// browser hasn't uploaded is the one thing in Kumbu² without a trash or a history.</summary>
 public sealed record RemoveMirrorSlotRequest(string? Password);
 
 /// <summary>A slot in the device list: never its key or token. <c>waiting</c>: the changes the browser had waiting at its
@@ -58,7 +58,7 @@ public static class MirrorSlotsApi
         account.MapPost("/contact", ContactAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 403, 404);
         account.MapPut("/{id}/label", RenameAsync).Errors(400, 401, 403, 404);
         account.MapDelete("/{id}", DeleteAsync).Errors(400, 401, 403, 404);
-        // The same with the password: for another browser's copy with changes waiting.
+        // The same with the password: for another browser's copy.
         account.MapPost("/{id}/remove", RemoveAsync).Errors(400, 401, 403, 404, 429);
     }
 
