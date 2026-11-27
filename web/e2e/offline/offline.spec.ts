@@ -42,7 +42,8 @@ const bar = (page: Page) => page.getByRole("status", { name: "Offline" });
 const source = (page: Page) => page.getByRole("textbox", { name: "Markdown source", exact: true });
 const article = (page: Page) => page.locator("article");
 
-/** The mirror slots this test's devices made: removed after it, as an account keeps at most 20. */
+/** The mirror slots this test's devices made: removed after it, as an account keeps at most 20, with Alice's password
+ * where they are another session's. */
 let made: string[] = [];
 
 /** The slot ids of the copies in this browser's IndexedDB: their headers are its one record in the clear. */
@@ -64,7 +65,12 @@ function slotIds(page: Page): Promise<string[]> {
 }
 
 test.afterEach(async ({ aliceApi }) => {
-  for (const id of made) await aliceApi.send("DELETE", `/api/account/mirror-slots/${id}`);
+  for (const id of made) {
+    const deleted = await aliceApi.send("DELETE", `/api/account/mirror-slots/${id}`);
+    if (deleted.status() !== 400) continue;
+    await reservePassword("alice");
+    await aliceApi.send("POST", `/api/account/mirror-slots/${id}/remove`, { data: { password: secrets().passwords.alice } });
+  }
   made = [];
 });
 
