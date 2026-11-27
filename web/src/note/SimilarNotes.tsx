@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ChevronDown, ChevronRight, Link, Sparkles, X } from "lucide-react";
 import { useId, useState } from "react";
-import { errorText } from "../api/error-text";
+import { errorText, isVaultBusy } from "../api/error-text";
 import { useMayChange } from "../api/notes";
 import { crumbOf, titleOf, type NoteAt } from "../api/paths";
 import { useAddLink, useNotRelated, useSimilarNotes, type SimilarNote, type SimilarNotesView } from "../api/similar";
@@ -80,7 +80,7 @@ export default function SimilarNotes({ path }: { path: string }) {
         {asking && similar.isPending && <p className="py-3 text-dim">Looking for similar notes …</p>}
         {asking && similar.isError && (
           <p className="flex items-center gap-3 py-3 text-dim">
-            Couldn't look for similar notes.
+            {isVaultBusy(similar.error) ? errorText(similar.error) : "Couldn't look for similar notes."}
             <button type="button" onClick={() => void similar.refetch()} className="min-h-12 px-2 text-accent-text underline focus-visible:outline-2 focus-visible:outline-accent">
               Try again
             </button>

@@ -37,6 +37,13 @@ describe("the API client", () => {
     expect(useOfflineMode.getState().offline).toBe(true);
   });
 
+  test("a 503 of Kumbu²'s own, busy for a moment, reaches it", async () => {
+    const busy = { "Content-Type": "application/json", "X-Kumbu-Version": "1.0.0" };
+    fakeApi({ "GET /api/version": () => new Response(JSON.stringify({ error: "The server is busy; try again in a moment." }), { status: 503, headers: busy }) });
+    await api.GET("/api/version");
+    expect(useOfflineMode.getState().offline).toBe(false);
+  });
+
   test("an ordinary failure of the app's own is no reason", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("a bug"))));
     await api.GET("/api/version").catch(() => {});

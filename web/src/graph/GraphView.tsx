@@ -3,6 +3,7 @@ import { CalendarDays, Eye, Ghost, List, Maximize, Paperclip, SlidersHorizontal,
 import { useCallback, useId, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { HttpError } from "../api/client";
+import { isVaultBusy } from "../api/error-text";
 import { useTree } from "../api/notes";
 import { vaultOf, viewUrl } from "../api/paths";
 import { useErrorTextFor } from "../discreet/errorText";
@@ -103,9 +104,9 @@ export default function GraphView({ path, otherPath, running, mode, onOpened }: 
     const measured = [...links.values()].filter(Boolean).length;
     return {
       model: { nodes: plain.nodes, edges: plain.edges.map((e, i) => ({ ...e, s: scores[i].score })) },
-      similarityText: similarityLine(links.size, measured, answer),
+      similarityText: similarityLine(links.size, measured, answer, isVaultBusy(similar.error)),
     };
-  }, [plain, similar.data, similar.isPlaceholderData]);
+  }, [plain, similar.data, similar.isPlaceholderData, similar.error]);
   const neighbours = useMemo(
     () => (model?.nodes ?? []).filter((n) => n.depth > 0).sort((a, b) => a.depth - b.depth || a.title.localeCompare(b.title)),
     [model],

@@ -373,6 +373,14 @@ describe("GraphColumn", () => {
     expect(await screen.findByText("Similarity not measured: search by meaning is off on this server")).toBeInTheDocument();
   });
 
+  it("says the server is busy when it answers so for the similarity", async () => {
+    show({ similarity: () => new Response(JSON.stringify({ error: "The server is busy; try again in a moment." }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "X-Kumbu-Version": "1.0.0" },
+        }) });
+    expect(await screen.findByText("Similarity not measured: the server is busy. Try again in a moment.")).toBeInTheDocument();
+  });
+
   it("suggests nothing, and asks for nothing, with the layer off", async () => {
     const { fetch } = show();
     await screen.findByRole("button", { name: "node Plan" });

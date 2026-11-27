@@ -160,4 +160,19 @@ describe("similar notes", () => {
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("No similar notes that aren't linked.")).toBeInTheDocument();
   });
+
+  it("says when the server is busy, and offers a retry", async () => {
+    let calls = 0;
+    const busy = () => new Response(JSON.stringify({ error: "The server is busy; try again in a moment." }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "X-Kumbu-Version": "1.0.0" },
+        });
+    fakeApi({ [similarUrl]: () => (++calls === 1 ? busy() : ready()), "GET /api/vaults": vaults() });
+    show();
+    await openSection();
+    expect(await screen.findByText(/The server is busy; try again in a moment\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't look for similar notes/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("pipes")).toBeInTheDocument();
+  });
 });

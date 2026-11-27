@@ -120,6 +120,11 @@ describe("similarityLine", () => {
     expect(similarityLine(1, 0, { state: "ready", reason: null, pairs: [{ from: "/W/a.md", to: "/W/b.md", score: null }] })).toBe("Similarity measured for 0 of 1 link");
   });
 
+  it("says the server is busy when it answered so", () => {
+    expect(similarityLine(2, 0, undefined, true)).toBe("Similarity not measured: the server is busy. Try again in a moment.");
+    expect(similarityLine(2, 2, ready(2), true)).toBeNull();
+  });
+
   it("gives the server's reason when it can't measure", () => {
     expect(similarityLine(2, 0, { state: "off", reason: "search by meaning is off on this server", pairs: [] })).toBe("Similarity not measured: search by meaning is off on this server");
     expect(similarityLine(2, 0, { state: "preparing", reason: null, pairs: [] })).toBe("Similarity not measured yet: search by meaning is getting ready");

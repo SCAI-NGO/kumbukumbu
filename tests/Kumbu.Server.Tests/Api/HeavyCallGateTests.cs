@@ -63,6 +63,8 @@ public sealed class HeavyCallGateTests(KumbuAppFactory app)
         using var response = await user.GetAsync(url);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Equal(TimeSpan.FromSeconds(5), response.Headers.RetryAfter?.Delta);
+        // Kumbu²'s own answer, which the web app tells from a gateway's by its version.
+        Assert.True(response.Headers.Contains("X-Kumbu-Version"));
         Assert.Equal("The server is busy; try again in a moment.", (await RestClient.JsonAsync(response))["error"]!.GetValue<string>());
     }
 

@@ -26,7 +26,8 @@ export function errorText(err: unknown): string {
 /** A 404: what was asked for isn't there, or isn't the caller's to know of. */
 export const isNotFound = (err: unknown): boolean => err instanceof HttpError && err.status === 404;
 
-/** A vault being re-encrypted: the one 503 with a sentence of the API's own (a proxy's 503 has none). Over in seconds. */
+/** A 503 with a sentence of the API's own (a proxy's 503 has none): a vault being re-encrypted, or the server busy with
+ * calls that cost seconds of CPU. Over in seconds. */
 export function isVaultBusy(err: unknown): boolean {
   return err instanceof HttpError && err.status === 503 && !!err.message;
 }

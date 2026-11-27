@@ -71,8 +71,9 @@ const sessionEnds: Middleware = {
   onResponse: ({ request, response, schemaPath }) => endOnLostSession(`${request.method} ${schemaPath}`, response),
 };
 
-/** Gateways answer these while Kumbu² behind them is down. */
-const unreachable = new Set([502, 503, 504]);
+/** Gateways answer these while Kumbu² behind them is down. Kumbu²'s own 503 (a vault being re-encrypted, the server busy
+ * for a moment) carries its version, and reached it. */
+const unreachable = (response: Response) => [502, 503, 504].includes(response.status) && !response.headers.has("X-Kumbu-Version");
 
 /**
  * What the offline mode needs to hear of every request (offline mode design §3a): whether it reached Kumbu²; and the
@@ -85,7 +86,7 @@ const reachWatch: Middleware = {
     return request;
   },
   onResponse({ response }) {
-    if (unreachable.has(response.status)) return void useOfflineMode.getState().failed();
+    if (unreachable(response)) return void useOfflineMode.getState().failed();
     useOfflineMode.getState().reached();
     // Kumbu² answers again: a sign-out made while away reaches it now, not only at the next start.
     if (signOutPending()) void endPendingSignOut();
@@ -105,7 +106,7 @@ const versionWatch: Middleware = {
 
 /** What the middleware hears of every answer, for a request sent without openapi-fetch (an upload with progress). */
 export async function heard(key: string, response: Response) {
-  if (unreachable.has(response.status)) useOfflineMode.getState().failed();
+  if (unreachable(response)) useOfflineMode.getState().failed();
   else useOfflineMode.getState().reached();
   useUpdate.getState().report(response.headers.get("X-Kumbu-Version"));
   await endOnLostSession(key, response);
