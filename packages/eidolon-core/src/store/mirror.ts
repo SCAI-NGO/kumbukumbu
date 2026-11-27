@@ -49,6 +49,24 @@ export async function ownedBy(header: CopyHeader, userId: string): Promise<boole
   return header.user === (await userHash(userId));
 }
 
+/** The server's ids and tokens are Base64Url or hex: nothing else goes into a request header. */
+const TOKEN = /^[A-Za-z0-9_-]+$/;
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+const isString = (v: unknown): v is string => typeof v === "string";
+
+/**
+ * A header with every field of its type, or null. The idle limit is held to the longest a session has: a shorter one
+ * only locks sooner.
+ */
+function inShape(h: unknown): CopyHeader | null {
+  if (!isObject(h) || h.schema !== 2 || !isString(h.copy) || !TOKEN.test(h.copy) || !isString(h.user) || !isString(h.login)) return null;
+  const { slot, password, idleMs } = h;
+  if (!isObject(slot) || !isString(slot.id) || !TOKEN.test(slot.id) || !isString(slot.token) || !TOKEN.test(slot.token)) return null;
+  if (!isObject(password) || !isObject(password.kdf) || !isString(password.salt) || !isString(password.wrapped)) return null;
+  if (typeof idleMs !== "number" || !Number.isFinite(idleMs)) return null;
+  return { ...(h as unknown as CopyHeader), idleMs: Math.min(idleMs, REMEMBERED_IDLE_MS) };
+}
+
 function mirrorKey(answer: SlotAnswer): Uint8Array<ArrayBuffer> {
   const raw = fromBase64Url(answer.key);
   if (raw === null || raw.byteLength !== 32) throw new Error("The server's mirror key is not an AES-256 key.");
@@ -61,14 +79,16 @@ export class MirrorCopies {
   async headers(): Promise<CopyHeader[]> {
     const found: CopyHeader[] = [];
     for (const [, value] of await this.p.storage.scan(HEADERS)) {
-      // The one record in the clear, so anyone with the disk can change it: one that doesn't parse is passed over.
-      let header: CopyHeader | null = null;
+      // The one record in the clear, so anyone with the disk can change it: one that doesn't parse, or isn't in
+      // shape, is passed over.
+      let parsed: unknown;
       try {
-        header = JSON.parse(new TextDecoder().decode(value)) as CopyHeader | null;
+        parsed = JSON.parse(new TextDecoder().decode(value));
       } catch {
         continue;
       }
-      if (header !== null && typeof header === "object" && header.schema === 2) found.push(header);
+      const header = inShape(parsed);
+      if (header !== null) found.push(header);
     }
     return found;
   }

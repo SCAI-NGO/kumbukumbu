@@ -95,13 +95,15 @@ export async function sweepRemovedCopies(): Promise<void> {
   if (typeof indexedDB === "undefined") return;
   const all = await mirrorCopies();
   for (const header of await all.headers()) {
+    let response: Response;
     try {
       // Without the cookie: the question carries no session (ADR 0033), and one still live would answer for itself.
-      const response = await fetch("/api/session", { credentials: "omit", headers: { "Kumbu-Mirror": header.slot.token } });
-      const body = (await response.json().catch(() => null)) as { code?: string } | null;
-      if (response.status === 401 && body?.code === "mirror-wipe") await all.wipe(header.copy);
+      response = await fetch("/api/session", { credentials: "omit", headers: { "Kumbu-Mirror": header.slot.token } });
     } catch {
       return; // offline: the next visit asks
     }
+    const body = (await response.json().catch(() => null)) as { code?: string } | null;
+    // One copy's removal failing leaves it for the next visit, and the others are still asked after.
+    if (response.status === 401 && body?.code === "mirror-wipe") await all.wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
   }
 }

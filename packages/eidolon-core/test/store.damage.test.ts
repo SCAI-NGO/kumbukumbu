@@ -4,7 +4,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { ListedVault } from "../src/engine/ports";
 import { MirrorEngines } from "../src/store/engines";
-import { IDLE_MS, MirrorCopies, type SealedMirror } from "../src/store/mirror";
+import { IDLE_MS, MirrorCopies, REMEMBERED_IDLE_MS, type SealedMirror } from "../src/store/mirror";
 import { Records } from "../src/store/vault";
 import { FakeServer } from "./fakes/fakeServer";
 import { delivered, FakeBrowser, realClock } from "./fakeStore";
@@ -138,7 +138,7 @@ describe("a vault's mirror purged under a write", () => {
   });
 });
 
-describe("a header that doesn't parse", () => {
+describe("a header that doesn't parse, or isn't in shape", () => {
   test.each([["not JSON", "{"], ["JSON null", "null"], ["empty", ""]])("%s is passed over, and offline can be turned on again with one slot", async (_name, text) => {
     const { browser, copies } = await setup();
     browser.storage.records.set("h/zzzz", bytes(text));
@@ -146,6 +146,43 @@ describe("a header that doesn't parse", () => {
     expect(await copies.forUsername("someone else")).toBeNull();
     await copies.create(signIn);
     expect(browser.slots.slots.size).toBe(2);
+  });
+
+  /** Ada's header as stored, with `change` made to it, written again. */
+  async function changed(change: (header: Record<string, unknown>) => void) {
+    const { browser, copies, mirror } = await setup();
+    mirror.lock();
+    const [name, value] = [...browser.storage.records].find(([k]) => k.startsWith("h/"))!;
+    const header = JSON.parse(new TextDecoder().decode(value)) as Record<string, unknown>;
+    change(header);
+    browser.storage.records.set(name, bytes(JSON.stringify(header)));
+    return { browser, copies };
+  }
+
+  test.each<[string, (h: Record<string, unknown>) => void]>([
+    ["only its schema", (h) => { for (const k of Object.keys(h)) if (k !== "schema") delete h[k]; }],
+    ["no slot", (h) => { delete h.slot; }],
+    ["a slot without its token", (h) => { h.slot = { id: "s1" }; }],
+    ["a token with a line break", (h) => { h.slot = { ...(h.slot as object), token: "abc\r\nX-Other: 1" }; }],
+    ["a slot id with a space", (h) => { h.slot = { ...(h.slot as object), id: "s 1" }; }],
+    ["no password wrap", (h) => { delete h.password; }],
+    ["a wrap without its salt", (h) => { h.password = { ...(h.password as object), salt: 7 }; }],
+    ["an idle limit that is no number", (h) => { h.idleMs = "1800000"; }],
+    ["a login that is no string", (h) => { h.login = null; }],
+  ])("a header with %s is passed over", async (_name, change) => {
+    const { copies } = await changed(change);
+    expect(await copies.headers()).toEqual([]);
+    expect(await copies.forUsername(signIn.username)).toBeNull();
+  });
+
+  test("an idle limit above the longest a session has is held to it", async () => {
+    const { copies } = await changed((h) => { h.idleMs = 2_000_000_000; });
+    expect((await copies.headers())[0]?.idleMs).toBe(REMEMBERED_IDLE_MS);
+  });
+
+  test("an idle limit within its range is kept as it is", async () => {
+    const { copies } = await changed((h) => { h.idleMs = 60_000; });
+    expect((await copies.headers())[0]?.idleMs).toBe(60_000);
   });
 });
 

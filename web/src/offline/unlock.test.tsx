@@ -15,7 +15,7 @@ import { runOfflineHost } from "./host";
 import { lockCopy, onBeforeLock, useOfflineMode } from "./mode";
 import { browserPorts } from "./ports";
 import { turnOff } from "./turnOn";
-import { endPendingSignOut, signOutOffline, signOutPending, unlockOffline } from "./unlock";
+import { endPendingSignOut, signOutOffline, signOutPending, sweepRemovedCopies, unlockOffline } from "./unlock";
 
 const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 const vaults = [{ id: "v1", tag: "t1", canWrite: true, pending: false }];
@@ -195,5 +195,68 @@ describe("a sign-out offline", () => {
     await signOutOffline(false);
     expect(useOfflineCopy.getState().mirror).toBeNull();
     expect(await unlockOffline("ada", "pw")).toBe(true);
+  });
+});
+
+describe("the sign-in page's sweep", () => {
+  /** The server, no session: every copy's slot is gone, so each token gets the 401 that says wipe. */
+  function slotsGone() {
+    const asked: (string | null)[] = [];
+    vi.stubGlobal("fetch", vi.fn((_input: unknown, init?: RequestInit) => {
+      asked.push(new Headers(init?.headers).get("Kumbu-Mirror"));
+      return Promise.resolve(json(401, { error: "This browser's offline copy was removed; it is deleted here too.", code: "mirror-wipe" }));
+    }));
+    // The removal takes a Web Lock, which jsdom hasn't: one tab, so it runs at once.
+    vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } }));
+    return asked;
+  }
+
+  const plant = async (header: unknown) =>
+    (await browserPorts()).storage.write({ put: [["h/-", new TextEncoder().encode(JSON.stringify(header))]] });
+  const adas = async () => new MirrorCopies(await browserPorts()).forUsername("ada");
+
+  test("goes on past a header it can't use", async () => {
+    await adasCopy();
+    await plant({ schema: 2 });
+    const asked = slotsGone();
+    await sweepRemovedCopies();
+    expect(asked).toEqual(["tok"]);
+    expect(await adas()).toBeNull();
+  });
+
+  test("goes on past a header whose token is no header value", async () => {
+    await adasCopy();
+    const { storage } = await browserPorts();
+    const [, value] = (await storage.scan("h/"))[0]!;
+    await plant({ ...JSON.parse(new TextDecoder().decode(value)), copy: "other", slot: { id: "s2", token: "tok\r\nX-Other: 1" } });
+    const asked = slotsGone();
+    await sweepRemovedCopies();
+    expect(asked).toEqual(["tok"]);
+    expect(await adas()).toBeNull();
+  });
+
+  test("goes on past a copy it couldn't remove", async () => {
+    await adasCopy();
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s2", token: "tok-bob", key, vaults }))));
+    (await new MirrorCopies(await browserPorts()).create({ userId: "u2", username: "Bob", password: "pw", label: "Test", idleMs: 60_000 })).lock();
+    const asked = slotsGone();
+    const wipe = vi.spyOn(MirrorCopies.prototype, "wipe").mockRejectedValueOnce(new Error("The storage refused."));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await sweepRemovedCopies();
+    expect(asked.sort()).toEqual(["tok", "tok-bob"]);
+    expect(wipe).toHaveBeenCalledTimes(2);
+    wipe.mockRestore();
+    error.mockRestore();
+  });
+
+  test("stops when the server can't be reached", async () => {
+    await adasCopy();
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s2", token: "tok-bob", key, vaults }))));
+    (await new MirrorCopies(await browserPorts()).create({ userId: "u2", username: "Bob", password: "pw", label: "Test", idleMs: 60_000 })).lock();
+    const fetch = vi.fn(() => Promise.reject(new TypeError("Failed to fetch")));
+    vi.stubGlobal("fetch", fetch);
+    await sweepRemovedCopies();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await adas()).not.toBeNull();
   });
 });
