@@ -175,29 +175,39 @@ public class SuggestionServiceTests
     }
 
     [Theory]
-    [InlineData("/Work/Plan#Budget.md", "#")]
-    [InlineData("/Work/x]] and [[Plan.md", "]")]
-    [InlineData("/Work/Step^2.md", "^")]
-    public async Task Add_link_refuses_a_target_whose_name_holds_link_syntax_with_a_sentence(string target, string sign)
+    [InlineData("/Work/C# tips.md", "- [C# tips](/C%23%20tips.md)")]
+    [InlineData("/Work/Plan#Budget.md", "- [Plan#Budget](/Plan%23Budget.md)")]
+    [InlineData("/Work/a^b.md", "- [a^b](/a%5Eb.md)")]
+    [InlineData("/Work/x]] and [[Plan.md", @"- [x\]\] and \[\[Plan](/x%5D%5D%20and%20%5B%5BPlan.md)")]
+    [InlineData("/Work/[draft] notes.md", @"- [\[draft\] notes](/%5Bdraft%5D%20notes.md)")]
+    [InlineData("/Work/Deep/C# tips.md", "- [C# tips](/Deep/C%23%20tips.md)")]
+    public async Task Add_link_links_a_note_whose_name_holds_a_sign_a_wiki_link_reads_as_its_own_with_a_markdown_link_to_its_path(
+        string target, string line)
+    {
+        var store = new InMemoryNoteStore(("/Work/a.md", "A\n"), ("/Work/Plan.md", "Plan\n"), ("/Work/Budget.md", "Budget\n"), (target, "Target\n"));
+
+        Ok(await Service(store).AddLinkAsync("/Work/a.md", target, Ct));
+
+        var written = await Content(store, "/Work/a.md");
+        Assert.Equal($"A\n\n## Related\n\n{line}\n", written);
+        var resolver = new LinkResolver("Work", await store.ListNotesUnderAsync(P("/Work"), Ct));
+        var link = Assert.Single(NoteLink.Parse(written!));
+        var resolved = resolver.Resolve(P("/Work/a.md"), link);
+        Assert.Equal(LinkKind.Note, resolved.Kind);
+        Assert.Equal(P(target), resolved.Target);
+    }
+
+    [Theory]
+    [InlineData("/Work/a|b.md", "'a|b.md' contains '|', which Windows can't store")]
+    [InlineData("/Work/x\n- [[Plan]].md", "'x\n- [[Plan]].md' contains a control character")]
+    public async Task Add_link_refuses_a_target_whose_name_no_writer_could_make(string target, string problem)
     {
         var store = new InMemoryNoteStore(("/Work/a.md", "A\n"), ("/Work/Plan.md", "Plan\n"), (target, "Target\n"));
 
         var result = await Service(store).AddLinkAsync("/Work/a.md", target, Ct);
 
         Assert.True(result.IsError);
-        Assert.Equal($"similar: {target} can't be linked: its name holds '{sign}', which a wiki link reads as its own; rename the note to link it", result.Output);
-        Assert.Equal("A\n", await Content(store, "/Work/a.md"));
-    }
-
-    [Fact]
-    public async Task Add_link_refuses_a_target_whose_name_no_writer_could_make()
-    {
-        var store = new InMemoryNoteStore(("/Work/a.md", "A\n"), ("/Work/a|b.md", "Target\n"));
-
-        var result = await Service(store).AddLinkAsync("/Work/a.md", "/Work/a|b.md", Ct);
-
-        Assert.True(result.IsError);
-        Assert.Equal("similar: 'a|b.md' contains '|', which Windows can't store", result.Output);
+        Assert.Equal($"similar: {problem}", result.Output);
         Assert.Equal("A\n", await Content(store, "/Work/a.md"));
     }
 }

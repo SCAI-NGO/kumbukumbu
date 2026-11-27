@@ -63,9 +63,9 @@ public static class NotRelated
 }
 
 /// <summary>
-/// The two answers to a suggested link (link prediction spec §3.4, §3.6), for the web app: Add link appends <c>- [[Other]]</c>
-/// to the note's <c>## Related</c> section, made at the end if missing; Not related adds the other note to its
-/// <c>not-related</c> property, or with <c>undo</c> takes it out again. As <see cref="Tags.FlagService"/>: read, change, check,
+/// The two answers to a suggested link (link prediction spec §3.4, §3.6), for the web app: Add link appends <c>- [[Other]]</c>,
+/// or <c>- [Other](/Other.md)</c> where a wiki link can't name the note, to the note's <c>## Related</c> section, made at
+/// the end if missing; Not related adds the other note to its <c>not-related</c> property, or with <c>undo</c> takes it out again. As <see cref="Tags.FlagService"/>: read, change, check,
 /// compare-and-swap as the caller, retried on the new state.
 /// </summary>
 public sealed class SuggestionService(INoteStore store, NoteWriter writer)
@@ -80,11 +80,6 @@ public sealed class SuggestionService(INoteStore store, NoteWriter writer)
     {
         var (path, target, problem) = await PairAsync(pathText, targetText, ct);
         if (problem is not null) return problem;
-        // [[…]] would read these as a heading, a block, an alias or the link's end, and lead elsewhere.
-        if (LinkResolver.LinkText(target!).FirstOrDefault(c => "#^|[]".Contains(c)) is var sign and not '\0')
-        {
-            return Error($"{target!.Value} can't be linked: its name holds '{sign}', which a wiki link reads as its own; rename the note to link it");
-        }
 
         var notes = await store.ListNotesUnderAsync(VaultPath.Root.Child(path!.Vault!), ct);
         var title = LinkResolver.StripMd(target!.Name);
@@ -93,7 +88,12 @@ public sealed class SuggestionService(INoteStore store, NoteWriter writer)
         // target, as it does beside the source.
         var unique = notes.Count(n => LinkResolver.StripMd(n.Name).Equals(title, StringComparison.OrdinalIgnoreCase)) == 1;
         var link = unique && resolved is { Kind: LinkKind.Note } && resolved.Target == target ? title : LinkResolver.LinkText(target);
-        return await RewriteAsync(path, content => WithRelated(content, $"- [[{link}]]"), $"linked {target.Value} from {path.Value}", ct);
+        // [[…]] would read these as a heading, a block, an alias or the link's end, and lead elsewhere: a Markdown link
+        // to the path from the vault's root names the note exactly, as mv writes one.
+        var item = link.Any(c => "#^|[]".Contains(c))
+            ? $"- [{string.Concat(title.Select(c => c is '[' or ']' or '\\' ? $"\\{c}" : c.ToString()))}]({MarkdownLink.Encode(target)})"
+            : $"- [[{link}]]";
+        return await RewriteAsync(path, content => WithRelated(content, item), $"linked {target.Value} from {path.Value}", ct);
     }
 
     public async Task<ShellResult> NotRelatedAsync(string pathText, string otherText, bool undo, CancellationToken ct)
