@@ -87,7 +87,7 @@ describe("the API client", () => {
   });
 
   test("a 401 saying mirror-wipe ends the session even while a re-encryption's recovery key is shown", async () => {
-    useSession.getState().signedIn({ user, previousSignInAt: null });
+    // Nobody signed in, as in the test above: the copy's token goes with the request.
     useOfflineCopy.getState().set({ ...header }, { lock: vi.fn() } as unknown as SealedMirror);
     fakeApi({ "GET /api/vaults": () => json(401, { error: "Gone.", code: "mirror-wipe" }) });
     vi.stubGlobal("indexedDB", undefined);
