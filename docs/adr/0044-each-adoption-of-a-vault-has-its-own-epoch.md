@@ -7,7 +7,7 @@
 
 ## Context
 
-[0007](0007-a-version-counter-for-sealed-records.md) stamps every sealed record of a vault's mirror with a generation, and the vault's head names the current generation of each record, so an older record put back in its place reads as damage. The generations count from zero whenever the vault's mirror starts again: when the vault is taken into the copy anew (re-keyed, unticked and ticked again), and when its head record is missing, which reads as an empty vault. A record of the earlier mirror, still bound to the same vault and path, then matches a generation of the new one and opens as current.
+[0007](0007-a-version-counter-for-sealed-records.md) stamps every sealed record of a vault's mirror with a generation, and the vault's head names the current generation of each record, so an older record put back in its place reads as damage. The generations count from zero whenever the vault's mirror starts again: when the vault is taken into the copy anew (re-keyed, unticked and ticked again), and when its head record is missing, which reads as an empty vault. Generations that start again need something that names which life of the mirror they belong to.
 
 ## Decision
 
@@ -18,7 +18,7 @@ Each adoption of a vault into the copy has its own epoch: a random value in the 
 - The generations make sense only within one life of the vault's mirror; the epoch names that life, so the generations may start again without meeting an earlier life's.
 - Bound into the sealed records, the epoch can't be changed without the key, as the generation can't.
 - A missing head can't be told from a removed one, and starting from zero would reuse the generations of the records still there; a new epoch keeps the rule of 0007 whatever else is missing.
-- Clearing the vault's records at each adoption, which the copy already does, was weighed and lost: it removes what is there at that moment, not a copy of a record put back later.
+- Clearing the vault's records at each adoption, which the copy already does, was weighed and lost: it covers what is there at that moment only.
 
 ## Consequences
 

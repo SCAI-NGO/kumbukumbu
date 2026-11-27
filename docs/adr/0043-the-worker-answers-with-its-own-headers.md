@@ -7,7 +7,7 @@
 
 ## Context
 
-This record supersedes [0021](0021-the-service-worker-checks-what-it-serves.md), which lets the app shell's service worker serve a kept file only while its bytes are the build's, hashed against the list the build writes into the worker's own script. Any page of the origin can write the worker's cache, and an answer is more than its bytes: its status, its headers (the content type, the `Content-Security-Policy`, which the built page and the workers carry only as a header) and the URL it came from, which is the base a module script's relative imports resolve against. 0021's promise, that script which ran once in the origin can't stay in it through the cache, is meant for the whole answer the worker gives, not only its bytes.
+This record supersedes [0021](0021-the-service-worker-checks-what-it-serves.md), which lets the app shell's service worker serve a kept file only while its bytes are the build's, hashed against the list the build writes into the worker's own script. 0021 checks a kept file's bytes; the rest of the answer came from the cache as it was stored. Building the whole answer in the worker makes an offline start run under the same headers as an online one.
 
 ## Decision
 
@@ -15,7 +15,7 @@ The worker never hands on the response it finds in the cache. From the bytes it 
 
 ## Why
 
-- The bytes are the one part of a kept answer the worker can check; everything else in it is whatever was written into the cache. Building the answer from the bytes leaves nothing else to check.
+- The bytes are the one part of a kept answer the worker checks; building the answer from them leaves nothing else to check.
 - The headers aren't the worker's to choose: they are the server's for the same file, so an offline start runs under the same policy as an online one. The build writes each file's content type beside its hash; the two policies are a copy in `web/sw/policy.ts`, which a test holds equal to the server's, since the image's web build doesn't see the server's sources.
 - A new response has no URL of its own, so a module's imports resolve against the URL the page asked for: the app's own.
 - Checking the cached headers against an allowed list was weighed and lost: it would have to know every header a browser might act on, now and later; setting them ourselves needs no such list.

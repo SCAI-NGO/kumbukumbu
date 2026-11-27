@@ -7,7 +7,7 @@
 
 ## Context
 
-[0009](0009-password-to-remove-a-copy-with-pending-changes.md) asked for the password before removing another device's offline copy only when that device's last contact reported changes waiting, or reported no count; a copy whose last contact said nothing was waiting went with a confirmation, and "End other sessions" took those copies with the sessions. The count is what the device said when it was last online: whatever it wrote offline since, the server can't know.
+[0009](0009-password-to-remove-a-copy-with-pending-changes.md) asked for the password before removing another device's offline copy only when that device's last contact reported changes waiting, or reported no count; a copy whose last contact said nothing was waiting went with a confirmation, and "End other sessions" took those copies with the sessions. A rule that depends on a count the person can't see in the device list is hard to follow.
 
 ## Decision
 
