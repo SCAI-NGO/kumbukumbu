@@ -83,6 +83,8 @@ describe("turning offline on while the signed-in user changes", () => {
       if (`${method} ${path}` === "DELETE /api/account/mirror-slots/s1") return noContent();
       throw new Error(`Unexpected request: ${method} ${path}`);
     }));
+    // One tab: the removal takes the copy's lock, and jsdom has no Web Locks.
+    Object.defineProperty(navigator, "locks", { value: { request: (_: string, fn: () => unknown) => fn() }, configurable: true });
     const turningOff = turnOff(header);
     await contacted;
     // Signed out (the copy locks) and Bob in, with his own copy open, while the contact gets no answer.
@@ -95,5 +97,6 @@ describe("turning offline on while the signed-in user changes", () => {
     expect(bobs.remove).not.toHaveBeenCalled();
     expect(useOfflineCopy.getState().mirror).toBe(bobs);
     expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).toBeNull();
+    Reflect.deleteProperty(navigator, "locks");
   });
 });
