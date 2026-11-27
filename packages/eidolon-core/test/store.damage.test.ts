@@ -90,6 +90,56 @@ describe("records removed or changed on the device, without the key", () => {
   });
 });
 
+describe("folder markers on the device", () => {
+  const markers = ["Drafts/.vaultkeep", "Projects/.vaultkeep"];
+
+  /** Two notes and two folders kept by their markers, all here, the copy locked. */
+  async function withMarkers() {
+    const s = await setup();
+    await s.server.seed("a.md", "text of a.md");
+    await s.server.seed("Projects/b.md", "text of Projects/b.md");
+    for (const marker of markers) await s.server.seedFile(marker, new Uint8Array(0));
+    const engines = s.enginesOf(s.mirror);
+    await engines.start();
+    await vi.waitFor(() => expect(heldPaths(s.mirror)).toEqual([...markers, "Projects/b.md", "a.md"]), { timeout: 5000 });
+    await engines.stop();
+    s.mirror.lock();
+    return s;
+  }
+
+  test("stat and size report a damaged record as damage", async () => {
+    const { browser, copies } = await withMarkers();
+    for (const key of keysWith(browser, "/e/")) browser.storage.records.delete(key);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const files = (await reload(browser, copies)).vault(work.id)!.files();
+    warn.mockRestore();
+    await expect(files.stat("Drafts/.vaultkeep")).rejects.toThrow(/damaged/);
+    await expect(files.size("Drafts/.vaultkeep")).rejects.toThrow(/damaged/);
+  });
+
+  test("every entry removed on the device: no marker is removed in Kumbu²", async () => {
+    const { browser, copies, server, enginesOf } = await withMarkers();
+    for (const key of keysWith(browser, "/e/")) browser.storage.records.delete(key);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await runOnce(enginesOf(await reload(browser, copies)));
+    warn.mockRestore();
+    expect(removals(server)).toEqual([]);
+    expect(markers.filter((m) => server.files.has(m))).toEqual(markers);
+  });
+
+  test("a real deletion of a folder marker still reaches the server", async () => {
+    const { browser, copies, server, enginesOf } = await withMarkers();
+    const mirror = await reload(browser, copies);
+    const files = mirror.vault(work.id)!.files();
+    await files.trashBinaryIf("Drafts/.vaultkeep", mirror.vault(work.id)!.entry("Drafts/.vaultkeep")!.local!.version);
+    expect(await files.stat("Drafts/.vaultkeep")).toBeNull();
+    expect(await files.size("Drafts/.vaultkeep")).toBeNull();
+    mirror.lock();
+    await runOnce(enginesOf(await reload(browser, copies)));
+    expect(removals(server)).toEqual(["Drafts/.vaultkeep"]);
+  });
+});
+
 describe("a vault's mirror purged under a write", () => {
   test("a write waiting for the copy's lock is refused once its vault is purged, and leaves nothing behind", async () => {
     const { browser, mirror, server, enginesOf } = await setup();

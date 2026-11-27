@@ -529,13 +529,16 @@ class MirrorFiles implements LocalFiles {
     return bytes === null ? null : decoder.decode(bytes);
   }
 
+  // A folder marker is never read, only looked at: these tell damage from a deletion too.
   async size(path: string): Promise<number | null> {
     this.v.assertHeld();
+    if (this.v.damaged(path)) throw new DamagedRecordError(path);
     return this.v.entry(path)?.local?.size ?? null;
   }
 
   async stat(path: string): Promise<FileStat | null> {
     this.v.assertHeld();
+    if (this.v.damaged(path)) throw new DamagedRecordError(path);
     const local = this.v.entry(path)?.local;
     return local === undefined ? null : { size: local.size, mtime: local.mtime };
   }
