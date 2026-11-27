@@ -85,7 +85,7 @@ function follow(mirror: SealedMirror | null): void {
     // The open editors are the engine's drafts while offline writes are on (§4.9); the vault keeps the caller's name (§4.8).
     files: (vault) => vault.files(draftsFor(vault.id)),
     adopted: (ref) => nameVaults(mirror, [ref]),
-    remote: (name) => new KumbuApi(mirrorHttp, window.location.origin, name, null),
+    remote: (name, id) => new KumbuApi(mirrorHttp, window.location.origin, name, null, id),
     clock: { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as number) },
     onStatus: () => listeners.forEach((l) => l.waitingChanged()),
     onConflict: (vault, original, copy) => listeners.forEach((l) => l.conflict(vault, original, copy)),

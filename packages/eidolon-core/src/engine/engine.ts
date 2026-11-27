@@ -5,7 +5,7 @@ import { decide, type Action } from "./decide";
 import { makePlan, type Choice, type FirstSyncSummary, type MergePlan } from "./firstSync";
 import { attachmentKind, conflictCopyPath, eligibility, isMarker, MARKER } from "./paths";
 import {
-  AuthError, OfflineError, RejectedError,
+  AuthError, OfflineError, RejectedError, VaultChangedError,
   type Clock, type FetchPolicy, type FileStat, type MoveResult, type VersionsAnswer, type ConnectionMode, type LocalFiles, type NotSynced, type RemoteApi,
   type StateStore, type SyncState, type SyncStatus, type Version,
 } from "./ports";
@@ -17,6 +17,8 @@ export interface EngineOptions {
   onStatus(s: SyncStatus): void;
   onConflict(original: string, copy: string): void;
   onAuthLost(): void;
+  /** The name this engine asks by is another vault's now: the host reads the vault list again. */
+  onVaultChanged?(): void;
   /** A first sync finished, also one that finished on a retry after its first attempt failed. */
   onFirstSyncDone?(summary: FirstSyncSummary): void;
   /** The user closed the first sync's question without an answer: nothing was saved. */
@@ -1025,6 +1027,7 @@ export class SyncEngine {
     }
     // Offline, or anything unexpected: nothing is dropped (dirty paths stay), and a check is tried again later.
     if (!(e instanceof OfflineError)) console.error("Kumbu² Sync:", e);
+    if (e instanceof VaultChangedError) this.o.onVaultChanged?.();
     this.offline = true;
     const backoff = this.retryDelay === 0 ? RETRY_FIRST_MS : Math.min(RETRY_MAX_MS, this.retryDelay * 2);
     this.retryDelay = backoff;

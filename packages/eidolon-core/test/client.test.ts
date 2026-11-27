@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from "vitest";
 import { KumbuApi, normalisePairingCode, redeemPairing, type HttpFn, type HttpRequest, type HttpResponse } from "../src/api/client";
-import { AuthError, OfflineError, RejectedError } from "../src/engine/ports";
+import { AuthError, OfflineError, RejectedError, VaultChangedError } from "../src/engine/ports";
 
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
 function fakeHttp(...replies: (Reply | Error)[]): HttpFn & { last: HttpRequest | undefined; calls: HttpRequest[] } {
@@ -269,6 +269,39 @@ describe("a session instead of a key", () => {
     expect(http.last!.headers).toEqual({});
     await session.putFile("a.png", new ArrayBuffer(1), null).catch(() => undefined);
     expect(http.last!.headers).toEqual({ "Content-Type": "application/octet-stream" });
+  });
+});
+
+describe("a vault known by its id", () => {
+  const byId = (http: HttpFn) => new KumbuApi(http, "https://k.example", "Work", null, "vault-1f3a");
+  const changed = { status: 409, body: { error: "Work is another vault now.", code: "vault-changed" } };
+
+  test("sends the vault's id with every request", async () => {
+    const http = fakeHttp({ status: 200, body: { full: true, cursor: "c", state: "s", damaged: 0, notes: [] } },
+      { status: 200, body: note }, { status: 200, body: note }, { status: 204 }, { status: 200, body: { message: "moved", path: "/Work/b.md", version: "b" } });
+    const client = byId(http);
+    await client.versions(null, null);
+    await client.read("a b.md");
+    await client.put("a.md", "text", null);
+    await client.remove("a.md", "aaaaaaaaaaaa");
+    await client.move("a.md", "b.md");
+    expect(http.calls.map((c) => c.headers["Kumbu-Vault-Id"])).toEqual(Array(5).fill("vault-1f3a"));
+  });
+  test("without an id, sends no vault header, as the plugin's key does", async () => {
+    const http = fakeHttp({ status: 200, body: note });
+    await api(http).read("a b.md");
+    expect(http.last!.headers).not.toHaveProperty("Kumbu-Vault-Id");
+  });
+  test.each([
+    ["versions", (c: KumbuApi) => c.versions(null, null)],
+    ["read", (c: KumbuApi) => c.read("a.md")],
+    ["an edit", (c: KumbuApi) => c.put("a.md", "text", "bbbbbbbbbbbb")],
+    ["a trash", (c: KumbuApi) => c.remove("a.md", "bbbbbbbbbbbb")],
+    ["a move", (c: KumbuApi) => c.move("a.md", "b.md")],
+  ])("%s: a name that is another vault's now is refused, and nothing else is asked", async (_, call) => {
+    const http = fakeHttp(changed, { status: 201, body: note });
+    await expect(call(byId(http))).rejects.toBeInstanceOf(VaultChangedError);
+    expect(http.calls).toHaveLength(1);
   });
 });
 

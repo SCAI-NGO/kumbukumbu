@@ -390,6 +390,73 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("theirs\n", (await other.ReadAsync("secret.md"))["content"]!.GetValue<string>());
     }
 
+    /// <summary>The user's vaults by name, with their ids.</summary>
+    private static async Task<Dictionary<string, string>> VaultIdsAsync(RestClient user)
+    {
+        using var response = await user.GetAsync("/api/vaults");
+        return (await JsonAsync(response)).AsArray().ToDictionary(v => v!["name"]!.GetValue<string>(), v => v!["id"]!.GetValue<string>());
+    }
+
+    private static Task<HttpResponseMessage> AsVaultAsync(RestClient user, string id, HttpMethod method, string path, object? body = null, HttpContent? content = null) =>
+        SendAsync(user.Api, method, path, body, user.Session, null, new Dictionary<string, string> { ["Kumbu-Vault-Id"] = id }, content);
+
+    private static ByteArrayContent PngContent() => new(FileApiTests.Png(2, 2)) { Headers = { ContentType = new("application/octet-stream") } };
+
+    [Fact]
+    public async Task A_write_naming_one_vaults_id_under_anothers_name_is_refused()
+    {
+        var user = await NewAsync(Api);
+        using (var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Home" })) Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var ids = await VaultIdsAsync(user);
+        var version = await user.CreateAsync("plan.md", "one\n");
+        var file = await user.CreateFileAsync("a.png", FileApiTests.Png(2, 2));
+        var home = ids["Home"];
+
+        var refused = new List<HttpResponseMessage>
+        {
+            await AsVaultAsync(user, home, HttpMethod.Get, VersionsUrl(user)),
+            await AsVaultAsync(user, home, HttpMethod.Get, user.Url("plan.md")),
+            await AsVaultAsync(user, home, HttpMethod.Put, user.Url("plan.md"), new { content = "for Home\n", version }),
+            await AsVaultAsync(user, home, HttpMethod.Put, user.Url("new.md"), new { content = "for Home\n" }),
+            await AsVaultAsync(user, home, HttpMethod.Delete, user.Url("plan.md") + $"?version={version}"),
+            await AsVaultAsync(user, home, HttpMethod.Post, "/api/move", new { from = "/Arbeit/plan.md", to = "/Arbeit/moved.md", keepLinks = true }),
+            await AsVaultAsync(user, home, HttpMethod.Get, user.Url("a.png", "files")),
+            await AsVaultAsync(user, home, HttpMethod.Put, user.Url("b.png", "files"), content: PngContent()),
+            await AsVaultAsync(user, home, HttpMethod.Delete, user.Url("a.png", "files") + $"?version={file}"),
+        };
+
+        foreach (var response in refused)
+        {
+            using (response)
+            {
+                Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+                var error = await JsonAsync(response);
+                Assert.Equal("vault-changed", error["code"]!.GetValue<string>());
+                Assert.Null(error["current"]);
+            }
+        }
+
+        using var listed = await user.GetAsync(AttachmentsUrl(user));
+        Assert.Equal(["/Arbeit/a.png", "/Arbeit/plan.md"], Paths(await JsonAsync(listed)));
+        Assert.Equal("one\n", (await user.ReadAsync("plan.md"))["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_write_without_a_vault_id_is_taken_as_before()
+    {
+        var user = await NewAsync(Api);
+        var id = (await VaultIdsAsync(user))["Arbeit"];
+        var version = await user.CreateAsync("plan.md", "one\n");
+
+        using (var own = await AsVaultAsync(user, id, HttpMethod.Put, user.Url("plan.md"), new { content = "two\n", version })) Assert.Equal(HttpStatusCode.OK, own.StatusCode);
+        using (var own = await AsVaultAsync(user, id, HttpMethod.Put, user.Url("b.png", "files"), content: PngContent())) Assert.Equal(HttpStatusCode.Created, own.StatusCode);
+        version = (await user.ReadAsync("plan.md"))["version"]!.GetValue<string>();
+        using (var plain = await user.SendAsync(HttpMethod.Put, user.Url("plan.md"), new { content = "three\n", version })) Assert.Equal(HttpStatusCode.OK, plain.StatusCode);
+        using (var moved = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/plan.md", to = "/Arbeit/moved.md", keepLinks = true })) Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+
+        Assert.Equal("three\n", (await user.ReadAsync("moved.md"))["content"]!.GetValue<string>());
+    }
+
     private static string AttachmentsUrl(RestClient user, string? since = null) =>
         $"/api/vaults/{Uri.EscapeDataString(user.Vault)}/versions?attachments=1" + (since is null ? "" : $"&since={Uri.EscapeDataString(since)}");
 

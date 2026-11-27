@@ -14,8 +14,8 @@ export interface MirrorEnginesOptions {
   mirror: SealedMirror;
   /** The caller's vaults, `GET /api/vaults`. */
   listVaults(): Promise<ListedVault[]>;
-  /** The REST client for a vault, addressed by the caller's name for it. */
-  remote(vaultName: string): RemoteApi;
+  /** The REST client for a vault, addressed by the caller's name for it, which the server checks against the id. */
+  remote(vaultName: string, vaultId: string): RemoteApi;
   /** The device's name in conflict copies. */
   device: string;
   clock: Clock;
@@ -165,11 +165,13 @@ export class MirrorEngines {
         }
         await o.adopted?.(ref);
         const sync: SyncEngine = new SyncEngine({
-          vault: ref.name, device: o.device, local: o.files?.(vault) ?? vault.files(), remote: vault.inventory(o.remote(ref.name)),
+          vault: ref.name, device: o.device, local: o.files?.(vault) ?? vault.files(), remote: vault.inventory(o.remote(ref.name, ref.id)),
           state: vault.stateStore(), clock: o.clock,
           onStatus: (s) => o.onStatus?.(ref.id, s),
           onConflict: (original, copy) => o.onConflict?.(ref.id, original, copy),
           onAuthLost: () => o.onAuthLost?.(),
+          // A failed list changes nothing: the engine's own retry comes, and so does the next refresh.
+          onVaultChanged: () => void this.refresh().catch(() => {}),
           fetchPolicy: vault.downloadOrder(() => void sync.check(true), (path) => wanted(o.mirror.choice, vault, path)),
         });
         engine = sync;

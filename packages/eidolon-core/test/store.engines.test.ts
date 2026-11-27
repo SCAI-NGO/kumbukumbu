@@ -2,7 +2,7 @@
 // The engines of an unlocked copy (offline mode design §3, §6): the vaults chosen, attachments opened online within
 // the budget, and the copy's other tabs' writes.
 import { describe, expect, test, vi } from "vitest";
-import { OfflineError, type ListedVault } from "../src/engine/ports";
+import { OfflineError, VaultChangedError, type ListedVault } from "../src/engine/ports";
 import { MirrorEngines } from "../src/store/engines";
 import { IDLE_MS, MirrorCopies, type SealedMirror } from "../src/store/mirror";
 import { FakeServer } from "./fakes/fakeServer";
@@ -130,6 +130,21 @@ describe("the engines of a copy", () => {
     await vi.waitFor(() => expect(server.notes.get("new.md")?.content).toBe("# New\n"), { timeout: 1000 });
     expect(server.count("put")).toBe(2);
     await vi.waitFor(() => expect(mirror.waiting()).toBe(0), { timeout: 1000 });
+    await engines.stop();
+  });
+
+  test("a vault whose name is another vault's now reads the vault list again, and sends what waits under its new name", async () => {
+    const { mirror, servers, engines, vaults } = await setup([work]);
+    const server = servers.get("Work")!;
+    await engines.start();
+    vaults.splice(0, 1, { id: work.id, name: "Private", canWrite: true });
+    servers.set("Private", server);
+    server.failNext("put", new VaultChangedError("Work is another vault now."));
+    await mirror.vault(work.id)!.files().writeIf("new.md", null, "# New\n");
+    engines.localChanged(work.id, "new.md");
+    // Well before the engine's own retry, five seconds on.
+    await vi.waitFor(() => expect(server.notes.get("new.md")?.content).toBe("# New\n"), { timeout: 3500 });
+    expect(server.count("put")).toBe(2);
     await engines.stop();
   });
 });

@@ -267,10 +267,12 @@ public static class NoteApi
         api.MapPut("/vaults/{vault}/name", RenameVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
         api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
-        api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
-        api.MapPut("/notes/{vault}/{**path}", WriteAsync).WithMetadata(LateSaveMetadata.Instance).AddEndpointFilter(LateSave.Filter).Errors(400, 401, 403, 404, 413, 503, 507);
-        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
-        api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
+        // A sync client names the vault's id too (SyncApi.VaultIdFilter).
+        api.MapGet("/notes/{vault}/{**path}", ReadAsync).AddEndpointFilter(SyncApi.VaultIdFilter).Errors(400, 401, 404, 409, 503);
+        api.MapPut("/notes/{vault}/{**path}", WriteAsync).WithMetadata(LateSaveMetadata.Instance).AddEndpointFilter(LateSave.Filter).AddEndpointFilter(SyncApi.VaultIdFilter)
+            .Errors(400, 401, 403, 404, 413, 503, 507);
+        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).AddEndpointFilter(SyncApi.VaultIdFilter).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("/move", MoveAsync).AddEndpointFilter(SyncApi.VaultIdFilter).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/folders/trash", TrashFolderAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 503);
 
         api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404, 503);
