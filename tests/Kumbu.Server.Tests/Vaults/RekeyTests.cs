@@ -8,6 +8,7 @@ using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -78,7 +79,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     /// <summary>A runner, started as the host starts it; stopped with the test.</summary>
     private async Task<RekeyRunner> RunnerAsync()
     {
-        var runner = new RekeyRunner(Catalog(), _life, _time, Logs.CreateLogger<RekeyRunner>());
+        var runner = new RekeyRunner(Catalog(), new SyncHub(Catalog(), Keys(), new Sessions(_db, _time), _time, NullLogger<SyncHub>.Instance), _life, _time, Logs.CreateLogger<RekeyRunner>());
         await runner.StartAsync(Ct);
         _runners.Add(runner);
         return runner;

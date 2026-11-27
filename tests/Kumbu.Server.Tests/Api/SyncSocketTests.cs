@@ -555,6 +555,21 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_reencryption_sends_the_mirror_frame_to_the_members_once_the_shared_vaults_run_ends()
+    {
+        var (alice, bob, _, _) = await SharedAsync();
+        var carol = await NewAsync(Api);
+        using var members = await SyncSockets.OpenAsync(Api, bob);
+        using var others = await SyncSockets.OpenAsync(Api, carol);
+
+        using (var reencrypted = await alice.SendAsync(HttpMethod.Post, "/api/account/reencrypt", new { password = Password })) Assert.Equal(HttpStatusCode.OK, reencrypted.StatusCode);
+
+        // The shared vault's tag changes when its run in the background ends: Bob's copy brings it in line then.
+        Assert.Contains(MirrorFrame, await SyncSockets.DrainAsync(members, TimeSpan.FromSeconds(3)));
+        Assert.DoesNotContain(MirrorFrame, await SyncSockets.DrainAsync(others, TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
     public async Task A_request_without_an_upgrade_is_400()
     {
         var user = await NewAsync(Api);
