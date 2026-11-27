@@ -327,7 +327,19 @@ describe("Settings: Offline", () => {
       await waitFor(() => expect(persist).toHaveBeenCalledTimes(1));
       reload();
       persist.mockImplementation(() => Promise.resolve(true));
+      let answer!: () => void;
+      const answered = new Promise<void>((r) => (answer = r));
+      const fake = api({
+        "POST /api/account/mirror-slots/contact": async () => (
+          await answered, json(200, { id: "s1", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] })
+        ),
+      });
       renderApp("/settings/offline");
+      // While the copy opens, nothing says the switch didn't finish.
+      await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots/contact")).toHaveLength(1));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(screen.queryByText(/didn't finish/)).toBeNull();
+      answer();
       await screen.findByRole("region", { name: "Vaults on this device" }, { timeout: 10_000 });
       expect(screen.getByRole("switch", { name: "Keep my notes on this device" })).toBeChecked();
       await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
