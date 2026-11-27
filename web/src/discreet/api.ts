@@ -75,7 +75,7 @@ export function useMarkDiscreet() {
       if (!discreet) return;
       const id = queryClient.getQueryData<VaultView[]>(["vaults"])?.find((v) => v.name === vault)?.id;
       const mirror = useOfflineCopy.getState().mirror;
-      if (id && mirror !== null && !mirror.locked) await mirror.purge(id);
+      if (id && mirror !== null && !mirror.locked) await mirror.purge(id).catch(() => undefined);
       await contact();
       enginesReconnected();
     },
