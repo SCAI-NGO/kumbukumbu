@@ -691,6 +691,67 @@ describe("tabs", () => {
     expect(dropped).toEqual([work.id]);
   });
 
+  test("a tab that missed a re-adoption doesn't remove the new one when it purges", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    // This tab hears nothing from the others.
+    const deaf = { ...browser.tab(), channel: (copy: string) => ({ post: browser.bus.channel(copy).post, listen: () => () => {} }) };
+    const copies = new MirrorCopies(deaf);
+    const mirror = await copies.create(signIn);
+    await mirror.adopt(work.id);
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    await delivered();
+    browser.slots.vaults = [{ ...work, tag: "tag-b" }];
+    await other.contact();
+    await (await other.adopt(work.id)).files().writeIf("Plan.md", null, "Written after the re-key");
+    await mirror.contact();
+    expect(mirror.vault(work.id)?.entry("Plan.md")).toBeDefined();
+    await delivered();
+    mirror.lock();
+    other.lock();
+    const again = (await copies.unlockOffline(mirror.header, signIn.password))!.vault(work.id);
+    expect(again?.list().map((e) => e.path)).toEqual(["Plan.md"]);
+  });
+
+  test("a tab that missed a re-key's purge purges the vault too, and holds it no more", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    // This tab hears nothing from the others.
+    const deaf = { ...browser.tab(), channel: (copy: string) => ({ post: browser.bus.channel(copy).post, listen: () => () => {} }) };
+    const copies = new MirrorCopies(deaf);
+    const mirror = await copies.create(signIn);
+    await mirror.adopt(work.id);
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    await delivered();
+    browser.slots.vaults = [{ ...work, tag: "tag-b" }];
+    await other.contact();
+    await mirror.contact();
+    expect(mirror.vault(work.id)).toBeUndefined();
+    expect(metaRecords(browser)).toEqual([]);
+  });
+
+  test("a tab that missed a re-adoption still removes the vault when it leaves for good", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    // This tab hears nothing from the others.
+    const deaf = { ...browser.tab(), channel: (copy: string) => ({ post: browser.bus.channel(copy).post, listen: () => () => {} }) };
+    const copies = new MirrorCopies(deaf);
+    const mirror = await copies.create(signIn);
+    await mirror.adopt(work.id);
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    await delivered();
+    browser.slots.vaults = [{ ...work, tag: "tag-b" }];
+    await other.contact();
+    await (await other.adopt(work.id)).files().writeIf("Plan.md", null, "Written after the re-key");
+    browser.slots.vaults = [];
+    await mirror.contact();
+    expect(mirror.vault(work.id)).toBeUndefined();
+    await delivered();
+    mirror.lock();
+    other.lock();
+    expect((await copies.unlockOffline(mirror.header, signIn.password))!.vault(work.id)).toBeUndefined();
+  });
+
   test("setMeta waits for the copy's lock, and writes nothing if the vault went while it waited", async () => {
     const { browser, mirror } = await setup([work]);
     const vault = await mirror.adopt(work.id);

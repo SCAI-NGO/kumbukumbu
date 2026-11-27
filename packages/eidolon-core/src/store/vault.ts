@@ -208,6 +208,7 @@ export class VaultMirror {
   get id(): string { return this.meta.id; }
   get canWrite(): boolean { return this.meta.canWrite; }
   get tag(): string { return this.meta.tag; }
+  get epoch(): string | undefined { return this.meta.epoch; }
   get name(): string | undefined { return this.meta.name; }
   get metaKey(): string { return this.keys.meta; }
   get dataPrefix(): string { return this.keys.data; }

@@ -368,13 +368,18 @@ export class SealedMirror {
     this.vaults.delete(id);
     await this.onDrop?.(id);
     const key = await this.choiceKey();
+    let readopted = false;
     const chosen = await this.p.locks.run(this.r.lockName, async () => {
       const now = (await this.r.openJson<OfflineChoice>(key, await this.p.storage.get(key))) ?? DEFAULT_CHOICE;
       const next = forGood ? without(now, id) : now;
       const put = next === now ? [] : [await this.r.sealJson(key, next)];
-      await this.p.storage.write({ put, remove: [vault.metaKey], removePrefix: [vault.dataPrefix] });
+      // Another tab may have purged and adopted it again already: a re-key leaves that new life alone.
+      const stored = await this.r.openJson<{ epoch?: string }>(vault.metaKey, await this.p.storage.get(vault.metaKey));
+      readopted = !forGood && stored !== null && stored.epoch !== vault.epoch;
+      await this.p.storage.write(readopted ? { put } : { put, remove: [vault.metaKey], removePrefix: [vault.dataPrefix] });
       return next === now ? null : next;
     });
+    if (readopted) await this.reopen(id);
     if (chosen !== null) {
       this.chosen = chosen;
       this.r.channel.post({ type: "choice" });
