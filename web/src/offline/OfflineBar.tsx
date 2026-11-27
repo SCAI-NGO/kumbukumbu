@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
 import type { Conflict } from "eidolon-core/mode/mode";
+import { REMEMBERED_IDLE_MS } from "eidolon-core/store/mirror";
 import { CloudOff } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -13,7 +14,7 @@ import { BarButton, useTimeout } from "../note/ChangedElsewhere";
 import { useSession } from "../state/session";
 import { useShellNavigate } from "../windows/context";
 import { useOfflineCopy } from "./copy";
-import { contact, useOfflineMode } from "./mode";
+import { signedInAgain, useOfflineMode } from "./mode";
 import { endPendingSignOut } from "./unlock";
 
 export const OFFLINE_SETTINGS = "/settings/offline";
@@ -162,11 +163,13 @@ function SignInAgain({ onClose }: { onClose(): void }) {
         setError(null);
         try {
           await endPendingSignOut();
-          const view = await call(api.POST("/api/session", { body: { username, password, remember: false } }));
+          // The session lasts as the copy's last sign-in here chose.
+          const remember = useOfflineCopy.getState().header?.idleMs === REMEMBERED_IDLE_MS;
+          const view = await call(api.POST("/api/session", { body: { username, password, remember } }));
           queryClient.setQueryData(["session"], view);
           useSession.getState().signedIn(view);
           useOfflineMode.getState().signedIn();
-          void contact();
+          void signedInAgain(username, password);
           onClose();
         } catch (e) {
           setError(errorText(e));

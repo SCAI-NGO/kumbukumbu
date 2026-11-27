@@ -178,7 +178,10 @@ export class SealedMirror {
    */
   onLockAsked: (() => void) | null = null;
 
-  private constructor(private readonly p: StorePorts, readonly header: CopyHeader, private readonly r: Records) {}
+  private constructor(private readonly p: StorePorts, private h: CopyHeader, private readonly r: Records) {}
+
+  /** The copy's header as this tab last wrote or read it. */
+  get header(): CopyHeader { return this.h; }
 
   static async unlocked(p: StorePorts, header: CopyHeader, raw: Uint8Array<ArrayBuffer>, vaults: SlotVault[] | null): Promise<SealedMirror> {
     const r = await Records.unlock(p, header.copy, raw);
@@ -273,6 +276,28 @@ export class SealedMirror {
       await this.remove();
       return "wiped";
     }
+    return this.align(answer.vaults);
+  }
+
+  /**
+   * A sign-in made while the copy stays open (the host's Sign in again, §4.2): the key, from the slot as at an online
+   * unlock, is wrapped again under the password just given, so the copy opens offline with that one; the idle limit
+   * stays the copy's. It is a contact too, with its answers.
+   */
+  async rewrap(username: string, password: string): Promise<Purged | "wiped"> {
+    this.assertOpen();
+    const answer = await this.p.slots.contact(this.h.slot.token, this.waiting());
+    if (answer === "gone") {
+      await this.remove();
+      return "wiped";
+    }
+    const raw = mirrorKey(answer);
+    const header: CopyHeader = {
+      ...this.h, login: await loginHash(username), password: await wrapWithPassword(this.p.crypto, raw, password, wrapAad(this.h.copy)),
+    };
+    raw.fill(0);
+    await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ put: [[`${HEADERS}${header.copy}`, encoder.encode(JSON.stringify(header))]] }));
+    this.h = header;
     return this.align(answer.vaults);
   }
 

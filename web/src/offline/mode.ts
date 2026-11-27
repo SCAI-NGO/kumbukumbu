@@ -310,6 +310,23 @@ export async function contact(): Promise<void> {
   }
 }
 
+/**
+ * Signed in again over the app (the bar's dialog, §3a): the open copy is wrapped under the password just given
+ * (§4.2), its idle limit starts again, and the contact is made, as after the sign-in form.
+ */
+export async function signedInAgain(username: string, password: string): Promise<void> {
+  const mirror = useOfflineCopy.getState().mirror;
+  if (mirror === null || mirror.locked) return;
+  try {
+    const result = await mirror.rewrap(username, password);
+    if (result === "wiped") return wiped();
+    armIdle(mirror);
+    contacted(mirror);
+  } catch (e) {
+    if (!(e instanceof OfflineError || e instanceof AuthError)) console.error("Kumbu² offline copy:", e);
+  }
+}
+
 /** A 401 that said `mirror-wipe` (the request handed in the slot's token): the copy goes from this device. */
 export async function wipeCopy(): Promise<void> {
   const header = useOfflineCopy.getState().header;
