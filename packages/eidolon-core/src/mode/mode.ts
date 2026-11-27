@@ -32,7 +32,7 @@ export interface ModeState {
 }
 
 export type ModeInput =
-  /** A request couldn't reach Kumbu² (no network, a 502/503/504 from a gateway on the way, not Kumbu²'s own busy answer). */
+  /** A request couldn't reach Kumbu² (no network, a 502/503/504 from a gateway on the way, not Kumbu²'s own answer). */
   | { type: "failed" }
   /** A request reached Kumbu² again after a failure. */
   | { type: "reached" }
