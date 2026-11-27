@@ -7,7 +7,7 @@
 
 ## Context
 
-This record supersedes [0021](0021-the-service-worker-checks-what-it-serves.md), which lets the app shell's service worker serve a kept file only while its bytes are the build's, hashed against the list the build writes into the worker's own script. Any page of the origin can write the worker's cache, and an answer is more than its bytes: its status, its headers (the content type, the `Content-Security-Policy`, which the built page and the workers carry only as a header) and the URL it came from, which is the base a module script's relative imports resolve against. What 0021 promises, that script which ran once in the origin can't stay in it through the cache, holds only if the whole answer is the app's.
+This record supersedes [0021](0021-the-service-worker-checks-what-it-serves.md), which lets the app shell's service worker serve a kept file only while its bytes are the build's, hashed against the list the build writes into the worker's own script. Any page of the origin can write the worker's cache, and an answer is more than its bytes: its status, its headers (the content type, the `Content-Security-Policy`, which the built page and the workers carry only as a header) and the URL it came from, which is the base a module script's relative imports resolve against. 0021's promise, that script which ran once in the origin can't stay in it through the cache, is meant for the whole answer the worker gives, not only its bytes.
 
 ## Decision
 
