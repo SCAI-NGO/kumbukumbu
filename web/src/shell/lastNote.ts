@@ -13,7 +13,7 @@ import { useOfflineCopy } from "../offline/copy";
  * every access is guarded.
  */
 const keyOf = (hash: string) => `kumbu.lastNote.${hash}`;
-/** Where 0.6.0 kept it, under the user's id: moved on its first read. */
+/** Where 0.5.0 kept it, under the user's id: moved on its first read. */
 const oldKeyOf = (userId: string) => `kumbu.lastNote.${userId}`;
 
 function read(key: string): string | null {

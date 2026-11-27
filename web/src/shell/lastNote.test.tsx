@@ -7,7 +7,8 @@ import { MirrorCopies, userKey } from "eidolon-core/store/mirror";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDiscreet } from "../discreet/state";
 import { useOfflineCopy } from "../offline/copy";
-import { lockCopy, wipeCopy } from "../offline/mode";
+import { lockCopy, openCopy, wipeCopy } from "../offline/mode";
+import { turnOff } from "../offline/turnOn";
 import { browserPorts } from "../offline/ports";
 import { sweepRemovedCopies } from "../offline/unlock";
 import { useEditor } from "../state/editor";
@@ -277,6 +278,16 @@ describe("the last note", () => {
       expect(screen.queryByRole("heading", { name: "Your vaults" })).not.toBeInTheDocument();
     });
 
+    it("a note kept in local storage moves into the copy once it opens, and opens there", async () => {
+      await adasCopy();
+      keep("/Work/projects/roadmap.md");
+      withSlot();
+      const router = renderApp("/", newClient());
+      await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/projects/roadmap.md"));
+      expect(await useOfflineCopy.getState().mirror?.lastNote()).toBe("/Work/projects/roadmap.md");
+      expect(kept()).toBeNull();
+    });
+
     it("with the copy's opening failing, the vaults show", async () => {
       await adasCopy();
       withSlot({ "POST /api/account/mirror-slots/contact": () => json(503, { error: "Down." }) });
@@ -303,6 +314,23 @@ describe("the last note", () => {
       keep("/Work/inbox.md");
       useOfflineCopy.getState().set(header, null);
       await wipeCopy(header.slot.token);
+      expect(kept()).toBeNull();
+    });
+
+    it("turning offline off forgets it", async () => {
+      const { header } = await adasCopy();
+      keep("/Work/inbox.md");
+      withSlot({ "DELETE /api/account/mirror-slots/s1": () => noContent() });
+      await turnOff(header);
+      expect(kept()).toBeNull();
+    });
+
+    it("a copy found gone as it opens forgets it", async () => {
+      await adasCopy();
+      keep("/Work/inbox.md");
+      withSlot({ "POST /api/account/mirror-slots/contact": () => json(404, { error: "Gone.", code: "mirror-wipe" }) });
+      useSession.getState().signedIn({ user, previousSignInAt: null });
+      await openCopy(user.id);
       expect(kept()).toBeNull();
     });
 
