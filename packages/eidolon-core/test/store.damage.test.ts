@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { ListedVault } from "../src/engine/ports";
 import { MirrorEngines } from "../src/store/engines";
 import { IDLE_MS, MirrorCopies, type SealedMirror } from "../src/store/mirror";
+import { Records } from "../src/store/vault";
 import { FakeServer } from "./fakes/fakeServer";
 import { delivered, FakeBrowser, realClock } from "./fakeStore";
 
@@ -223,5 +224,148 @@ describe("older records put back in their place", () => {
     mirror = await reload(browser, copies);
     await runOnce(enginesOf(mirror));
     expect(server.notes.get("a.md")?.content).toBe("edited offline");
+  });
+});
+
+describe("each adoption of a vault has its own life", () => {
+  const NEW = "the new text, written elsewhere";
+  const text = async (m: SealedMirror, path: string) => new TextDecoder().decode((await m.vault(work.id)!.bytes(path))!);
+  const putBack = (browser: FakeBrowser, records: Map<string, Uint8Array<ArrayBuffer>>) => { for (const [k, v] of records) browser.storage.records.set(k, v); };
+
+  /** a.md and b.md synced, their entries and bodies of that moment kept aside, a newer a.md in Kumbu², the copy locked. */
+  async function firstLife() {
+    const s = await setup();
+    await s.server.seed("a.md", "the old text");
+    await s.server.seed("b.md", "another note");
+    const engines = s.enginesOf(s.mirror);
+    await engines.start();
+    await vi.waitFor(() => expect(heldPaths(s.mirror)).toEqual(["a.md", "b.md"]));
+    await engines.stop();
+    const old = new Map([...s.browser.storage.records].filter(([k]) => k.includes("/e/") || k.includes("/b/")).map(([k, v]) => [k, v.slice()]));
+    await s.server.agentWrite("a.md", NEW);
+    s.mirror.lock();
+    return { ...s, old };
+  }
+
+  /** Synced again in the vault's next life, then the first life's records put back and the copy opened once more. */
+  async function nextLife(s: Awaited<ReturnType<typeof firstLife>>) {
+    let mirror = await reload(s.browser, s.copies);
+    const engines = s.enginesOf(mirror);
+    await engines.start();
+    await vi.waitFor(async () => expect(await text(mirror, "a.md")).toBe(NEW));
+    await vi.waitFor(() => expect(heldPaths(mirror)).toEqual(["a.md", "b.md"]));
+    await engines.stop();
+    mirror.lock();
+    const before = s.server.count("put");
+    putBack(s.browser, s.old);
+    mirror = await reload(s.browser, s.copies);
+    await runOnce(s.enginesOf(mirror));
+    return { mirror, before };
+  }
+
+  test("a record from an earlier adoption of the vault doesn't open in the next", async () => {
+    const s = await firstLife();
+    s.browser.slots.vaults = [{ ...work, tag: "tag-new" }];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { mirror, before } = await nextLife(s);
+    warn.mockRestore();
+    expect(s.server.notes.get("a.md")?.content).toBe(NEW);
+    expect(s.server.count("put")).toBe(before);
+    // Read as damage, never as the older text.
+    expect(mirror.vault(work.id)!.damaged("a.md")).toBe(true);
+  });
+
+  test("a missing head with records is damage: the vault starts a new life, and the older records never open in it", async () => {
+    const s = await firstLife();
+    for (const key of keysWith(s.browser, "/v/")) if (key.endsWith("/h")) s.browser.storage.records.delete(key);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { mirror, before } = await nextLife(s);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    expect(removals(s.server)).toEqual([]);
+    expect(s.server.notes.get("a.md")?.content).toBe(NEW);
+    expect(s.server.count("put")).toBe(before);
+    // Read as damage, never as the older text.
+    expect(mirror.vault(work.id)!.damaged("a.md")).toBe(true);
+  });
+
+  test("the engine's state from an earlier adoption doesn't open in the next", async () => {
+    const { browser, copies, mirror } = await setup();
+    const empty = { bases: {}, cursor: null, lastFullAt: null, lastSyncAt: null };
+    await (await mirror.adopt(work.id)).stateStore().save({ ...empty, bases: { "a.md": "v-older" } });
+    const old = new Map([...browser.storage.records].filter(([k]) => k.includes("/v/") && k.endsWith("/s")));
+    await mirror.purge(work.id, false);
+    await (await mirror.adopt(work.id)).stateStore().save(empty);
+    mirror.lock();
+    putBack(browser, old);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const again = await reload(browser, copies);
+    warn.mockRestore();
+    expect((await again.vault(work.id)!.stateStore().load()).bases).toEqual({});
+  });
+
+  /** a.md written here as "one", its records of that moment kept aside, and the vault's head removed. */
+  async function headRemoved() {
+    const s = await setup();
+    const vault = await s.mirror.adopt(work.id);
+    await vault.files().writeIf("a.md", null, "one");
+    const old = new Map([...s.browser.storage.records].filter(([k]) => k.includes("/e/") || k.includes("/b/")).map(([k, v]) => [k, v.slice()]));
+    for (const key of keysWith(s.browser, "/v/")) if (key.endsWith("/h")) s.browser.storage.records.delete(key);
+    return { ...s, vault, old };
+  }
+
+  test("after a missing head, a note written again counts on from a new life", async () => {
+    const s = await headRemoved();
+    s.mirror.lock();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let mirror = await reload(s.browser, s.copies);
+    await mirror.vault(work.id)!.files().writeIf("a.md", null, "two");
+    mirror.lock();
+    putBack(s.browser, s.old);
+    mirror = await reload(s.browser, s.copies);
+    warn.mockRestore();
+    expect(mirror.vault(work.id)!.entry("a.md")).toBeUndefined();
+  });
+
+  test("a head removed while the vault is open: the next write counts on from where this tab was", async () => {
+    const s = await headRemoved();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await s.vault.files().writeIf("a.md", null, "two");
+    s.mirror.lock();
+    putBack(s.browser, s.old);
+    const mirror = await reload(s.browser, s.copies);
+    warn.mockRestore();
+    expect(mirror.vault(work.id)!.entry("a.md")).toBeUndefined();
+  });
+
+  test("a copy written before lives had epochs opens as it was", async () => {
+    const { browser, copies, mirror } = await setup();
+    const vault = await mirror.adopt(work.id);
+    await vault.files().writeIf("a.md", null, "written offline");
+    mirror.lock();
+    // Every record as such a copy wrote it: the meta, the head, the entries and the state without an epoch.
+    const raw = Uint8Array.from(Buffer.from(browser.slots.slots.get(mirror.header.slot.token)!.key, "base64url"));
+    const r = await Records.unlock(browser.tab(), mirror.header.copy, raw);
+    for (const [key, sealed] of [...browser.storage.records]) {
+      if (!key.startsWith(r.prefix) || key.includes("/b/")) continue;
+      const record = (await r.openJson<Record<string, unknown>>(key, sealed))!;
+      delete record.e;
+      delete record.epoch;
+      await browser.storage.write({ put: [await r.sealJson(key, record)] });
+    }
+    const again = await reload(browser, copies);
+    expect(new TextDecoder().decode((await again.vault(work.id)!.bytes("a.md"))!)).toBe("written offline");
+    expect(again.vault(work.id)!.waiting()).toBe(1);
+  });
+
+  test("a new vault, with no records yet, needs no head", async () => {
+    const { browser, copies, mirror } = await setup();
+    await mirror.adopt(work.id);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mirror.lock();
+    const again = await reload(browser, copies);
+    expect(again.vault(work.id)?.list()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

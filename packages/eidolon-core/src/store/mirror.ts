@@ -234,8 +234,7 @@ export class SealedMirror {
     if (held !== undefined) return held;
     const listed = this.listed?.get(id);
     if (listed === undefined) throw new Error("Only a vault the server lists for this copy is mirrored.");
-    const meta: VaultMeta = { id, tag: listed.tag, canWrite: listed.canWrite, notesDone: false };
-    await VaultMirror.writeMeta(this.r, meta);
+    const meta = await VaultMirror.writeMeta(this.r, { id, tag: listed.tag, canWrite: listed.canWrite, notesDone: false });
     const vault = await VaultMirror.open(this.r, meta);
     this.vaults.set(id, vault);
     return vault;

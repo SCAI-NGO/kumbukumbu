@@ -47,5 +47,6 @@ Records are public. A security decision says what we do and why, never which con
 | [0032](0032-orphans-without-tag-count-only-kept-links.md) | `graph --orphans --without-tag` counts only the links of the notes kept | Accepted |
 | [0033](0033-the-sign-in-page-asks-after-every-copy-kept-here.md) | The sign-in page asks after every copy kept here, whoever's it is | Accepted |
 | [0043](0043-the-worker-answers-with-its-own-headers.md) | Let the service worker answer a kept file with headers of its own | Accepted |
+| [0044](0044-each-adoption-of-a-vault-has-its-own-epoch.md) | Give each adoption of a vault into the copy its own epoch | Accepted |
 
 0002 to 0016 were recorded after the fact, on 2026-11-23, from the decisions of the 0.7.0 weekend; their dates are the days they were taken.
