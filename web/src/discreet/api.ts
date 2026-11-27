@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, call } from "../api/client";
+import type { VaultView } from "../api/notes";
 import { vaultOf } from "../api/paths";
+import { useOfflineCopy } from "../offline/copy";
 import { enginesReconnected } from "../offline/engines";
 import { contact } from "../offline/mode";
 import { forgetLastNote, lastNote } from "../shell/lastNote";
@@ -66,10 +68,14 @@ export function useMarkDiscreet() {
       const kept = userId ? lastNote(userId) : null;
       if (discreet && kept && vaultOf(kept) === vault) forgetLastNote(userId);
     },
-    // This tab's socket stays open through its own mark, so no reconnect brings the copy in line: the contact's
-    // answer no longer lists the vault, and its copy goes now (offline mode design §4.6), the engines after it.
-    onSuccess: async (_view, { discreet }) => {
+    // This tab's socket stays open through its own mark, so no reconnect brings the copy in line: the vault's copy goes
+    // now, here, without waiting for an answer (offline mode design §4.6); the contact after it brings the rest, the
+    // engines after it.
+    onSuccess: async (_view, { vault, discreet }) => {
       if (!discreet) return;
+      const id = queryClient.getQueryData<VaultView[]>(["vaults"])?.find((v) => v.name === vault)?.id;
+      const mirror = useOfflineCopy.getState().mirror;
+      if (id && mirror !== null && !mirror.locked) await mirror.purge(id);
       await contact();
       enginesReconnected();
     },

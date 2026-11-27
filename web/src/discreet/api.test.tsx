@@ -29,13 +29,14 @@ const locks = {
 };
 
 /** The app's fake API, also for the store's requests, which fetch with a URL and options rather than a Request. */
-function api(listed: () => (typeof work)[]) {
+function api(listed: () => (typeof work)[], overrides: Parameters<typeof fakeApi>[0] = {}) {
   const fake = fakeApi({
     "POST /api/session/confirm": () => noContent(),
     "POST /api/account/mirror-slots": () => json(201, { id: "s1", token: "tok", key, vaults: listed() }),
     "POST /api/account/mirror-slots/contact": () => json(200, { id: "s1", key, vaults: listed() }),
     "DELETE /api/account/mirror-slots/*": () => noContent(),
     "PUT /api/account/discreet/vaults/*": () => noContent(),
+    ...overrides,
   });
   vi.stubGlobal("fetch", (input: Request | string, init?: RequestInit) =>
     fake(typeof input === "string" ? new Request(new URL(input, window.location.origin), init) : input));
@@ -79,6 +80,25 @@ describe("marking a vault discreet", () => {
     expect(mirror.vault(work.id)).toBeDefined();
     expect(asked(fake).filter((a) => a === "POST /api/account/mirror-slots/contact")).toHaveLength(1);
     expect(enginesReconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it("the vault leaves the copy even when the contact after the mark gets no answer", { timeout: 20_000 }, async () => {
+    let discreet = false;
+    api(() => (discreet ? [work] : [work, home]));
+    await turnOn(user, "correct horse");
+    const mirror = useOfflineCopy.getState().mirror!;
+    await mirror.adopt(work.id);
+    await mirror.adopt(home.id);
+    api(() => [work], { "POST /api/account/mirror-slots/contact": () => Promise.reject(new TypeError("Failed to fetch")) });
+
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["vaults"], [{ id: work.id, name: "Work" }, { id: home.id, name: "Home" }]);
+    const { result } = renderHook(() => useMarkDiscreet(), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+    discreet = true;
+    await result.current.mutateAsync({ vault: "Home", discreet: true });
+
+    expect(mirror.vault(home.id)).toBeUndefined();
+    expect(mirror.vault(work.id)).toBeDefined();
   });
 
   it("making a vault ordinary again asks the slot nothing", async () => {
