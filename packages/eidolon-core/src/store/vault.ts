@@ -178,6 +178,8 @@ export class VaultMirror {
           console.warn("The offline copy of a vault is damaged on this device; it is synced afresh.");
           v.meta = { ...v.meta, epoch: newEpoch(r), notesDone: false };
           await r.p.storage.write({ removePrefix: [v.keys.data], put: [await r.sealJson(v.keys.meta, v.meta)] });
+          // A tab holding the vault would go on writing in the old life: it drops the vault, as at a purge.
+          r.channel.post({ type: "purged", vault: meta.id });
         }
         return;
       }

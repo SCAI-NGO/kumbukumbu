@@ -425,6 +425,17 @@ describe("each adoption of a vault has its own life", () => {
     expect(mirror.vault(work.id)!.entry("a.md")).toBeUndefined();
   });
 
+  test("a vault synced afresh at an opening goes from the other tabs that hold it", async () => {
+    const s = await headRemoved();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mirror = await reload(s.browser, s.copies);
+    warn.mockRestore();
+    await delivered();
+    expect(s.mirror.vault(work.id)).toBeUndefined();
+    await expect(s.vault.files().writeIf("b.md", null, "two")).rejects.toThrow();
+    expect(mirror.vault(work.id)!.list()).toEqual([]);
+  });
+
   test("a copy written before lives had epochs opens as it was", async () => {
     const { browser, copies, mirror } = await setup();
     const vault = await mirror.adopt(work.id);
