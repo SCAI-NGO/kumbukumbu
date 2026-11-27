@@ -33,6 +33,8 @@ const ESCAPES: [RegExp, string][] = [
   [/\bimport\s*\((?!\s*["'][^"'\n]*["']\s*[,)])/, "an import() of anything but a string literal can't be checked"],
   [/\brequire\s*\(/, "require() is an import the check can't see"],
   [/\bglobalThis\b/, "globalThis reaches the host's globals past globals.d.ts"],
+  [/\bFunction\s*\(/, "code built from a string reaches the host's globals past globals.d.ts"],
+  [/\beval\b/, "eval reaches the host's globals past globals.d.ts"],
   [/@ts-/, "a @ts- comment turns the type check off"],
   [/\bdeclare\s+(?:global|module)\b/, "declare global or module adds to what the core sees"],
 ];
@@ -94,7 +96,11 @@ test("the boundary check finds the ways past it", () => {
   expect(escapesOf("// @ts-expect-error")).toHaveLength(1);
   expect(escapesOf("declare global { const localStorage: unknown; }")).toHaveLength(1);
   expect(escapesOf(`declare module "x" {}`)).toHaveLength(1);
-  expect(escapesOf(`const m = await import("./ports");\nimport { a } from "./a";\ndeclare const x: number;`)).toEqual([]);
+  expect(escapesOf(`new Function("return this")()`)).toHaveLength(1);
+  expect(escapesOf(`Function ("return this")()`)).toHaveLength(1);
+  expect(escapesOf(`eval("this")`)).toHaveLength(1);
+  expect(escapesOf(`(0, eval)("this")`)).toHaveLength(1);
+  expect(escapesOf(`const m = await import("./ports");\nimport { a } from "./a";\ndeclare const x: number;\nconst f: Function = isFunction(x) ? retrieval : evaluate;`)).toEqual([]);
   expect(globalsOf("// A comment, with a type and an interface in it.\ndeclare class URL { constructor(url: string); }\ndeclare const crypto: { readonly subtle: unknown };"))
     .toEqual(["URL", "crypto"]);
   expect(globalsOf("declare const localStorage: { getItem(key: string): string | null };")).toEqual(["localStorage"]);
@@ -107,6 +113,12 @@ test("the boundary check finds the ways past it", () => {
 test("no code of the core gets past the boundary but by an import the check sees", () => {
   const found = sourceFiles(src).flatMap((file) => escapesOf(readFileSync(file, "utf8")).map((why) => `${relative(root, file)}: ${why}`));
   expect(found).toEqual([]);
+});
+
+test("tsconfig.json gives the core's code the language only: no library or types of a host", () => {
+  const config = JSON.parse(readFileSync(join(root, "tsconfig.json"), "utf8").replace(/^\s*\/\/.*$/gm, "")) as { compilerOptions: { lib?: string[]; types?: string[] } };
+  expect(config.compilerOptions.lib).toEqual(["ES2022"]);
+  expect(config.compilerOptions.types).toEqual([]);
 });
 
 test("the core's src/ holds TypeScript only, and declares its globals in one file", () => {
