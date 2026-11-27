@@ -302,7 +302,7 @@ describe("contact", () => {
     expect(mirror.choice).toMatchObject({ vaults: [work.id, team.id], kept: { [team.id]: ["Plans"] }, opened: { [team.id]: { "Plans/b.pdf": 2 } } });
   });
 
-  test("an unlock drops kept and opened entries of vaults the copy doesn't hold and keeps a vault ticked but not adopted yet", async () => {
+  test("an unlock drops kept and opened entries of vaults neither held nor chosen, and keeps those of a vault ticked but not adopted yet", async () => {
     const { copies, mirror } = await setup();
     await mirror.adopt(work.id);
     await mirror.choose((c): OfflineChoice => ({
@@ -313,9 +313,27 @@ describe("contact", () => {
     mirror.lock();
 
     const again = (await copies.unlockOffline(mirror.header, signIn.password))!;
-    expect(again.choice).toMatchObject({ vaults: [work.id, team.id], kept: { [work.id]: ["Projects"] }, opened: { [work.id]: { "Projects/a.pdf": 1 } } });
-    expect(Object.keys(again.choice.kept)).toEqual([work.id]);
+    expect(again.choice).toMatchObject({
+      vaults: [work.id, team.id], kept: { [work.id]: ["Projects"], [team.id]: ["Plans"] }, opened: { [work.id]: { "Projects/a.pdf": 1 } },
+    });
+    expect(Object.keys(again.choice.kept).sort()).toEqual([work.id, team.id].sort());
     expect(Object.keys(again.choice.opened)).toEqual([work.id]);
+  });
+
+  test.each([
+    ["chosen one by one", { all: false, vaults: [work.id, team.id] }],
+    ["with All my vaults", { all: true, vaults: [] }],
+  ])("a re-key seen at an online unlock keeps the vault's kept folders, %s", async (_, chosen) => {
+    const { browser, copies, mirror } = await setup();
+    await mirror.adopt(work.id);
+    await mirror.adopt(team.id);
+    await mirror.choose((c) => ({ ...c, ...chosen, kept: { [team.id]: ["Plans"] }, opened: { [team.id]: { "Plans/b.pdf": 2 } } }));
+    mirror.lock();
+
+    browser.slots.vaults = [work, { ...team, tag: "tag-b2" }];
+    const again = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    expect(again.vault(team.id)).toBeUndefined();
+    expect(again.choice).toMatchObject({ kept: { [team.id]: ["Plans"] }, opened: { [team.id]: { "Plans/b.pdf": 2 } } });
   });
 
   test("follows a change of rights", async () => {

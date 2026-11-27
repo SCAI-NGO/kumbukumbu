@@ -98,8 +98,9 @@ export function without(choice: OfflineChoice, vault: string): OfflineChoice {
 }
 
 /**
- * The choice with folders kept and attachments opened only in the vaults held. The vaults chosen stay: one may not be
- * adopted yet (ticked just before a lock, or its adoption failed offline). Unchanged: itself.
+ * The choice with folders kept and attachments opened only in the vaults given (held, or chosen and not adopted yet).
+ * The vaults chosen stay: one may not be adopted yet (ticked just before a lock, or its adoption failed offline).
+ * Unchanged: itself.
  */
 export function heldOnly(choice: OfflineChoice, held: ReadonlySet<string>): OfflineChoice {
   const stray = (vault: string) => !held.has(vault);

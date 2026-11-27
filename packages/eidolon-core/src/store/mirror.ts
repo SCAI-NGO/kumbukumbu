@@ -185,8 +185,12 @@ export class SealedMirror {
     }
     mirror.chosen = (await r.openJson<OfflineChoice>(await mirror.choiceKey(), await p.storage.get(await mirror.choiceKey()))) ?? DEFAULT_CHOICE;
     if (vaults !== null) await mirror.align(vaults);
-    const held = new Set(mirror.vaults.keys());
-    if (heldOnly(mirror.chosen, held) !== mirror.chosen) await mirror.choose((c) => heldOnly(c, held));
+    // A vault chosen and not held may be re-keyed (purged by align, adopted again by the engines): its entries stay.
+    // With All my vaults that is any vault listed, and any at all offline, where nothing says which.
+    if (!mirror.chosen.all || vaults !== null) {
+      const keep = new Set([...mirror.vaults.keys(), ...(mirror.chosen.all ? vaults!.map((v) => v.id) : mirror.chosen.vaults)]);
+      if (heldOnly(mirror.chosen, keep) !== mirror.chosen) await mirror.choose((c) => heldOnly(c, keep));
+    }
     mirror.stopListening = r.channel.listen((m) => void mirror.heard(m));
     return mirror;
   }
