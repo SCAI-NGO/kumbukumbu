@@ -20,6 +20,8 @@ interface OfflineModeState extends ModeState {
   /** Vaults' copies were removed (SealedMirror.listenRemoved): how many changes went with them. The notice names no vault (§3a). */
   purged: { lost: number } | null;
   failed(): void;
+  /** The heartbeat got no answer: a failed request, and no tab's socket counts as up until one opens again. */
+  lost(): void;
   reached(): void;
   socket(up: boolean): void;
   /** The changes waiting may have changed: read again from the unlocked copy. */
@@ -71,6 +73,10 @@ export const useOfflineMode = create<OfflineModeState>()((set) => ({
   failed: () => {
     failing = true;
     send({ type: "failed" });
+  },
+  lost: () => {
+    failing = true;
+    send({ type: "lost" });
   },
   reached: () => {
     if (!failing) return;

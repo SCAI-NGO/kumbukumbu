@@ -36,6 +36,11 @@ export type ModeInput =
   | { type: "failed" }
   /** A request reached Kumbu² again after a failure. */
   | { type: "reached" }
+  /**
+   * The host's heartbeat got no answer: a failed request, and every tab's socket counts as down until one opens again.
+   * A socket in a background tab may not hear of a network gone quietly for minutes.
+   */
+  | { type: "lost" }
   /** A tab's sync socket opened or closed. */
   | { type: "socket"; tab: string; up: boolean }
   /** A tab closed. */
@@ -79,6 +84,10 @@ export class ModeMachine {
     switch (input.type) {
       case "failed": this.failing = true; break;
       case "reached": this.failing = false; break;
+      case "lost":
+        this.failing = true;
+        this.sockets.clear();
+        break;
       case "socket":
         if (input.up) {
           this.sockets.add(input.tab);

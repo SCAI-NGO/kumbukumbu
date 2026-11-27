@@ -227,6 +227,25 @@ describe("tabs", () => {
     expect(last(1)?.offline).toBe(false);
   });
 
+  test("a missed heartbeat counts every tab's socket down until one opens again", async () => {
+    const { tabs, last } = await browser(2);
+    // Both tabs' sockets up; the one in the background asks no heartbeat and hears of no loss.
+    tabs[0]!.send({ type: "socket", tab: "tab0", up: true });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: true });
+    tabs[1]!.send({ type: "failed" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last(0)?.offline).toBe(false);
+    tabs[1]!.send({ type: "lost" });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last(0)?.offline).toBe(true);
+    expect(last(1)?.offline).toBe(true);
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last(0)?.offline).toBe(false);
+  });
+
   test("when the leading tab closes, another leads on from the same state", async () => {
     const { tabs, last } = await browser(2);
     tabs[1]!.send({ type: "failed" });
