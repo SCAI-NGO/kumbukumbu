@@ -61,7 +61,7 @@ describe("the API client", () => {
 
   test("a 401 saying mirror-wipe removes the copy and goes to sign-in with the reason", async () => {
     const lock = vi.fn();
-    useSession.getState().signedIn({ user, previousSignInAt: null });
+    // Nobody signed in yet: the copy's token goes with the request.
     useOfflineCopy.getState().set({ ...header }, { lock } as unknown as SealedMirror);
     fakeApi({ "GET /api/vaults": () => json(401, { error: "Gone.", code: "mirror-wipe" }) });
     // No IndexedDB here: only the tab's part of the wipe is looked at.
@@ -71,6 +71,19 @@ describe("the API client", () => {
     expect(lock).toHaveBeenCalled();
     expect(useOfflineCopy.getState().header).toBeNull();
     expect(useSession.getState().notice).toBe(WIPED);
+  });
+
+  test("a 401 saying mirror-wipe to a request sent with another copy's token leaves the tab's copy and session", async () => {
+    useOfflineCopy.getState().set({ ...header }, { lock: vi.fn() } as unknown as SealedMirror);
+    const next = { ...header, copy: "copy-2", slot: { id: "s2", token: "tok-2" } };
+    // The tab holds another copy by the time the answer comes.
+    const fetch = fakeApi({ "GET /api/vaults": () => (useOfflineCopy.getState().set(next, null), json(401, { error: "Gone.", code: "mirror-wipe" })) });
+    vi.stubGlobal("indexedDB", undefined);
+    await api.GET("/api/vaults").catch(() => {});
+    await act(() => new Promise((r) => setTimeout(r, 100)));
+    expect(fetch.mock.calls[0]![0].headers.get("Kumbu-Mirror")).toBe("tok-1");
+    expect(useOfflineCopy.getState().header).toEqual(next);
+    expect(useSession.getState().ended).toBe(false);
   });
 
   test("a 401 while uploading changes keeps the place and asks to sign in over the app", async () => {

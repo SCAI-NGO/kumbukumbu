@@ -145,6 +145,16 @@ describe("the engines' requests", () => {
     await waitFor(() => expect(useOfflineCopy.getState().header).toBeNull());
     expect(await new MirrorCopies(await browserPorts()).forUser(alice.id)).toBeNull();
   });
+
+  test("a mirror-wipe answer to a request sent with another copy's token leaves the tab's copy", async () => {
+    const other = { slot: { id: "s2", token: "tok-b" }, copy: "copy-b" };
+    // The tab holds another copy by the time the answer comes.
+    await sentUnder(alice, () => (useOfflineCopy.getState().set({ ...useOfflineCopy.getState().header!, ...other }, null), json(401, { error: "Gone.", code: "mirror-wipe" })));
+    await settle();
+    expect(useOfflineCopy.getState().header?.copy).toBe("copy-b");
+    expect(useSession.getState().ended).toBe(false);
+    expect(await new MirrorCopies(await browserPorts()).forUser(alice.id)).not.toBeNull();
+  });
 });
 
 describe("in a second tab", () => {

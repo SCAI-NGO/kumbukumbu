@@ -333,9 +333,13 @@ export async function signedInAgain(username: string, password: string): Promise
   }
 }
 
-/** A 401 that said `mirror-wipe` (the request handed in the slot's token): the copy goes from this device. */
-export async function wipeCopy(): Promise<void> {
+/**
+ * A 401 that said `mirror-wipe` to a request that handed in `token`, the slot's: the copy goes from this device. Only
+ * while it is still the copy the tab holds: the answer may come after another one was opened.
+ */
+export async function wipeCopy(token: string | null): Promise<void> {
   const header = useOfflineCopy.getState().header;
+  if (token !== (header?.slot.token ?? null)) return;
   useOfflineCopy.getState().mirror?.lock();
   wiped();
   if (header === null || typeof indexedDB === "undefined") return;

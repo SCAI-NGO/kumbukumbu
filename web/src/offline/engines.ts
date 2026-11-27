@@ -37,7 +37,7 @@ export const mirrorHttp: HttpFn = async (r) => {
   const sent = { ...r.headers };
   if (header !== null && (await carriesToken(header, `${r.method} ${new URL(r.url).pathname}`))) sent["Kumbu-Mirror"] = header.slot.token;
   const response = await fetch(r.url, { method: r.method, headers: sent, body: r.body, credentials: "same-origin" });
-  if (await isMirrorWipe(response)) void wipeCopy();
+  if (await isMirrorWipe(response)) void wipeCopy(sent["Kumbu-Mirror"] ?? null);
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => (headers[key] = value));
   const bytes = await response.arrayBuffer();

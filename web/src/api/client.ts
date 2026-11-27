@@ -58,10 +58,10 @@ export async function isMirrorWipe(response: Response): Promise<boolean> {
   return !!body && typeof body === "object" && "code" in body && body.code === "mirror-wipe";
 }
 
-/** A 401 for a missing session ends it. `key`: "PUT /api/files/{vault}/{path}". */
-async function endOnLostSession(key: string, response: Response) {
+/** A 401 for a missing session ends it. `key`: "PUT /api/files/{vault}/{path}"; `token`: the copy's, if the request carried it. */
+async function endOnLostSession(key: string, token: string | null, response: Response) {
   if (response.status !== 401 || anonymous.has(key) || (await isPasswordRequired(response))) return;
-  if (await isMirrorWipe(response)) return void (await wipeCopy());
+  if (await isMirrorWipe(response)) return void (await wipeCopy(token));
   // Back from offline with changes waiting: the bar asks to sign in again over the app, which keeps the place (§3a).
   const mode = useOfflineMode.getState();
   if (mode.offline && mode.waiting > 0) return mode.sessionLost();
@@ -74,7 +74,7 @@ async function endOnLostSession(key: string, response: Response) {
 }
 
 const sessionEnds: Middleware = {
-  onResponse: ({ request, response, schemaPath }) => endOnLostSession(`${request.method} ${schemaPath}`, response),
+  onResponse: ({ request, response, schemaPath }) => endOnLostSession(`${request.method} ${schemaPath}`, request.headers.get("Kumbu-Mirror"), response),
 };
 
 /** Gateways answer these while Kumbu² behind them is down. Kumbu²'s own 503 (a vault being re-encrypted, the server busy
@@ -127,7 +127,8 @@ export async function heard(key: string, response: Response) {
   if (unreachable(response)) useOfflineMode.getState().failed();
   else useOfflineMode.getState().reached();
   useUpdate.getState().report(response.headers.get("X-Kumbu-Version"));
-  await endOnLostSession(key, response);
+  // Sent without the copy's token.
+  await endOnLostSession(key, null, response);
 }
 
 // What a guarded request sent, by openapi-fetch's request id, to send again once the password is confirmed. Reads are
