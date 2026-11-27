@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { AuthError, OfflineError, RejectedError } from "eidolon-core/engine/ports";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { mirrorSlots } from "./slots";
+import { mirrorSlots, needsPassword } from "./slots";
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -33,5 +33,16 @@ describe("the mirror slot port", () => {
     await expect(mirrorSlots.create("Firefox on Linux")).rejects.toBeInstanceOf(OfflineError);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(409, { error: "At most 20 offline copies." })));
     await expect(mirrorSlots.create("Firefox on Linux")).rejects.toThrow(new RejectedError("At most 20 offline copies.", 409));
+  });
+});
+
+describe("removing a device's copy", () => {
+  const copy = { id: "s2", label: "Safari on iOS", createdAt: "2026-11-01T10:00:00Z", contactAt: "2026-11-19T10:00:00Z", waiting: 0, current: false };
+
+  test("needsPassword is true for every copy but this browser's", () => {
+    expect(needsPassword(copy)).toBe(true);
+    expect(needsPassword({ ...copy, waiting: 2 })).toBe(true);
+    expect(needsPassword({ ...copy, waiting: null, contactAt: null })).toBe(true);
+    expect(needsPassword({ ...copy, waiting: 3, current: true })).toBe(false);
   });
 });

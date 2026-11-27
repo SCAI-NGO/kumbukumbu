@@ -152,6 +152,36 @@ describe("normal use", () => {
     expect(h.server.notes.get("a.md")!.content).toBe("agent");
   });
 
+  test("tells when a note trashed here came back with an edit made elsewhere", async () => {
+    const h = await harness({ synced: { "a.md": "one", "b.md": "two", "c.md": "three" } });
+    await h.server.agentWrite("a.md", "agent");
+    h.files.userDelete("a.md");
+    await h.server.agentWrite("c.md", "agent");
+    await h.engine.check(false);
+    expect(h.files.files.get("a.md")).toBe("agent");
+    expect(h.cameBack).toEqual([["a.md", "trashed-here"]]);
+
+    await h.server.agentWrite("b.md", "agent");
+    h.files.userDelete("b.md");
+    h.engine.localDeleted("b.md");
+    await settle(h, 3000);
+    expect(h.files.files.get("b.md")).toBe("agent");
+    expect(h.cameBack).toEqual([["a.md", "trashed-here"], ["b.md", "trashed-here"]]);
+    expect(h.conflicts).toEqual([]);
+  });
+
+  test("tells when a note trashed elsewhere was made again with this device's text", async () => {
+    const h = await harness({ synced: { "a.md": "one", "b.md": "two" } });
+    await h.server.agentWrite("a.md", null);
+    await h.server.agentWrite("b.md", null);
+    h.files.userEdit("a.md", "mine");
+    h.files.userEdit("new.md", "new");
+    await h.engine.check(false);
+    expect(h.server.notes.get("a.md")!.content).toBe("mine");
+    expect(h.files.files.has("b.md")).toBe(false);
+    expect(h.cameBack).toEqual([["a.md", "trashed-elsewhere"]]);
+  });
+
   test("an agent delete moves the unchanged local file to the trash", async () => {
     const h = await harness({ synced: { "a.md": "one" } });
     await h.server.agentWrite("a.md", null);
@@ -328,6 +358,25 @@ describe("review focus", () => {
     expect(h.server.notes.get("c.md")!.content).toBe("created while closed");
     expect(copies(h.files.files)).toEqual([]);
     expect(h.conflicts).toEqual([]);
+  });
+
+  test("a start cut off by the network finds every file changed while closed at the next check", async () => {
+    const h = await harness({ synced: { "a.md": "one", "b.md": "b" } });
+    await h.engine.stop();
+    h.files.userEdit("a.md", "edited while closed");
+    h.files.userEdit("c.md", "created while closed");
+    h.server.failNext("put", new OfflineError("lost signal"));
+    await h.engine.start();
+    expect(h.engine.status().mode).toBe("offline");
+    // The reconnect's check, or the retry's: neither is a full one of its own.
+    await h.engine.check(false);
+    expect(h.server.notes.get("a.md")!.content).toBe("edited while closed");
+    expect(h.server.notes.get("c.md")?.content).toBe("created while closed");
+    expect(h.engine.status().mode).not.toBe("offline");
+    // Once one got through, checks ask only for what changed again.
+    h.server.calls.length = 0;
+    await h.engine.check(false);
+    expect(h.server.calls.filter((c) => c.method === "versions").map((c) => c.args[0])).toEqual([h.state.state.cursor]);
   });
 });
 

@@ -207,6 +207,8 @@ builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit, sp.GetRequiredService<IWriterLabels>()));
 builder.Services.AddSingleton<ExtractionGate>();
+builder.Services.AddSingleton<Kumbu.Server.Api.HeavyCallGate>();
+builder.Services.AddScoped(sp => sp.GetRequiredService<Kumbu.Server.Api.HeavyCallGate>().For(sp.GetRequiredService<RequestCaller>().User?.Id ?? ""));
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped<IPublisher, ShellPublisher>();
 builder.Services.AddScoped<IStorageFigures, ShellStorageFigures>();

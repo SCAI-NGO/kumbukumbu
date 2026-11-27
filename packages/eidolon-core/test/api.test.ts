@@ -2,7 +2,7 @@
 // The attachments API (GET/PUT/DELETE /api/files) and how the client and the engine tell a server that has it.
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { KumbuApi, type HttpFn, type HttpRequest, type HttpResponse } from "../src/api/client";
-import { AuthError, OfflineError, RejectedError } from "../src/engine/ports";
+import { AuthError, OfflineError, RejectedError, VaultChangedError } from "../src/engine/ports";
 import { versionOfBytes } from "../src/engine/version";
 import { harness } from "./fakes/harness";
 
@@ -105,6 +105,19 @@ describe("binary transfer", () => {
     const http = fakeHttp({ status: 404, body: { error: "gone" } });
     await api(http).readFile("Bespréchung.png");
     expect(last(http).url).toBe(`https://k.example/api/files/Work/${encodeURIComponent("Bespréchung.png".normalize("NFC"))}`);
+  });
+
+  test("sends the vault's id with every file request, and a name that is another vault's now is refused", async () => {
+    const version = await versionOfBytes(png);
+    const http = fakeHttp({ status: 201, body: state(version) }, { status: 200, bytes: png, headers: { ETag: `"${version}"` } }, { status: 204 },
+      { status: 409, body: { error: "Work is another vault now.", code: "vault-changed" } });
+    const client = new KumbuApi(http, "https://k.example/", "Work", null, "vault-1f3a");
+    await client.putFile("a.png", png.slice().buffer, null);
+    await client.readFile("a.png");
+    await client.removeFile("a.png", version);
+    expect(http.calls.map((c) => c.headers["Kumbu-Vault-Id"])).toEqual(["vault-1f3a", "vault-1f3a", "vault-1f3a"]);
+    await expect(client.putFile("a.png", png.slice().buffer, version)).rejects.toBeInstanceOf(VaultChangedError);
+    expect(http.calls).toHaveLength(4);
   });
 });
 

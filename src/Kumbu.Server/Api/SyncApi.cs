@@ -51,10 +51,13 @@ public static class SyncApi
     /// <summary>An older cursor gets the full list: the trash keeps a deletion for 30 days.</summary>
     public static readonly TimeSpan MaxCursorAge = TimeSpan.FromDays(25);
 
+    /// <summary>The id of the vault a sync client means by the name in its request; optional, the Obsidian plugin's key sends none.</summary>
+    public const string VaultIdHeader = "Kumbu-Vault-Id";
+
     public static void MapSyncApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapGet("/vaults/{vault}/versions", VersionsAsync).Produces(StatusCodes.Status304NotModified).Errors(400, 401, 404, 503);
+        api.MapGet("/vaults/{vault}/versions", VersionsAsync).AddEndpointFilter(VaultIdFilter).Produces(StatusCodes.Status304NotModified).Errors(400, 401, 404, 409, 503);
         // Not a use of the session: a tab that reconnects its socket mustn't keep a session alive (collab design §13 L7).
         api.MapPost("/ws-ticket", TicketAsync).WithMetadata(BackgroundMetadata.Instance).Errors(401, 403, 503);
         api.MapDelete("/key", RevokeSelfAsync).Errors(401, 403);
@@ -109,6 +112,28 @@ public static class SyncApi
         // A key revoked meanwhile (by the user in the web app) is not found again: it is revoked either way.
         await keys.RevokeAsync(caller.User!, key.KeyId, ct);
         return TypedResults.NoContent();
+    }
+
+    /// <summary>
+    /// A request whose <see cref="VaultIdHeader"/> isn't the id of the vault it names (a vault's name, or a member's
+    /// alias, can go to another vault while a device is away) is refused with 409 <c>vault-changed</c> before anything
+    /// is read or written. A name that is no vault's is left to the endpoint's own 404.
+    /// </summary>
+    internal static async ValueTask<object?> VaultIdFilter(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var http = context.HttpContext;
+        if (http.Request.Headers[VaultIdHeader] is [{ } id] && http.Features.Get<RequestCaller>() is { } caller)
+        {
+            var name = http.Request.RouteValues["vault"] is string vault
+                ? ApiPaths.Parse(vault, null, note: false).Segments[0]
+                : context.Arguments.OfType<MoveRequest>().FirstOrDefault() is { } move && VaultPath.TryParse(move.From, out var from) && !from.IsRoot ? from.Segments[0] : null;
+            if (name is not null && (await caller.OpenVaultsAsync(http.RequestAborted)).FirstOrDefault(v => v.Name == name) is { } named && named.Id != id)
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, $"'{name}' is the name of another vault now; read the vault list again.", code: "vault-changed");
+            }
+        }
+
+        return await next(context);
     }
 
     /// <summary>The upgrade; 401 for an unknown, used or expired ticket. Hints go out until the socket closes.</summary>

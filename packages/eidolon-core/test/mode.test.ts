@@ -159,6 +159,31 @@ test("conflicts stay until seen, online too", () => {
   expect(last().conflicts).toEqual([]);
 });
 
+test("a session's end forgets the conflicts, the done line and the count of the person before", () => {
+  const { m, last } = machine();
+  m.apply({ type: "failed" });
+  m.apply({ type: "waiting", count: 3 });
+  vi.advanceTimersByTime(HOLD_MS);
+  m.apply({ type: "socket", tab: "a", up: true });
+  m.apply({ type: "conflict", conflict: { vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" } });
+  m.apply({ type: "waiting", count: 0 });
+  vi.advanceTimersByTime(60_000);
+  expect(last().done).toEqual({ uploaded: 3 });
+  m.apply({ type: "forget" });
+  expect(last()).toMatchObject({ waiting: 0, done: null, conflicts: [] });
+});
+
+test("offline, a forgotten count leaves nothing to upload for the next person", () => {
+  const { m, last } = machine();
+  m.apply({ type: "failed" });
+  m.apply({ type: "waiting", count: 3 });
+  m.apply({ type: "forget" });
+  expect(last()).toMatchObject({ offline: true, phase: "offline", waiting: 0 });
+  vi.advanceTimersByTime(HOLD_MS);
+  m.apply({ type: "socket", tab: "a", up: true });
+  expect(last()).toMatchObject({ offline: false, done: null });
+});
+
 describe("tabs", () => {
   /** One browser's mode channel: every other listener hears a message, later. */
   function bus() {
@@ -202,6 +227,64 @@ describe("tabs", () => {
     expect(last(1)?.offline).toBe(false);
   });
 
+  test("a missed heartbeat counts every tab's socket down until one opens again", async () => {
+    const { tabs, last } = await browser(2);
+    // Both tabs' sockets up; the one in the background asks no heartbeat and hears of no loss.
+    tabs[0]!.send({ type: "socket", tab: "tab0", up: true });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: true });
+    tabs[1]!.send({ type: "failed" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last(0)?.offline).toBe(false);
+    tabs[1]!.send({ type: "lost" });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last(0)?.offline).toBe(true);
+    expect(last(1)?.offline).toBe(true);
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last(0)?.offline).toBe(false);
+  });
+
+  test("after a missed heartbeat, an answer counts again the sockets that stayed open", async () => {
+    const { tabs, last } = await browser(2);
+    tabs[0]!.send({ type: "socket", tab: "tab0", up: true });
+    await vi.advanceTimersByTimeAsync(0);
+    // The visible tab misses one heartbeat, its socket goes and comes back; the leading tab's socket stays open.
+    tabs[1]!.send({ type: "lost" });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: false });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[1]!.send({ type: "reached" });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: true });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[1]!.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    tabs[0]!.send({ type: "failed" });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[0]!.send({ type: "reached" });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(last(0)?.phase).toBe("online");
+  });
+
+  test("an answer after a missed heartbeat doesn't count a socket that closed or a tab that went meanwhile", async () => {
+    const { tabs, last } = await browser(3);
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: true });
+    tabs[2]!.send({ type: "socket", tab: "tab2", up: true });
+    await vi.advanceTimersByTimeAsync(0);
+    tabs[0]!.send({ type: "lost" });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: false });
+    tabs[2]!.stop();
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[0]!.send({ type: "reached" });
+    tabs[0]!.send({ type: "socket", tab: "tab0", up: true });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    expect(last(0)?.offline).toBe(false);
+    tabs[0]!.send({ type: "socket", tab: "tab0", up: false });
+    tabs[0]!.send({ type: "failed" });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    expect(last(0)?.offline).toBe(true);
+  });
+
   test("when the leading tab closes, another leads on from the same state", async () => {
     const { tabs, last } = await browser(2);
     tabs[1]!.send({ type: "failed" });
@@ -230,6 +313,22 @@ describe("tabs", () => {
     blocker.release();
     await vi.advanceTimersByTimeAsync(0);
     expect(heard).toMatchObject({ offline: true, waiting: 2 });
+  });
+
+  test("a tab opened after a session's end hears nothing of that person's conflicts or count", async () => {
+    const { tabs, locks, channel } = await browser(2);
+    tabs[1]!.send({ type: "conflict", conflict: { vault: "v1", original: "Plan.md", copy: "Plan (conflict 2026-11-22 21-04).md" } });
+    tabs[1]!.send({ type: "waiting", count: 3 });
+    await vi.advanceTimersByTimeAsync(0);
+    tabs[1]!.send({ type: "forget" });
+    await vi.advanceTimersByTimeAsync(0);
+    // The tab that told the count leads now: what it saw before the end isn't told again.
+    tabs[0]!.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    let heard: ModeState | undefined;
+    new SharedMode({ locks, channel: channel(), clock }, "late", (s) => (heard = s));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toMatchObject({ waiting: 0, conflicts: [] });
   });
 
   test("a tab opened later hears the state at once", async () => {

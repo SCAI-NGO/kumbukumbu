@@ -3,6 +3,7 @@ using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
+using Kumbu.Server.Auth;
 using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace Kumbu.Server.Api;
@@ -48,7 +49,8 @@ public static class SimilarApi
         api.MapPost("/vaults/{vault}/similar/not-related", NotRelatedAsync).Errors(400, 401, 403, 404, 409, 503, 507);
     }
 
-    private static async Task<Ok<SimilarNotesView>> SimilarAsync(string vault, string? path, INoteStore store, ISearchIndex index, CancellationToken ct)
+    private static async Task<Ok<SimilarNotesView>> SimilarAsync(
+        string vault, string? path, INoteStore store, ISearchIndex index, TimeProvider time, HeavyCallGate gate, RequestCaller caller, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, PathKind.Note);
         var content = await store.ReadAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
@@ -61,7 +63,20 @@ public static class SimilarApi
         // Not the archive, unless the note is in it (spec §3.5).
         var query = new SimilarQuery([new SimilarSource(notePath)], VaultPath.Root.Child(notePath.Vault!), Max, Unlinked: true,
             Archive: ArchiveFolder.Contains(notePath), LeftOut: NotRelated.LeftOutFor(new Note(notePath, content)));
-        var result = await SimilarSearch.RunAsync(store, index, query, ct);
+        using var place = await gate.StartAsync(caller.User?.Id ?? "", ct);
+        SimilarResult result;
+        using (var call = new HeavyCall(ct, HeavyCall.TimeLimit, time))
+        {
+            try
+            {
+                result = await SimilarSearch.RunAsync(store, index, query, call.Token);
+            }
+            catch (OperationCanceledException) when (call.TimedOut)
+            {
+                throw ApiErrors.Busy();
+            }
+        }
+
         if (result.Error is not null) return TypedResults.Ok(Empty("unindexed", result.Pending));
 
         var notes = result.Hits.Where(h => h.Score >= Floor)

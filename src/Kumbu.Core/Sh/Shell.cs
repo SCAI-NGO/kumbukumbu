@@ -37,7 +37,7 @@ public sealed class Shell
     public Shell(
         INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null,
         IAttachmentPixels? pixels = null, IWriterLabels? labels = null, Publishing.IPublisher? publisher = null, string version = "0.0.0-dev",
-        IStorageFigures? figures = null, Skills.ISkillUpdates? updates = null, ICallerZone? zone = null)
+        IStorageFigures? figures = null, Skills.ISkillUpdates? updates = null, ICallerZone? zone = null, Search.IHeavyCalls? heavy = null)
     {
         _observer = observer;
         _pixels = pixels;
@@ -50,7 +50,7 @@ public sealed class Shell
         [
             .. ReadingCommands(notes, _now, _zone, pixels, marks: marks),
             new Csv(notes),
-            new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks), new Similar(notes, search ?? new Search.NoSearchIndex()),
+            new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks), new Similar(notes, search ?? new Search.NoSearchIndex(), mover.Time, heavy, marks),
             new Html(notes), new Xml(notes),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             .. pixels is null || files is null ? Array.Empty<ICommand>() : [new PdfImages(notes, pixels, files, mover.Time)],
@@ -83,10 +83,10 @@ public sealed class Shell
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
     private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, ICallerZone zone, IAttachmentPixels? pixels, bool live = true, WriterMarks? marks = null) =>
     [
-        new Ls(notes), new Cat(notes, pixels, marks), new OutlineCommand(notes), new Rg(notes, live ? pixels : null, marks),
+        new Ls(notes), new Cat(notes, pixels, marks), new OutlineCommand(notes, marks), new Rg(notes, live ? pixels : null, marks),
         new LinksCommand(notes), new Backlinks(notes), new GraphCommand(notes), new TagsCommand(notes), new BoardCommand(notes, now),
         new CalendarCommand(notes, now, zone),
-        new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
+        new Head(notes, marks), new Tail(notes, marks), new Wc(notes), new Sort(notes, marks),
     ];
 
     public async Task<ShellResult> RunAsync(string commandLine, CancellationToken ct)

@@ -47,6 +47,7 @@ import BackLink from "../calendar/BackLink";
 import { cameFromOf } from "../calendar/backLink";
 import { isFlag } from "../flags/api";
 import FlagLine from "../flags/FlagLine";
+import { useNotKeptHere } from "../offline/writing";
 import { startWrite } from "../shell/ModeToggle";
 import { PaneSide, useOpenNote } from "../shell/openInPane";
 
@@ -154,9 +155,11 @@ export default function NoteView({ path, panel = false, dim = false, clickToWrit
   const vaults = useVaults();
   const vault = vaults.data?.find((v) => v.name === vaultOf(path));
   const unnamed = useUnnamedVault(path);
-  const changes = !vaults.data || mayChange(levelOf(vault), path);
+  // Offline, a vault this device doesn't keep has nowhere to take a write: the note is only read there.
+  const notKept = useNotKeptHere(path);
+  const changes = (!vaults.data || mayChange(levelOf(vault), path)) && !notKept;
   // Moving and adding properties rewrite the note's text: offered only once the vault list says it may be changed.
-  const mayWrite = !!vaults.data && mayChange(levelOf(vault), path);
+  const mayWrite = !!vaults.data && mayChange(levelOf(vault), path) && !notKept;
   // Where the top bar's Write is on: not while the note is renamed, nor while the server's refusal of a save holds.
   const writeOn = useEditor((s) => mayWrite && !s.renaming.includes(path) && !(s.refused?.path === path && vaults.dataUpdatedAt <= s.refused.at));
   // Files dropped on the note are an upload into its folder: none below `write`.

@@ -4,6 +4,8 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useVersionPoll } from "../api/history";
+import { startHeartbeat } from "../offline/heartbeat";
+import { resetOfflineMode, useOfflineMode } from "../offline/mode";
 import { useEditor } from "../state/editor";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json } from "../test/app";
@@ -396,5 +398,34 @@ describe("the sync socket", () => {
     expect(router.state.location.pathname).toBe("/notes/Gartenarbeit/plan.md");
     expect(router.state.historyAction).toBe("POP");
     expect(useEditor.getState()).toMatchObject({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", recentPaths: ["/Gartenarbeit/plan.md"] });
+  });
+});
+
+describe("a quiet network loss", () => {
+  afterEach(() => resetOfflineMode());
+
+  it("takes the open socket down when the heartbeat gets no answer, so the app goes offline", async () => {
+    server();
+    mount();
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+    last().open();
+    const asked = vi.fn((_url: string) => Promise.reject(new TypeError("Failed to fetch")));
+    vi.stubGlobal("fetch", asked);
+    const stop = startHeartbeat();
+    try {
+      await act(() => {
+        (navigator as { connection?: EventTarget }).connection?.dispatchEvent(new Event("change"));
+        document.dispatchEvent(new Event("visibilitychange"));
+        return new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(asked).toHaveBeenCalledWith("/api/version", expect.anything());
+      // On a dead link the socket's close may come only after the browser's closing handshake gives up: the app
+      // doesn't wait for it.
+      expect(last().closed).toBe(true);
+      expect(useSyncStatus.getState().connected).toBe(false);
+      await waitFor(() => expect(useOfflineMode.getState().offline).toBe(true));
+    } finally {
+      stop();
+    }
   });
 });

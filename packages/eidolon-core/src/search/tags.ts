@@ -21,9 +21,16 @@ function isTag(text: string): boolean {
   return true;
 }
 
+/** Without a pattern, as trim does. */
+function withoutTrailingSlashes(text: string): string {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "/") end--;
+  return text.slice(0, end);
+}
+
 /** A tag as asked for, with or without `#` and a trailing `/`; null if it can't be one. */
 export function normaliseTag(asked: string): string | null {
-  const tag = trim(asked).replace(/^#/, "").replace(/\/+$/, "").normalize("NFC");
+  const tag = withoutTrailingSlashes(trim(asked).replace(/^#/, "")).normalize("NFC");
   return isTag(tag) ? tag : null;
 }
 
@@ -33,7 +40,7 @@ export function tagsOf(content: string): string[] {
   for (const value of frontmatterTexts(content, "tags")) {
     // Older notes write "tags: a, b" or "tags: a b"; Obsidian splits those.
     for (const part of value.split(/[, \t]+/)) {
-      const tag = part.replace(/^#+/, "").replace(/\/+$/, "").normalize("NFC");
+      const tag = withoutTrailingSlashes(part.replace(/^#+/, "")).normalize("NFC");
       if (isTag(tag)) tags.push(tag);
     }
   }
@@ -78,7 +85,7 @@ export function tagsOf(content: string): string[] {
       }
       let stop = p + 1;
       while (stop < line.length && isTagChar(line[stop]!)) stop++;
-      const tag = line.slice(p + 1, stop).replace(/\/+$/, "");
+      const tag = withoutTrailingSlashes(line.slice(p + 1, stop));
       if (isTag(tag)) tags.push(tag.normalize("NFC"));
       p = stop;
     }

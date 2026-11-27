@@ -338,6 +338,8 @@ public static class AccountApi
         var (recoveryKey, user, userKey) = await users.RecoverWithKeyAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
             ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
         pairings.DropAll(user.Id);
+        // Before the sessions' sockets close: a tab still open learns that its copy's slot went.
+        await hub.MirrorChangedAsync(user.Id, CancellationToken.None);
         await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
         rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
@@ -459,6 +461,8 @@ public static class AccountApi
         await PasswordGivenAsync(http, sessions, ct);
         pairings.DropAll(user.Id);
         await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
+        // Every slot went, this session's too: its tabs make contact now, while online.
+        await hub.MirrorChangedAsync(user.Id, CancellationToken.None);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
@@ -475,13 +479,12 @@ public static class AccountApi
         return TypedResults.NoContent();
     }
 
+    /// <summary>Every browser's offline copy stays: another device's goes only with "Remove offline copy" and the password
+    /// (ADR 0042).</summary>
     private static async Task<NoContent> EndOtherSessionsAsync(
-        HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, SyncHub hub, MirrorSlots mirrors, CancellationToken ct)
+        HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
-        var secret = http.Request.Cookies[CallerMiddleware.SessionCookie];
-        await sessions.EndAllAsync(caller.User!.Id, secret, ct);
-        // Their browsers' offline copies go too (offline mode design §4.4), this browser's stays.
-        await mirrors.EndOthersAsync(caller.User!.Id, secret is null ? null : Sessions.SubjectOf(secret), ct);
+        await sessions.EndAllAsync(caller.User!.Id, http.Request.Cookies[CallerMiddleware.SessionCookie], ct);
         // A code made by one of the sessions ended (perhaps the one that prompted this) goes with them.
         pairings.DropAll(caller.User!.Id);
         await hub.SubjectsEndedAsync(caller.User!.Id, CancellationToken.None);

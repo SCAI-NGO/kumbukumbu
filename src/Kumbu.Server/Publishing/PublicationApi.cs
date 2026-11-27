@@ -117,11 +117,13 @@ public static class PublicationApi
     /// <summary>What publishing the note to <paramref name="depth"/> without <paramref name="without"/> would take; nothing
     /// is written (Publish 2.0 decision 2).</summary>
     private static async Task<Ok<PublicationPreviewView>> PreviewAsync(
-        string vault, string? path, Publications publications, EncryptedNoteStore store, CancellationToken ct, int depth = 0, string[]? without = null)
+        string vault, string? path, Publications publications, EncryptedNoteStore store, HeavyCallGate gate, RequestCaller caller, CancellationToken ct,
+        int depth = 0, string[]? without = null)
     {
         var (access, note) = await NoteAsync(store, vault, path, ct);
         var leftOut = Paths(vault, without);
         await publications.RequireInWalkAsync(access, store, note, depth, leftOut, ct);
+        using var place = await gate.StartAsync(caller.User?.Id ?? "", ct);
         return TypedResults.Ok(View(await publications.PreviewAsync(access, store, note, depth, leftOut, ct)));
     }
 
@@ -129,7 +131,7 @@ public static class PublicationApi
     /// switch and a member are refused first, as <see cref="Publications"/> would: no prompt, no password check spent.</summary>
     private static async Task<Results<Created<PublishedView>, Conflict<BundleChangedView>>> PublishAsync(
         string vault, string? path, PublishRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits,
-        Publications publications, EncryptedNoteStore store, IOptions<KumbuOptions> options, CancellationToken ct)
+        Publications publications, EncryptedNoteStore store, IOptions<KumbuOptions> options, HeavyCallGate gate, CancellationToken ct)
     {
         var (access, note) = await NoteAsync(store, vault, path, ct);
         if (!publications.Enabled) throw new PublishRefusedException("publishing is switched off on this server", ShellErrorKind.Refused, Refusals.PublishingOff);
@@ -146,6 +148,7 @@ public static class PublicationApi
         var (by, byRef) = Writer(caller, access);
         var without = Paths(vault, body.Without);
         await publications.RequireInWalkAsync(access, store, note, body.Depth, without, ct);
+        using var place = await gate.StartAsync(caller.User!.Id, ct);
         PublishedNote published;
         try
         {
@@ -167,7 +170,7 @@ public static class PublicationApi
 
     private static async Task<Results<Ok<PublishedView>, Conflict<BundleChangedView>>> UpdateAsync(
         string vault, string? path, HttpContext http, RequestCaller caller, Publications publications, EncryptedNoteStore store,
-        IOptions<KumbuOptions> options, CancellationToken ct)
+        IOptions<KumbuOptions> options, HeavyCallGate gate, CancellationToken ct)
     {
         var (access, note) = await NoteAsync(store, vault, path, ct);
         var (by, byRef) = Writer(caller, access);
@@ -178,6 +181,7 @@ public static class PublicationApi
         var depth = body?.Depth ?? state?.Depth ?? 0;
         if (body?.Expected is null && (depth > 0 || state?.Depth > 0)) throw Unseen();
         if (without is not null) await publications.RequireInWalkAsync(access, store, note, depth, without, ct);
+        using var place = await gate.StartAsync(caller.User?.Id ?? "", ct);
         try
         {
             return TypedResults.Ok(View(await publications.UpdateAsync(

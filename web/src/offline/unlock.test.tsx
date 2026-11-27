@@ -2,25 +2,29 @@
 // Unlocking and locking the offline copy (offline mode design §3a): the sign-in form offline, the idle lock, and a
 // sign-out offline that the server hears of later.
 import "fake-indexeddb/auto";
-import { screen } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MirrorCopies } from "eidolon-core/store/mirror";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { json, noContent, renderApp } from "../test/app";
 import { useOfflineCopy } from "./copy";
+import { runOfflineHost } from "./host";
 import { lockCopy, onBeforeLock, useOfflineMode } from "./mode";
 import { browserPorts } from "./ports";
-import { endPendingSignOut, signOutOffline, signOutPending, unlockOffline } from "./unlock";
+import { turnOff } from "./turnOn";
+import { endPendingSignOut, signOutOffline, signOutPending, sweepRemovedCopies, unlockOffline } from "./unlock";
 
 const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 const vaults = [{ id: "v1", tag: "t1", canWrite: true, pending: false }];
 
 /** A copy of Ada's in this browser's IndexedDB, as turning offline on leaves it; locked again. */
-async function adasCopy(idleMs = 60_000) {
+async function adasCopy(idleMs = 60_000, username = "Ada", userId = "u1") {
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s1", token: "tok", key, vaults }))));
   const copies = new MirrorCopies(await browserPorts());
-  const mirror = await copies.create({ userId: "u1", username: "Ada", password: "pw", label: "Test", idleMs });
+  const mirror = await copies.create({ userId, username, password: "pw", label: "Test", idleMs });
   mirror.lock();
   vi.unstubAllGlobals();
 }
@@ -31,6 +35,7 @@ afterEach(async () => {
   await lockCopy();
   useOfflineCopy.getState().clear();
   useSession.getState().reset();
+  useEditor.getState().reset();
   localStorage.clear();
   const ports = await browserPorts();
   await ports.storage.write({ removePrefix: [""] });
@@ -61,6 +66,87 @@ describe("the sign-in form offline", () => {
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("The username or password is wrong, or this device keeps no notes of this user.")).toBeInTheDocument();
   });
+});
+
+describe("an offline sign-in after a session ended in the tab", () => {
+  /** Alice's session ended here (her copy locked when idle), with her note read and unsaved text; Bob's copy is on the device. */
+  async function aliceWasHere() {
+    await adasCopy(60_000, "Bob", "u2");
+    useSession.getState().signedIn({ user: { id: "u1", username: "alice", display: "Alice", role: "user" }, previousSignInAt: null });
+    useSession.getState().end();
+    useEditor.getState().setDraft({ username: "alice", path: "/Home/Diary.md", text: "Dear diary", version: "v1" });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["note", "/Home/Diary.md"], { path: "/Home/Diary.md", content: "Dear diary" });
+    useOfflineMode.getState().failed();
+    return queryClient;
+  }
+
+  async function signsInOffline(username: string, queryClient: QueryClient) {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    const router = renderApp("/signin?next=%2Fnotes%2FHome%2FDiary.md", queryClient);
+    await userEvent.type(await screen.findByLabelText("Username"), username);
+    await userEvent.type(screen.getByLabelText("Password"), "pw");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(useSession.getState().user?.username).toBe(username));
+    return router;
+  }
+
+  test("someone else starts afresh: nothing the app read, no unsaved text, not the note they were on", async () => {
+    const queryClient = await aliceWasHere();
+    const router = await signsInOffline("bob", queryClient);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(queryClient.getQueryData(["note", "/Home/Diary.md"])).toBeUndefined();
+    expect(useEditor.getState().draft).toBeNull();
+  });
+
+  test("the same person comes back to the note they were on", async () => {
+    const queryClient = await aliceWasHere();
+    useSession.setState({ previousUser: "bob" });
+    const router = await signsInOffline("Bob", queryClient);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Home/Diary.md"));
+    expect(queryClient.getQueryData(["note", "/Home/Diary.md"])).toBeUndefined();
+    expect(useEditor.getState().draft).not.toBeNull();
+  });
+});
+
+test("locking the copy forgets what the app read", async () => {
+  await adasCopy();
+  const queryClient = new QueryClient();
+  const stop = runOfflineHost(queryClient);
+  expect(await unlockOffline("ada", "pw")).toBe(true);
+  queryClient.setQueryData(["tree", "Home"], [{ path: "/Home/Diary.md" }]);
+  await lockCopy();
+  expect(queryClient.getQueryData(["tree", "Home"])).toBeUndefined();
+  stop();
+});
+
+test("removing the copy while signed in online keeps what the app read", async () => {
+  await adasCopy();
+  // The removal takes a Web Lock, which jsdom hasn't: one tab, so it runs at once.
+  vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } }));
+  const queryClient = new QueryClient();
+  const stop = runOfflineHost(queryClient);
+  expect(await unlockOffline("ada", "pw")).toBe(true);
+  useSession.getState().signedIn({ user: { id: "u1", username: "Ada", display: "Ada", role: "user" }, previousSignInAt: null });
+  queryClient.setQueryData(["tree", "Home"], [{ path: "/Home/Diary.md" }]);
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(noContent())));
+  await turnOff(useOfflineCopy.getState().header!);
+  expect(useOfflineCopy.getState().mirror).toBeNull();
+  expect(queryClient.getQueryData(["tree", "Home"])).toEqual([{ path: "/Home/Diary.md" }]);
+  stop();
+});
+
+test("a lock while offline forgets what the app read, a session or not", async () => {
+  await adasCopy();
+  const queryClient = new QueryClient();
+  const stop = runOfflineHost(queryClient);
+  expect(await unlockOffline("ada", "pw")).toBe(true);
+  useSession.getState().signedIn({ user: { id: "u1", username: "Ada", display: "Ada", role: "user" }, previousSignInAt: null });
+  useOfflineMode.getState().failed();
+  queryClient.setQueryData(["tree", "Home"], [{ path: "/Home/Diary.md" }]);
+  await lockCopy();
+  expect(queryClient.getQueryData(["tree", "Home"])).toBeUndefined();
+  stop();
 });
 
 test("an offline unlock locks after the idle limit; the editor's text goes into the copy first", async () => {
@@ -95,6 +181,8 @@ describe("a sign-out offline", () => {
 
   test("with the copy removed, its changes go with it", async () => {
     await adasCopy();
+    // The removal takes a Web Lock, which jsdom hasn't: one tab, so it runs at once.
+    vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } }));
     await unlockOffline("ada", "pw");
     await signOutOffline(true);
     expect(useOfflineCopy.getState().header).toBeNull();
@@ -107,5 +195,68 @@ describe("a sign-out offline", () => {
     await signOutOffline(false);
     expect(useOfflineCopy.getState().mirror).toBeNull();
     expect(await unlockOffline("ada", "pw")).toBe(true);
+  });
+});
+
+describe("the sign-in page's sweep", () => {
+  /** The server, no session: every copy's slot is gone, so each token gets the 401 that says wipe. */
+  function slotsGone() {
+    const asked: (string | null)[] = [];
+    vi.stubGlobal("fetch", vi.fn((_input: unknown, init?: RequestInit) => {
+      asked.push(new Headers(init?.headers).get("Kumbu-Mirror"));
+      return Promise.resolve(json(401, { error: "This browser's offline copy was removed; it is deleted here too.", code: "mirror-wipe" }));
+    }));
+    // The removal takes a Web Lock, which jsdom hasn't: one tab, so it runs at once.
+    vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } }));
+    return asked;
+  }
+
+  const plant = async (header: unknown) =>
+    (await browserPorts()).storage.write({ put: [["h/-", new TextEncoder().encode(JSON.stringify(header))]] });
+  const adas = async () => new MirrorCopies(await browserPorts()).forUsername("ada");
+
+  test("goes on past a header it can't use", async () => {
+    await adasCopy();
+    await plant({ schema: 2 });
+    const asked = slotsGone();
+    await sweepRemovedCopies();
+    expect(asked).toEqual(["tok"]);
+    expect(await adas()).toBeNull();
+  });
+
+  test("goes on past a header whose token is no header value", async () => {
+    await adasCopy();
+    const { storage } = await browserPorts();
+    const [, value] = (await storage.scan("h/"))[0]!;
+    await plant({ ...JSON.parse(new TextDecoder().decode(value)), copy: "other", slot: { id: "s2", token: "tok\r\nX-Other: 1" } });
+    const asked = slotsGone();
+    await sweepRemovedCopies();
+    expect(asked).toEqual(["tok"]);
+    expect(await adas()).toBeNull();
+  });
+
+  test("goes on past a copy it couldn't remove", async () => {
+    await adasCopy();
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s2", token: "tok-bob", key, vaults }))));
+    (await new MirrorCopies(await browserPorts()).create({ userId: "u2", username: "Bob", password: "pw", label: "Test", idleMs: 60_000 })).lock();
+    const asked = slotsGone();
+    const wipe = vi.spyOn(MirrorCopies.prototype, "wipe").mockRejectedValueOnce(new Error("The storage refused."));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await sweepRemovedCopies();
+    expect(asked.sort()).toEqual(["tok", "tok-bob"]);
+    expect(wipe).toHaveBeenCalledTimes(2);
+    wipe.mockRestore();
+    error.mockRestore();
+  });
+
+  test("stops when the server can't be reached", async () => {
+    await adasCopy();
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s2", token: "tok-bob", key, vaults }))));
+    (await new MirrorCopies(await browserPorts()).create({ userId: "u2", username: "Bob", password: "pw", label: "Test", idleMs: 60_000 })).lock();
+    const fetch = vi.fn(() => Promise.reject(new TypeError("Failed to fetch")));
+    vi.stubGlobal("fetch", fetch);
+    await sweepRemovedCopies();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await adas()).not.toBeNull();
   });
 });

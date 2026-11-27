@@ -267,10 +267,12 @@ public static class NoteApi
         api.MapPut("/vaults/{vault}/name", RenameVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
         api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
-        api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
-        api.MapPut("/notes/{vault}/{**path}", WriteAsync).WithMetadata(LateSaveMetadata.Instance).AddEndpointFilter(LateSave.Filter).Errors(400, 401, 403, 404, 413, 503, 507);
-        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
-        api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
+        // A sync client names the vault's id too (SyncApi.VaultIdFilter).
+        api.MapGet("/notes/{vault}/{**path}", ReadAsync).AddEndpointFilter(SyncApi.VaultIdFilter).Errors(400, 401, 404, 409, 503);
+        api.MapPut("/notes/{vault}/{**path}", WriteAsync).WithMetadata(LateSaveMetadata.Instance).AddEndpointFilter(LateSave.Filter).AddEndpointFilter(SyncApi.VaultIdFilter)
+            .Errors(400, 401, 403, 404, 413, 503, 507);
+        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).AddEndpointFilter(SyncApi.VaultIdFilter).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("/move", MoveAsync).AddEndpointFilter(SyncApi.VaultIdFilter).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/folders/trash", TrashFolderAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 503);
 
         api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404, 503);
@@ -517,7 +519,7 @@ public static class NoteApi
     /// that list it disconnected: they can't be given the new key without their owner.</summary>
     private static async Task<Ok<RekeyVaultView>> RekeyVaultAsync(
         string vault, RekeyVaultRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, Sessions sessions, AccountLimits limits,
-        Pairings pairings, CancellationToken ct)
+        Pairings pairings, VaultCatalog catalog, Sync.SyncHub hub, CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooManyPasswordChecks(retryAfter);
@@ -544,6 +546,12 @@ public static class NoteApi
 
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         if (summary is null) throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        // Its tag changed: the copies holding it, the members' too, bring it in line now rather than at their next contact.
+        if (await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, CancellationToken.None) is { } vaultId)
+        {
+            await hub.VaultRekeyedAsync(vaultId, CancellationToken.None);
+        }
+
         return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count, summary.WithdrawnInvitations, summary.RevokedShares.Count));
     }
 

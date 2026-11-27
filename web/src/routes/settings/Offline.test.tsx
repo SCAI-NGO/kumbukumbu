@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import "fake-indexeddb/auto";
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useOfflineCopy } from "../../offline/copy";
+import { lockCopy, useOfflineMode, wipeCopy } from "../../offline/mode";
 import { turnOff } from "../../offline/turnOn";
 import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
@@ -60,15 +62,17 @@ afterEach(async () => {
   const header = useOfflineCopy.getState().header;
   if (header) await turnOff(header);
   cleanup();
+  useOfflineMode.setState({ offline: false });
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   useSession.getState().reset();
   useEditor.getState().reset();
 });
 
-async function turnedOn() {
-  const fake = api();
-  renderApp("/settings/offline");
+async function turnedOn(overrides: Parameters<typeof api>[0] = {}, queryClient?: QueryClient, onRouter?: (router: ReturnType<typeof renderApp>) => void) {
+  const fake = api(overrides);
+  const router = renderApp("/settings/offline", queryClient);
+  onRouter?.(router);
   await userEvent.click(await screen.findByRole("switch", { name: "Keep my notes on this device" }));
   const dialog = screen.getByRole("alertdialog", { name: "Keep your notes on this device" });
   await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
@@ -120,6 +124,63 @@ describe("Settings: Offline", () => {
     expect(screen.getByRole("checkbox", { name: "All my vaults" })).not.toBeChecked();
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Space for opened attachments" }), "1 GB");
     await waitFor(() => expect(useOfflineCopy.getState().mirror!.choice.budget).toBe(1024 * 1_048_576));
+  });
+
+  it("lists under Kept offline only the vaults the session lists", { timeout: 20_000 }, async () => {
+    await turnedOn();
+    const mirror = useOfflineCopy.getState().mirror!;
+    await act(() => mirror.choose((c) => ({ ...c, kept: { [work.id]: ["Projects"], "v-other": ["Plans"] } })));
+    const kept = await screen.findByRole("list", { name: "Kept offline" });
+    expect(kept).toHaveTextContent("Work / Projects");
+    expect(kept).not.toHaveTextContent("Plans");
+    expect(kept).not.toHaveTextContent("A vault");
+    expect(within(kept).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("dims the vault choice, All my vaults and the budget offline, with Needs a connection", { timeout: 20_000 }, async () => {
+    await turnedOn();
+    const controls = () => [
+      screen.getByRole("checkbox", { name: "All my vaults" }),
+      screen.getByRole("checkbox", { name: "Keep Work on this device" }),
+      screen.getByRole("combobox", { name: "Space for opened attachments" }),
+    ];
+    for (const c of controls()) expect(c).toBeEnabled();
+    expect(screen.queryByText("Needs a connection")).toBeNull();
+    act(() => useOfflineMode.setState({ offline: true }));
+    for (const c of controls()) {
+      expect(c).toBeDisabled();
+      expect(c).toHaveAttribute("title", "Needs a connection");
+    }
+    expect(within(screen.getByRole("region", { name: "Vaults on this device" })).getByText("Needs a connection")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Attachments" })).getByText("Needs a connection")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Keep Work on this device" }));
+    expect(useOfflineCopy.getState().mirror!.choice).toMatchObject({ all: true });
+    expect(screen.queryByText(/can't be reached/)).toBeNull();
+  });
+
+  it("says nothing failed while the app is switching back online", { timeout: 20_000 }, async () => {
+    let reachable = true;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await turnedOn({ "GET /api/vaults": () => (reachable ? json(200, [work, diary]) : Promise.reject(new TypeError("Failed to fetch"))) }, queryClient);
+    act(() => useOfflineMode.setState({ offline: true, phase: "uploading" }));
+    reachable = false;
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(queryClient.getQueryState(["vaults"])?.status).toBe("error"));
+    const page = screen.getByRole("region", { name: "Vaults on this device" }).parentElement!;
+    expect(within(page).queryByText(/can't be reached/)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Keep Work on this device" })).toBeInTheDocument();
+  });
+
+  it("lists this device as This device once its copy is made", { timeout: 20_000 }, async () => {
+    let made = false;
+    await turnedOn({
+      "GET /api/account/mirror-slots": () => json(200, made ? [thisDevice, phone] : [phone]),
+      "POST /api/account/mirror-slots": () => {
+        made = true;
+        return json(201, { id: "s1", token: "tok", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] });
+      },
+    });
+    expect(await within(screen.getByRole("list", { name: "Devices with a copy" })).findByText("This device")).toBeInTheDocument();
   });
 
   it("renames a device's copy, this one too, and lists it under the new name", async () => {
@@ -174,27 +235,19 @@ describe("Settings: Offline", () => {
     expect(await calls(fake, "POST /api/account/mirror-slots/s2/remove")[0]!.json()).toEqual({ password: "correct horse battery" });
   });
 
-  it("asks for the password when the device has just reported changes", async () => {
-    let asked = 0;
-    const fake = api({
-      "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: 0 }]),
-      "DELETE /api/account/mirror-slots/*": () => {
-        asked++;
-        return json(400, { error: "This device has just reported changes waiting. Enter your password to remove its offline copy.", code: "changes-waiting" });
-      },
-      "POST /api/account/mirror-slots/*/remove": () => noContent(),
-    });
+  it("the remove dialog always says changes not uploaded are lost", async () => {
+    const fake = api({ "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: 0 }]) });
     renderApp("/settings/offline");
     const devices = await screen.findByRole("list", { name: "Devices with a copy" });
     await userEvent.click(within(devices).getByRole("button", { name: "Remove offline copy" }));
-    const dialog = screen.getByRole("alertdialog");
-    expect(within(dialog).queryByLabelText("Your password")).toBeNull();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
-    expect(await within(dialog).findByText(/just reported changes waiting/)).toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog", { name: "Remove the copy on Safari on iOS?" });
+    expect(dialog).toHaveTextContent("Nothing was waiting at its last contact; any changes it has made since will be lost.");
+    expect(dialog).toHaveTextContent("Enter your password to remove it.");
+    expect(within(dialog).getByRole("button", { name: "Remove" })).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery");
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots/s2/remove")).toHaveLength(1));
-    expect(asked).toBe(1);
+    expect(calls(fake, "DELETE /api/account/mirror-slots/s2")).toHaveLength(0);
   });
 
   it("asks for the password when the device's count isn't known yet, and says so", async () => {
@@ -213,12 +266,13 @@ describe("Settings: Offline", () => {
   it("shows the server's sentence when a removal is refused", async () => {
     api({
       "GET /api/account/mirror-slots": () => json(200, [thisDevice, { ...phone, waiting: 0 }]),
-      "DELETE /api/account/mirror-slots/*": () => json(403, { error: "Only sessions remove offline copies." }),
+      "POST /api/account/mirror-slots/s2/remove": () => json(403, { error: "Only sessions remove offline copies." }),
     });
     renderApp("/settings/offline");
     const devices = await screen.findByRole("list", { name: "Devices with a copy" });
     await userEvent.click(within(devices).getByRole("button", { name: "Remove offline copy" }));
     const dialog = screen.getByRole("alertdialog");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery");
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(await within(dialog).findByText("Only sessions remove offline copies.")).toBeInTheDocument();
   });
@@ -230,5 +284,115 @@ describe("Settings: Offline", () => {
     await waitFor(() => expect(useOfflineCopy.getState().header).toBeNull());
     expect(calls(fake, "DELETE /api/account/mirror-slots/s1")).toHaveLength(1);
     expect(screen.getByRole("switch", { name: "Keep my notes on this device" })).not.toBeChecked();
+  });
+  it("with the copy locked the section says Changes that haven't uploaded go with the copy, and the dialog that they will be lost", { timeout: 20_000 }, async () => {
+    await turnedOn();
+    await act(() => lockCopy());
+    const section = await screen.findByRole("region", { name: "Remove the copy from this device" });
+    expect(section).toHaveTextContent("Changes that haven't uploaded go with the copy.");
+    expect(section).not.toHaveTextContent("Everything on this device is uploaded.");
+    await userEvent.click(within(section).getByRole("button", { name: "Remove the copy" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      "The locked copy's changes can't be counted; any that haven't uploaded will be lost. Your notes stay in Kumbu²; this device no longer has them offline.",
+    );
+  });
+
+  describe("a switch cut off by a reload either finishes at the next start or says it didn't", () => {
+    async function keepThemHere() {
+      renderApp("/settings/offline");
+      await userEvent.click(await screen.findByRole("switch", { name: "Keep my notes on this device" }));
+      const dialog = screen.getByRole("alertdialog", { name: "Keep your notes on this device" });
+      await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Keep them here" }));
+    }
+
+    /** A reload: the tab's memory goes, what the browser stored stays. */
+    function reload() {
+      useOfflineCopy.getState().mirror?.lock();
+      useOfflineCopy.getState().clear();
+      cleanup();
+      useSession.getState().reset();
+    }
+
+    it("says it didn't when the copy wasn't made", async () => {
+      const fake = api({ "POST /api/account/mirror-slots": () => new Promise<Response>(() => {}) });
+      await keepThemHere();
+      await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots")).toHaveLength(1));
+      reload();
+      api();
+      renderApp("/settings/offline");
+      expect(await screen.findByText("Keeping your notes on this device didn't finish. Turn it on again.")).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Keep my notes on this device" })).not.toBeChecked();
+    });
+
+    it("finishes when the copy was made", { timeout: 20_000 }, async () => {
+      const persist = vi.fn(() => new Promise<boolean>(() => {}));
+      Object.defineProperty(navigator, "storage", { value: { persist }, configurable: true });
+      api();
+      await keepThemHere();
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(1));
+      reload();
+      persist.mockImplementation(() => Promise.resolve(true));
+      let answer!: () => void;
+      const answered = new Promise<void>((r) => (answer = r));
+      const fake = api({
+        "POST /api/account/mirror-slots/contact": async () => (
+          await answered, json(200, { id: "s1", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] })
+        ),
+      });
+      renderApp("/settings/offline");
+      // While the copy opens, nothing says the switch didn't finish.
+      await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots/contact")).toHaveLength(1));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(screen.queryByText(/didn't finish/)).toBeNull();
+      answer();
+      await screen.findByRole("region", { name: "Vaults on this device" }, { timeout: 10_000 });
+      expect(screen.getByRole("switch", { name: "Keep my notes on this device" })).toBeChecked();
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText(/didn't finish/)).toBeNull();
+      Reflect.deleteProperty(navigator, "storage");
+    });
+  });
+
+  it("removes its place in the list when this session hasn't made contact with it yet", { timeout: 20_000 }, async () => {
+    // As after a new sign-in on this device: the slot is this browser's only once this session hands in its token.
+    let contacted = false;
+    const fake = await turnedOn({
+      "POST /api/account/mirror-slots/contact": () => ((contacted = true), json(200, { id: "s1", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] })),
+      "DELETE /api/account/mirror-slots/s1": () => (contacted ? noContent() : json(400, { error: "Needs your password.", code: "changes-waiting" })),
+    });
+    contacted = false;
+    await userEvent.click(await screen.findByRole("button", { name: "Remove the copy" }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(useOfflineCopy.getState().header).toBeNull());
+    expect(contacted).toBe(true);
+    expect(calls(fake, "DELETE /api/account/mirror-slots/s1")).toHaveLength(1);
+  });
+  it("re-encrypting with a copy here keeps the session and the new recovery key on screen, and removes the copy", { timeout: 20_000 }, async () => {
+    // Re-encrypting removes every slot, this one too: its next contact answers that it is gone.
+    let reencrypted = false;
+    let router!: ReturnType<typeof renderApp>;
+    await turnedOn({
+      "POST /api/account/reencrypt": () => ((reencrypted = true), json(200, { recoveryKey: "WXYZ-2345-6789-ABCD" })),
+      "POST /api/account/mirror-slots/contact": () => (reencrypted
+        ? json(404, { error: "This offline copy was removed.", code: "mirror-wipe" })
+        : json(200, { id: "s1", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] })),
+    }, undefined, (r) => (router = r));
+    await router.navigate("/settings/security");
+    const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
+    await userEvent.type(within(part).getByLabelText("Current password"), "my password");
+    await userEvent.click(within(part).getByRole("button", { name: "Re-encrypt my vaults" }));
+    expect(await within(part).findByText("WXYZ-2345-6789-ABCD")).toBeInTheDocument();
+    await waitFor(() => expect(useOfflineCopy.getState().header).toBeNull());
+    expect(useSession.getState().user).not.toBeNull();
+    expect(router.state.location.pathname).toBe("/settings/security");
+    expect(within(part).getByText("WXYZ-2345-6789-ABCD")).toBeInTheDocument();
+    // Once the key was seen, a copy found gone ends the session in the tab again.
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+    await userEvent.click(within(part).getByRole("button", { name: "Copy" }));
+    await userEvent.click(within(part).getByLabelText(/I have stored my recovery key/));
+    await userEvent.click(within(part).getByRole("button", { name: "Continue" }));
+    await wipeCopy(null);
+    expect(useSession.getState().user).toBeNull();
   });
 });

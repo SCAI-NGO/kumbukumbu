@@ -9,9 +9,9 @@ import { SharedMode, type ModeChannel, type ModePorts } from "eidolon-core/mode/
 import { IdleLock } from "eidolon-core/store/idle";
 import { IDLE_MS, MirrorCopies, REMEMBERED_IDLE_MS, type SealedMirror } from "eidolon-core/store/mirror";
 import { create } from "zustand";
-import { useSession } from "../state/session";
+import { onSessionEnd, useSession } from "../state/session";
 import { useOfflineCopy } from "./copy";
-import { browserPorts, locks } from "./ports";
+import { browserPorts, keepThroughCleanUps, locks } from "./ports";
 
 /** The sign-in page's sentence after a wipe (§3a "Purges and discreet vaults"). */
 export const WIPED = "The offline copy on this device was removed.";
@@ -20,6 +20,8 @@ interface OfflineModeState extends ModeState {
   /** Vaults' copies were removed (SealedMirror.listenRemoved): how many changes went with them. The notice names no vault (§3a). */
   purged: { lost: number } | null;
   failed(): void;
+  /** The heartbeat got no answer: a failed request, and no tab's socket counts as up until one opens again. */
+  lost(): void;
   reached(): void;
   socket(up: boolean): void;
   /** The changes waiting may have changed: read again from the unlocked copy. */
@@ -71,6 +73,10 @@ export const useOfflineMode = create<OfflineModeState>()((set) => ({
   failed: () => {
     failing = true;
     send({ type: "failed" });
+  },
+  lost: () => {
+    failing = true;
+    send({ type: "lost" });
   },
   reached: () => {
     if (!failing) return;
@@ -129,13 +135,32 @@ export function onContacted(fn: (mirror: SealedMirror) => void): () => void {
 let copies: Promise<MirrorCopies> | null = null;
 export const mirrorCopies = () => (copies ??= browserPorts().then((p) => new MirrorCopies(p)));
 
-/** The copy went: this tab forgets it, and the sign-in page says so. */
-function wiped() {
+let sessionKept = 0;
+
+/**
+ * While held, a copy found gone leaves this tab's session as it is: this session's own re-encryption removes every
+ * slot, this browser's too, and keeps the session, whose new recovery key is on screen until it is seen. A 401 that
+ * wipes the copy still ends the session: the server's is gone then. Answers the release.
+ */
+export function keepSessionThroughWipe(): () => void {
+  sessionKept++;
+  let released = false;
+  return () => {
+    if (!released) sessionKept--;
+    released = true;
+  };
+}
+
+/**
+ * The copy went: this tab forgets it, and the sign-in page says so. `sessionGone`: the server ended the session too,
+ * which no hold keeps.
+ */
+function wiped(sessionGone = false) {
   idle?.stop();
   idle = null;
   useOfflineCopy.getState().mirror?.lock();
   useOfflineCopy.getState().clear();
-  useSession.getState().end(WIPED);
+  if (sessionGone || sessionKept === 0) useSession.getState().end(WIPED);
 }
 
 const beforeLock = new Set<() => void | Promise<void>>();
@@ -178,7 +203,7 @@ function armIdle(mirror: SealedMirror) {
   idle = new IdleLock(clock, mirror.header.idleMs, () => {
     const mode = useOfflineMode.getState();
     if (!mode.offline && useSession.getState().user !== null) return armIdle(mirror);
-    void lockCopy().then(() => useSession.getState().end());
+    useSession.getState().end();
   });
 }
 
@@ -195,6 +220,39 @@ function contacted(mirror: SealedMirror) {
 
 /** The copy being opened in this tab, and for whom. */
 let opening: { userId: string; done: Promise<void> } | null = null;
+
+// A switch to offline under way (turnOn.ts), kept across a reload: one cut short after its copy was made finishes at
+// the next start, one cut short before says it didn't (Settings, Offline). Only the user's id, nothing of the copy.
+const switchKey = "kumbu.turningOn";
+
+export function switchBegun(userId: string): void {
+  try {
+    localStorage.setItem(switchKey, userId);
+  } catch {
+    // Not kept: a reload that cuts the switch short goes unnoticed, as before.
+  }
+}
+
+export function switchEnded(): void {
+  try {
+    localStorage.removeItem(switchKey);
+  } catch {
+    // Nothing was kept.
+  }
+}
+
+function switchUnder(userId: string): boolean {
+  try {
+    return localStorage.getItem(switchKey) === userId;
+  } catch {
+    return false;
+  }
+}
+
+/** This user's switch was cut short before its copy was made: there is nothing to finish. */
+export async function switchCutShort(userId: string): Promise<boolean> {
+  return switchUnder(userId) && (await (await mirrorCopies()).forUser(userId)) === null;
+}
 
 /** Holds an unlocked copy in this tab, following what other tabs do to it; a copy it held before is locked. */
 export function keep(opened: SealedMirror) {
@@ -247,6 +305,11 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
       if (opened === "wiped") return wiped();
       keep(opened);
       contacted(opened);
+      // The switch that made it was cut short: its last step, asking the browser to keep the copy, is done now.
+      if (switchUnder(userId)) {
+        switchEnded();
+        await keepThroughCleanUps().catch(() => false);
+      }
     } catch (e) {
       // Offline or signed out meanwhile: the next sign-in or reconnect opens it.
       if (!(e instanceof OfflineError || e instanceof AuthError)) console.error("Kumbu² offline copy:", e);
@@ -272,14 +335,61 @@ export async function contact(): Promise<void> {
   }
 }
 
-/** A 401 that said `mirror-wipe` (the request handed in the slot's token): the copy goes from this device. */
-export async function wipeCopy(): Promise<void> {
+/**
+ * Signed in again over the app (the bar's dialog, §3a): the open copy is wrapped under the password just given
+ * (§4.2), its idle limit starts again, and the contact is made, as after the sign-in form.
+ */
+export async function signedInAgain(username: string, password: string): Promise<void> {
+  const mirror = useOfflineCopy.getState().mirror;
+  if (mirror === null || mirror.locked) return;
+  try {
+    const result = await mirror.rewrap(username, password);
+    if (result === "wiped") return wiped();
+    armIdle(mirror);
+    contacted(mirror);
+  } catch (e) {
+    if (!(e instanceof OfflineError || e instanceof AuthError)) console.error("Kumbu² offline copy:", e);
+  }
+}
+
+/**
+ * A 401 that said `mirror-wipe` to a request that handed in `token`, the slot's: the copy goes from this device. Only
+ * while it is still the copy the tab holds: the answer may come after another one was opened.
+ */
+export async function wipeCopy(token: string | null): Promise<void> {
   const header = useOfflineCopy.getState().header;
+  if (token !== (header?.slot.token ?? null)) return;
   useOfflineCopy.getState().mirror?.lock();
-  wiped();
+  wiped(true);
   if (header === null || typeof indexedDB === "undefined") return;
   await (await mirrorCopies()).wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
 }
+
+/** Removes the copy this tab holds from the device, without a word on the sign-in page: the caller has its own. */
+async function removeCopy(): Promise<void> {
+  const header = useOfflineCopy.getState().header;
+  idle?.stop();
+  idle = null;
+  useOfflineCopy.getState().mirror?.lock();
+  useOfflineCopy.getState().clear();
+  if (header === null || typeof indexedDB === "undefined") return;
+  await (await mirrorCopies()).wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
+}
+
+/** What the mode knows of the person (conflict copies' paths, the done line, the count waiting) goes with them. */
+const forget = () => send({ type: "forget" });
+
+onSessionEnd((how) => {
+  forget();
+  void (how === "wipe" ? removeCopy() : lockCopy(how === "lockEverywhere"));
+});
+useSession.subscribe((s, before) => {
+  // Someone else signed in where another person's session was; the same person's offline sign-in confirmed is no change.
+  if (s.user !== null && before.user !== null && s.user.username.toLowerCase() !== before.user.username.toLowerCase()) forget();
+});
+useOfflineCopy.subscribe((s, before) => {
+  if (before.mirror !== null && s.mirror !== before.mirror) forget();
+});
 
 /** For the tests: a fresh mode, as in a new tab. */
 export function resetOfflineMode() {

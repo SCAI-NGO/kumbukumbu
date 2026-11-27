@@ -13,6 +13,25 @@ export function precache(built: readonly string[], publicFiles: readonly string[
   return ["/index.html", ...assets.map((name) => `/${name}`), ...publicFiles.map((name) => `/${name}`)];
 }
 
+// The types the server gives the kept files' extensions (ASP.NET's static files), which the worker answers them with.
+const types: Record<string, string> = {
+  html: "text/html",
+  js: "text/javascript",
+  mjs: "text/javascript",
+  css: "text/css",
+  woff2: "font/woff2",
+  svg: "image/svg+xml",
+  png: "image/png",
+  webmanifest: "application/manifest+json",
+};
+
+/** The content type of a kept file, for the build's list; a file of another kind stops the build rather than go untyped. */
+export function contentType(path: string): string {
+  const type = types[path.slice(path.lastIndexOf(".") + 1)];
+  if (type === undefined) throw new Error(`The app shell's worker has no content type for ${path}.`);
+  return type;
+}
+
 /** What the worker does with a request: answer it from the cache, try the network for a page first, or stay out. */
 export type Route = "asset" | "page" | null;
 

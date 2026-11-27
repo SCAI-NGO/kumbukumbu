@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
+import type { Conflict } from "eidolon-core/mode/mode";
+import { REMEMBERED_IDLE_MS } from "eidolon-core/store/mirror";
 import { CloudOff } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -12,7 +14,7 @@ import { BarButton, useTimeout } from "../note/ChangedElsewhere";
 import { useSession } from "../state/session";
 import { useShellNavigate } from "../windows/context";
 import { useOfflineCopy } from "./copy";
-import { contact, useOfflineMode } from "./mode";
+import { signedInAgain, useOfflineMode } from "./mode";
 import { endPendingSignOut } from "./unlock";
 
 export const OFFLINE_SETTINGS = "/settings/offline";
@@ -31,18 +33,31 @@ export function offlineSentence(phase: "offline" | "uploading" | "signIn", waiti
   return "You're offline. Your notes are here; what needs a connection is marked.";
 }
 
-/** The conflicts line: it stays until opened or dismissed, unlike the done line. */
-export function conflictSentence(uploaded: number | null, conflicts: number): string {
-  const what = conflicts === 1 ? "One note was also changed elsewhere: your version is kept beside it." : `${conflicts} notes were also changed elsewhere.`;
+/** The note's name as the tree shows it: its file name without ".md". */
+const noteName = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
+
+/** What one came-back note says: why a note the person or someone else trashed is there again. */
+function cameBackSentence(c: Conflict): string {
+  return c.came === "trashed-here"
+    ? `“${noteName(c.copy)}” came back: it was changed elsewhere after you trashed it.`
+    : `“${noteName(c.copy)}” was trashed elsewhere; it's back with your changes.`;
+}
+
+/** The conflicts line: it stays until opened or dismissed, unlike the done line. `only`: the one conflict, if one. */
+export function conflictSentence(uploaded: number | null, conflicts: number, only?: Conflict): string {
+  const what = conflicts !== 1 ? `${conflicts} notes were also changed elsewhere.`
+    : only?.came !== undefined ? cameBackSentence(only)
+    : "One note was also changed elsewhere: your version is kept beside it.";
   return uploaded === null ? what : `Uploaded ${changes(uploaded)}. ${what}`;
 }
 
 /**
  * The offline mode's line, in the page's flow under the top bar like the update bar: always there while offline and
  * never dismissable; it leads to Settings, Offline. After it, the done line for four seconds, the conflicts until
- * seen, and a purge's notice.
+ * seen, and a purge's notice. The conflicts name notes: only the signed-in shell (`inShell`) lists them, never the
+ * sign-in page or another page outside it.
  */
-export default function OfflineBar() {
+export default function OfflineBar({ inShell = false }: { inShell?: boolean }) {
   const offline = useOfflineMode((s) => s.offline);
   const phase = useOfflineMode((s) => s.phase);
   const waiting = useOfflineMode((s) => s.waiting);
@@ -66,7 +81,7 @@ export default function OfflineBar() {
     );
   }
 
-  if (conflicts.length > 0) return <ConflictsLine uploaded={done?.uploaded ?? null} />;
+  if (inShell && conflicts.length > 0) return <ConflictsLine uploaded={done?.uploaded ?? null} />;
 
   if (done !== null) {
     return (
@@ -105,7 +120,7 @@ function ConflictsLine({ uploaded }: { uploaded: number | null }) {
   return (
     <div role="status" aria-label="Changed elsewhere" className={barClass}>
       <Dot />
-      <span className="min-w-0 flex-1 py-2 pl-1.5">{conflictSentence(uploaded, conflicts.length)}</span>
+      <span className="min-w-0 flex-1 py-2 pl-1.5">{conflictSentence(uploaded, conflicts.length, conflicts[0])}</span>
       <BarButton onClick={() => (conflicts.length === 1 ? open(conflicts[0]!) : setListing(!listing))}>Open</BarButton>
       <BarButton onClick={() => useOfflineMode.getState().seen()}>Dismiss</BarButton>
       {listing && (
@@ -148,11 +163,13 @@ function SignInAgain({ onClose }: { onClose(): void }) {
         setError(null);
         try {
           await endPendingSignOut();
-          const view = await call(api.POST("/api/session", { body: { username, password, remember: false } }));
+          // The session lasts as the copy's last sign-in here chose.
+          const remember = useOfflineCopy.getState().header?.idleMs === REMEMBERED_IDLE_MS;
+          const view = await call(api.POST("/api/session", { body: { username, password, remember } }));
           queryClient.setQueryData(["session"], view);
           useSession.getState().signedIn(view);
           useOfflineMode.getState().signedIn();
-          void contact();
+          void signedInAgain(username, password);
           onClose();
         } catch (e) {
           setError(errorText(e));

@@ -88,3 +88,24 @@ export function forget(choice: OfflineChoice, evicted: Map<string, string[]>): O
   }
   return { ...choice, opened };
 }
+
+/** The choice without the vault: none of its folders kept or attachments opened, and not chosen. Unchanged: itself. */
+export function without(choice: OfflineChoice, vault: string): OfflineChoice {
+  if (!choice.vaults.includes(vault) && !(vault in choice.kept) && !(vault in choice.opened)) return choice;
+  const { [vault]: _kept, ...kept } = choice.kept;
+  const { [vault]: _opened, ...opened } = choice.opened;
+  return { ...choice, vaults: choice.vaults.filter((v) => v !== vault), kept, opened };
+}
+
+/**
+ * The choice with folders kept and attachments opened only in the vaults given (held, or chosen and not adopted yet).
+ * The vaults chosen stay: one may not be adopted yet (ticked just before a lock, or its adoption failed offline).
+ * Unchanged: itself.
+ */
+export function heldOnly(choice: OfflineChoice, held: ReadonlySet<string>): OfflineChoice {
+  const stray = (vault: string) => !held.has(vault);
+  if (!Object.keys(choice.kept).some(stray) && !Object.keys(choice.opened).some(stray)) return choice;
+  const kept = Object.fromEntries(Object.entries(choice.kept).filter(([vault]) => held.has(vault)));
+  const opened = Object.fromEntries(Object.entries(choice.opened).filter(([vault]) => held.has(vault)));
+  return { ...choice, kept, opened };
+}

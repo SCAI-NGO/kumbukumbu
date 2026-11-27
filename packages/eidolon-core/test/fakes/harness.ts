@@ -3,7 +3,7 @@
 import { vi } from "vitest";
 import { SyncEngine } from "../../src/engine/engine";
 import type { FirstSyncSummary } from "../../src/engine/firstSync";
-import type { Clock, StateStore, SyncState, SyncStatus } from "../../src/engine/ports";
+import type { CameBack, Clock, StateStore, SyncState, SyncStatus } from "../../src/engine/ports";
 import { versionOf } from "../../src/engine/version";
 import { FakeFiles } from "./fakeFiles";
 import { FakeServer } from "./fakeServer";
@@ -23,7 +23,7 @@ export const fakeClock: Clock = {
 
 export interface Harness {
   engine: SyncEngine; server: FakeServer; files: FakeFiles; state: MemoryState;
-  conflicts: [string, string][]; authLost: number; statuses: SyncStatus[]; firstSyncsDone: FirstSyncSummary[]; cancelled: number;
+  conflicts: [string, string][]; cameBack: [string, CameBack][]; authLost: number; statuses: SyncStatus[]; firstSyncsDone: FirstSyncSummary[]; cancelled: number;
 }
 
 /**
@@ -55,11 +55,12 @@ export async function harness(o: {
   for (const [p, t] of Object.entries(o.remoteOnly ?? {})) await server.seed(p, t);
   for (const [p, b] of Object.entries(o.remoteFiles ?? {})) await server.seedFile(p, b);
   const state = new MemoryState({ bases, cursor: null, lastFullAt: null, lastSyncAt: null });
-  const h: Harness = { engine: undefined as unknown as SyncEngine, server, files, state, conflicts: [], authLost: 0, statuses: [], firstSyncsDone: [], cancelled: 0 };
+  const h: Harness = { engine: undefined as unknown as SyncEngine, server, files, state, conflicts: [], cameBack: [], authLost: 0, statuses: [], firstSyncsDone: [], cancelled: 0 };
   h.engine = new SyncEngine({
     vault: "Work", device: "Laptop", local: files, remote: server, state, clock: fakeClock,
     onStatus: (s) => h.statuses.push(s),
     onConflict: (original, copy) => h.conflicts.push([original, copy]),
+    onCameBack: (path, why) => h.cameBack.push([path, why]),
     onAuthLost: () => { h.authLost++; },
     onFirstSyncDone: (summary) => h.firstSyncsDone.push(summary),
     onFirstSyncCancelled: () => { h.cancelled++; },

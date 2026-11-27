@@ -126,9 +126,9 @@ describe("attachments sync both ways", () => {
     h.files.binaries.set("x.png", png(1));
     h.engine.localChanged("x.png");
     expect(h.engine.status().notSynced).toEqual([{ path: "x.png", reason: "attachment" }]);
-    // The retry is an incremental check, which knows nothing of x.png: the local side is looked at once more.
+    // The start's full check never got through, so the retry is a full one too, which looks at the local side again.
     await settle(h, 5000);
-    expect(h.server.calls.filter((c) => c.method === "versions").map((c) => c.args[0])).toEqual([null, at]);
+    expect(h.server.calls.filter((c) => c.method === "versions").map((c) => c.args[0])).toEqual([null, null]);
     expect(h.server.files.get("x.png")?.bytes).toEqual(png(1));
     expect(h.engine.status().notSynced).toEqual([]);
   });

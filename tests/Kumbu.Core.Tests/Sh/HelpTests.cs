@@ -439,4 +439,13 @@ public class HelpTests
         // The glob row's braces print as written, not as an interpolation.
         Assert.Contains("(ripgrep's rules, {a,b} too; repeatable)", rg);
     }
+
+    [Fact]
+    public async Task Help_names_every_command_that_marks_another_users_text()
+    {
+        var output = (await Run("help")).Output;
+
+        var words = string.Join(' ', output.Split((char[])[' ', '\n'], StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("cat, head, tail, sort, outline, rg, semsearch and similar mark a note last written by another user", words);
+    }
 }

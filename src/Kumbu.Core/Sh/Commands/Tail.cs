@@ -3,7 +3,7 @@ using Kumbu.Core.Notes;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class Tail(INoteReader notes) : ICommand
+public sealed class Tail(INoteReader notes, WriterMarks? marks = null) : ICommand
 {
     private static readonly Option[] Spec = [new('n', "lines", TakesValue: true), new(null, "version", TakesValue: true)];
 
@@ -41,10 +41,10 @@ public sealed class Tail(INoteReader notes) : ICommand
             }
         }
 
-        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"));
+        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"), marks);
         if (text.IsError) return text;
 
         var lines = Lines.Split(text.Output);
-        return ShellResult.Ok(Lines.Join(fromStart ? lines.Skip(Math.Max(count - 1, 0)) : lines.TakeLast(count)));
+        return ShellResult.Ok(Lines.Join(fromStart ? lines.Skip(Math.Max(count - 1, 0)) : lines.TakeLast(count))) with { Notice = text.Notice };
     }
 }

@@ -7,7 +7,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import type { Plugin } from "vite";
 import { configDefaults, defineConfig } from "vitest/config";
-import { precache } from "./sw/shell.ts";
+import { contentType, precache } from "./sw/shell.ts";
 
 const server = "http://localhost:8083";
 
@@ -46,8 +46,8 @@ function pdfDecoders(): Plugin {
 /**
  * The app shell's service worker (sw/worker.ts) as /sw.js, at the root so that its scope is the whole app, with the
  * list of this build's files written into it, each with its SHA-256, which the worker checks a kept file against
- * before serving it. Its cache is named by their content: a new build is a new /sw.js, which the browser installs,
- * and only an unchanged build keeps the old cache. Hashed from the files as written, once every plugin is done with
+ * before serving it, and its content type, which the worker answers it with. Its cache is named by their content: a
+ * new build is a new /sw.js, which the browser installs, and only an unchanged build keeps the old cache. Hashed from the files as written, once every plugin is done with
  * them: a chunk's code in `generateBundle` isn't yet what is served.
  */
 function appShell(): Plugin {
@@ -79,11 +79,11 @@ function appShell(): Plugin {
     writeBundle(options) {
       const outDir = options.dir ?? "";
       const hash = createHash("sha256");
-      const listed: Record<string, string> = {};
+      const listed: Record<string, { sha256: string; type: string }> = {};
       for (const file of files) {
         const content = readFileSync(join(outDir, file));
         hash.update(file).update(content);
-        listed[file] = createHash("sha256").update(content).digest("hex");
+        listed[file] = { sha256: createHash("sha256").update(content).digest("hex"), type: contentType(file) };
       }
       const shell = JSON.stringify({ name: `kumbu-shell-${hash.digest("hex").slice(0, 16)}`, files: listed });
       const worker = join(outDir, "sw.js");

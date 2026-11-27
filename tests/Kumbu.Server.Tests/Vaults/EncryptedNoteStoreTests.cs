@@ -854,4 +854,26 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
 
         Assert.Equal(1, await Store(world.Catalog()).CountLockedVaultsAsync(Ct));
     }
+
+    [Fact]
+    public async Task Marking_a_notes_published_version_keeps_when_and_by_whom_it_was_made()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        var path = P("/Work/a.md");
+        // Written once, with an earlier state in its history, and stored before lines were recorded: its creation and its
+        // lines are read off revision 1.
+        Assert.True(await store.TryCreateAsync(New("/Work/a.md", "one\ntwo\n") with { History = [new HistoryEntry("one\n", Writers.Seed, T0.AddDays(-1), Ref: WriterRef.Server)] }, Ct));
+        var vault = (await store.VaultOfAsync(path, Ct))!;
+        var (id, written) = vault.Notes[path];
+        var unrecorded = written with { Authorship = null };
+        await catalog.Notes.UpdateOneAsync(Builders<SealedDocument>.Filter.Eq(d => d.Id, id), Builders<SealedDocument>.Update.Set(d => d.Blob, vault.SealNote(id, unrecorded)), cancellationToken: Ct);
+        vault.Notes = vault.Notes.SetItem(path, (id, unrecorded));
+
+        using (var session = await catalog.StartSessionAsync(Ct)) (await store.MarkCopiedAsync(session, vault, [path], Ct))();
+
+        var marked = (await Store(world.Catalog()).GetAsync(path, Ct))!;
+        Assert.Equal((true, 2), (marked.Copied, marked.Revision));
+        Assert.Equal((T0, false), NoteCreation.Of(marked));
+        Assert.Equal([Writers.Dev, Writers.Dev], Authorship.Of(marked).ByLine().Select(w => w?.Label));
+    }
 }

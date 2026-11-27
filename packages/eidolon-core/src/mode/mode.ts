@@ -5,12 +5,15 @@
 // and every change made offline has uploaded, so the app never shows the server's older text right after reconnecting.
 // A mode, once entered, holds at least HOLD_MS: a connection that switches more often is broken anyway, and the bar
 // should not mirror its noise. The hold delays the mode only; the count of changes waiting follows at once.
-import type { Clock } from "../engine/ports";
+import type { CameBack, Clock } from "../engine/ports";
 
 export const HOLD_MS = 15_000;
 
-/** A conflict copy the engines made: Kumbu²'s version kept the path, this device's went beside it. */
-export interface Conflict { vault: string; original: string; copy: string; }
+/**
+ * A conflict copy the engines made: Kumbu²'s version kept the path, this device's went beside it. With `came`, a note
+ * that came back after a trash met an edit, without a copy: `copy` is the note itself.
+ */
+export interface Conflict { vault: string; original: string; copy: string; came?: CameBack; }
 
 export interface ModeState {
   /** The app reads from the copy on this device: while away, and after it until the uploads are through. */
@@ -29,10 +32,15 @@ export interface ModeState {
 }
 
 export type ModeInput =
-  /** A request couldn't reach Kumbu² (no network, a 502/503/504 on the way). */
+  /** A request couldn't reach Kumbu² (no network, a 502/503/504 from a gateway on the way, not Kumbu²'s own answer). */
   | { type: "failed" }
   /** A request reached Kumbu² again after a failure. */
   | { type: "reached" }
+  /**
+   * The host's heartbeat got no answer: a failed request, and every tab's socket counts as down until one opens again
+   * or a request reaches Kumbu². A socket in a background tab may not hear of a network gone quietly for minutes.
+   */
+  | { type: "lost" }
   /** A tab's sync socket opened or closed. */
   | { type: "socket"; tab: string; up: boolean }
   /** A tab closed. */
@@ -43,13 +51,20 @@ export type ModeInput =
   | { type: "signedIn" }
   | { type: "conflict"; conflict: Conflict }
   /** The done line's time is up, or the person dismissed it, or opened the conflicts. */
-  | { type: "seen" };
+  | { type: "seen" }
+  /**
+   * The copy locked or went, or the session ended or changed hands: what the mode knows of that person (the conflict
+   * copies' paths, the done line, the count waiting) is not the next person's to see.
+   */
+  | { type: "forget" };
 
 export const initialMode: ModeState = { offline: false, phase: "online", waiting: 0, done: null, conflicts: [] };
 
 export class ModeMachine {
   private state: ModeState;
   private readonly sockets = new Set<string>();
+  /** Sockets a missed heartbeat took out of the count: an answer from Kumbu² counts them again, as they may never close. */
+  private readonly suspended = new Set<string>();
   /** A request failed and none has reached Kumbu² since. */
   private failing = false;
   private sessionLost = false;
@@ -70,8 +85,18 @@ export class ModeMachine {
   apply(input: ModeInput): void {
     switch (input.type) {
       case "failed": this.failing = true; break;
-      case "reached": this.failing = false; break;
+      case "reached":
+        this.failing = false;
+        for (const tab of this.suspended) this.sockets.add(tab);
+        this.suspended.clear();
+        break;
+      case "lost":
+        this.failing = true;
+        for (const tab of this.sockets) this.suspended.add(tab);
+        this.sockets.clear();
+        break;
       case "socket":
+        this.suspended.delete(input.tab);
         if (input.up) {
           this.sockets.add(input.tab);
           this.failing = false;
@@ -79,7 +104,10 @@ export class ModeMachine {
           this.sockets.delete(input.tab);
         }
         break;
-      case "gone": this.sockets.delete(input.tab); break;
+      case "gone":
+        this.sockets.delete(input.tab);
+        this.suspended.delete(input.tab);
+        break;
       case "waiting":
         this.state = { ...this.state, waiting: input.count };
         if (this.state.offline) this.peak = Math.max(this.peak, input.count);
@@ -88,6 +116,10 @@ export class ModeMachine {
       case "signedIn": this.sessionLost = false; break;
       case "conflict": this.state = { ...this.state, conflicts: [...this.state.conflicts, input.conflict] }; break;
       case "seen": this.state = { ...this.state, done: null, conflicts: [] }; break;
+      case "forget":
+        this.state = { ...this.state, waiting: 0, done: null, conflicts: [] };
+        this.peak = 0;
+        break;
     }
     this.evaluate();
   }

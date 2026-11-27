@@ -52,10 +52,13 @@ export function edgeSimilarities(edges: readonly (readonly [string, string])[], 
 
 /**
  * The foot's line on the similarity, given how many distinct links between notes are shown and how many of them are
- * measured: nothing while asking or when all are, a count while some notes aren't embedded yet, else why not.
+ * measured: nothing while asking or when all are, a count while some notes aren't embedded yet, else why not; `busy`
+ * when the server answered that it is busy for now.
  */
-export function similarityLine(links: number, measured: number, answer: GraphSimilarityView | undefined): string | null {
-  if (!answer || links === 0 || measured === links) return null;
+export function similarityLine(links: number, measured: number, answer: GraphSimilarityView | undefined, busy = false): string | null {
+  if (links === 0 || measured === links) return null;
+  if (busy) return "Similarity not measured: the server is busy. Try again in a moment.";
+  if (!answer) return null;
   if (answer.state === "preparing") return "Similarity not measured yet: search by meaning is getting ready";
   if (answer.state !== "ready" || (measured === 0 && answer.reason)) return answer.reason ? `Similarity not measured: ${answer.reason}` : "Similarity not measured";
   return `Similarity measured for ${measured} of ${links} ${links === 1 ? "link" : "links"}`;

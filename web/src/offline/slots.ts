@@ -44,13 +44,10 @@ export async function listDeviceCopies(): Promise<DeviceCopy[]> {
 }
 
 /**
- * Whether removing another device's copy needs the password: its last contact reported changes waiting, or it hasn't
- * reported a count yet. Those changes are the one thing in Kumbu² without a trash or a history (design §4.4).
+ * Whether removing a device's copy needs the password: every copy but this browser's own, whatever its last contact
+ * said, as what it wrote since is the one thing in Kumbu² without a trash or a history (design §4.4, ADR 0042).
  */
-export const needsPassword = (d: DeviceCopy) => !d.current && (d.waiting !== 0 || d.contactAt === null);
-
-/** The server wants the password for this removal: the device has (just) reported changes waiting. */
-export class PasswordNeededError extends RejectedError {}
+export const needsPassword = (d: DeviceCopy) => !d.current;
 
 /** Gives a device's copy another name in the list; the copy itself stays as it is. */
 export async function renameDeviceCopy(id: string, label: string): Promise<void> {
@@ -63,10 +60,6 @@ export async function removeDeviceCopy(id: string, password?: string): Promise<v
   const path = `/${encodeURIComponent(id)}`;
   const response = password === undefined ? await send("DELETE", path) : await post(`${path}/remove`, { password });
   if (response.status === 404 || response.ok) return;
-  if (response.status === 400) {
-    const error = (await response.clone().json().catch(() => null)) as { error?: string; code?: string } | null;
-    if (error?.code === "changes-waiting") throw new PasswordNeededError(error.error ?? "Enter your password.", 400);
-  }
   await answer(response);
 }
 

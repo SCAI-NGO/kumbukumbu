@@ -6,7 +6,7 @@
 // the mirror slot's id and token (the token is kept in the clear by design, §4.6: the server's key needs the user key
 // too), the mirror key wrapped under the password, and the idle limit of the last sign-in. Everything else is sealed
 // (vault.ts). The key is only ever in the tab's memory.
-import { DEFAULT_CHOICE, type OfflineChoice } from "./choice";
+import { DEFAULT_CHOICE, heldOnly, without, type OfflineChoice } from "./choice";
 import { fromBase64Url, toBase64Url, unwrapWithPassword, wrapWithPassword, type PasswordWrap } from "./crypto";
 import type { SlotAnswer, SlotVault, StorePorts, TabMessage } from "./ports";
 import { MirrorLockedError, Records, VaultMirror, type VaultMeta } from "./vault";
@@ -41,6 +41,31 @@ async function hashOf(label: string): Promise<string> {
 const userHash = (userId: string) => hashOf(`kumbu-mirror user\0${userId}`);
 const loginHash = (username: string) => hashOf(`kumbu-mirror login\0${username.normalize("NFC").toLowerCase()}`);
 const wrapAad = (copy: string) => `kumbu-mirror wrap\0${copy}`;
+/** The copy's lock across tabs, as its records take it (Records.lockName). */
+const lockName = (copy: string) => `kumbu-mirror:${copy}`;
+
+/** Whether the copy is this user's: by the hash of the user id in its header, as `forUser` finds it. */
+export async function ownedBy(header: CopyHeader, userId: string): Promise<boolean> {
+  return header.user === (await userHash(userId));
+}
+
+/** The server's ids and tokens are Base64Url or hex: nothing else goes into a request header. */
+const TOKEN = /^[A-Za-z0-9_-]+$/;
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+const isString = (v: unknown): v is string => typeof v === "string";
+
+/**
+ * A header with every field of its type, or null. The idle limit is held to the longest a session has: a shorter one
+ * only locks sooner.
+ */
+function inShape(h: unknown): CopyHeader | null {
+  if (!isObject(h) || h.schema !== 2 || !isString(h.copy) || !TOKEN.test(h.copy) || !isString(h.user) || !isString(h.login)) return null;
+  const { slot, password, idleMs } = h;
+  if (!isObject(slot) || !isString(slot.id) || !TOKEN.test(slot.id) || !isString(slot.token) || !TOKEN.test(slot.token)) return null;
+  if (!isObject(password) || !isObject(password.kdf) || !isString(password.salt) || !isString(password.wrapped)) return null;
+  if (typeof idleMs !== "number" || !Number.isFinite(idleMs)) return null;
+  return { ...(h as unknown as CopyHeader), idleMs: Math.min(idleMs, REMEMBERED_IDLE_MS) };
+}
 
 function mirrorKey(answer: SlotAnswer): Uint8Array<ArrayBuffer> {
   const raw = fromBase64Url(answer.key);
@@ -54,14 +79,16 @@ export class MirrorCopies {
   async headers(): Promise<CopyHeader[]> {
     const found: CopyHeader[] = [];
     for (const [, value] of await this.p.storage.scan(HEADERS)) {
-      // The one record in the clear, so anyone with the disk can change it: one that doesn't parse is passed over.
-      let header: CopyHeader | null = null;
+      // The one record in the clear, so anyone with the disk can change it: one that doesn't parse, or isn't in
+      // shape, is passed over.
+      let parsed: unknown;
       try {
-        header = JSON.parse(new TextDecoder().decode(value)) as CopyHeader | null;
+        parsed = JSON.parse(new TextDecoder().decode(value));
       } catch {
         continue;
       }
-      if (header !== null && typeof header === "object" && header.schema === 2) found.push(header);
+      const header = inShape(parsed);
+      if (header !== null) found.push(header);
     }
     return found;
   }
@@ -113,7 +140,7 @@ export class MirrorCopies {
         ...header, login: await loginHash(signIn.username), idleMs: signIn.idleMs,
         password: await wrapWithPassword(this.p.crypto, raw, signIn.password, wrapAad(header.copy)),
       };
-      await this.writeHeader(header);
+      if (!(await this.rewriteHeader(header))) return "wiped";
     }
     const mirror = await SealedMirror.unlocked(this.p, header, raw, answer.vaults);
     // The first contact couldn't count them, before the key opened the copy: the device list hears of them now, none
@@ -134,12 +161,21 @@ export class MirrorCopies {
 
   /** Removes a copy with everything in it: a wipe signal, the slot removed, or the person's own choice. */
   async wipe(copy: string): Promise<void> {
-    await this.p.storage.write({ remove: [`${HEADERS}${copy}`], removePrefix: [`c/${copy}/`] });
+    await this.p.locks.run(lockName(copy), () => this.p.storage.write({ remove: [`${HEADERS}${copy}`], removePrefix: [`c/${copy}/`] }));
     this.p.channel(copy).post({ type: "purged", vault: null });
   }
 
   private async writeHeader(header: CopyHeader): Promise<void> {
     await this.p.storage.write({ put: [[`${HEADERS}${header.copy}`, encoder.encode(JSON.stringify(header))]] });
+  }
+
+  /** An existing copy's header, written again only while the copy is still here: another tab may have removed it. */
+  private rewriteHeader(header: CopyHeader): Promise<boolean> {
+    return this.p.locks.run(lockName(header.copy), async () => {
+      if ((await this.p.storage.get(`${HEADERS}${header.copy}`)) === null) return false;
+      await this.writeHeader(header);
+      return true;
+    });
   }
 }
 
@@ -173,7 +209,10 @@ export class SealedMirror {
    */
   onLockAsked: (() => void) | null = null;
 
-  private constructor(private readonly p: StorePorts, readonly header: CopyHeader, private readonly r: Records) {}
+  private constructor(private readonly p: StorePorts, private h: CopyHeader, private readonly r: Records) {}
+
+  /** The copy's header as this tab last wrote or read it. */
+  get header(): CopyHeader { return this.h; }
 
   static async unlocked(p: StorePorts, header: CopyHeader, raw: Uint8Array<ArrayBuffer>, vaults: SlotVault[] | null): Promise<SealedMirror> {
     const r = await Records.unlock(p, header.copy, raw);
@@ -185,11 +224,26 @@ export class SealedMirror {
     }
     mirror.chosen = (await r.openJson<OfflineChoice>(await mirror.choiceKey(), await p.storage.get(await mirror.choiceKey()))) ?? DEFAULT_CHOICE;
     if (vaults !== null) await mirror.align(vaults);
-    mirror.stopListening = r.channel.listen((m) => void mirror.heard(m));
+    // A vault chosen and not held may be re-keyed (purged by align, adopted again by the engines): its entries stay.
+    // With All my vaults that is any vault listed, and any at all offline, where nothing says which. Online, a chosen
+    // vault the listing no longer has is gone for good: its entries go.
+    if (!mirror.chosen.all || vaults !== null) {
+      const listed = vaults === null ? null : new Set(vaults.map((v) => v.id));
+      const chosen = mirror.chosen.all ? [...listed!] : mirror.chosen.vaults.filter((id) => listed === null || listed.has(id));
+      const keep = new Set([...mirror.vaults.keys(), ...chosen]);
+      if (heldOnly(mirror.chosen, keep) !== mirror.chosen) await mirror.choose((c) => heldOnly(c, keep));
+    }
+    // A lock while a message is handled ends that work; nothing is left to report.
+    mirror.stopListening = r.channel.listen((m) => void mirror.heard(m).catch((e: unknown) => {
+      if (!mirror.locked) throw e;
+    }));
     return mirror;
   }
 
   get locked(): boolean { return this.r.locked; }
+
+  /** A contact went through since this copy was unlocked: what it may keep is the slot's word, not only the vault list's. */
+  get contacted(): boolean { return this.listed !== null; }
 
   /** The vaults this device holds a mirror of. */
   held(): VaultMirror[] {
@@ -212,8 +266,7 @@ export class SealedMirror {
     if (held !== undefined) return held;
     const listed = this.listed?.get(id);
     if (listed === undefined) throw new Error("Only a vault the server lists for this copy is mirrored.");
-    const meta: VaultMeta = { id, tag: listed.tag, canWrite: listed.canWrite, notesDone: false };
-    await VaultMirror.writeMeta(this.r, meta);
+    const meta = await VaultMirror.writeMeta(this.r, { id, tag: listed.tag, canWrite: listed.canWrite, notesDone: false });
     const vault = await VaultMirror.open(this.r, meta);
     this.vaults.set(id, vault);
     return vault;
@@ -260,6 +313,34 @@ export class SealedMirror {
   }
 
   /**
+   * A sign-in made while the copy stays open (the host's Sign in again, §4.2): the key, from the slot as at an online
+   * unlock, is wrapped again under the password just given, so the copy opens offline with that one; the idle limit
+   * stays the copy's. It is a contact too, with its answers.
+   */
+  async rewrap(username: string, password: string): Promise<Purged | "wiped"> {
+    this.assertOpen();
+    const answer = await this.p.slots.contact(this.h.slot.token, this.waiting());
+    if (answer === "gone") {
+      await this.remove();
+      return "wiped";
+    }
+    const raw = mirrorKey(answer);
+    const header: CopyHeader = {
+      ...this.h, login: await loginHash(username), password: await wrapWithPassword(this.p.crypto, raw, password, wrapAad(this.h.copy)),
+    };
+    raw.fill(0);
+    // Another tab may have removed the copy while the server and the password wrap were asked.
+    const written = await this.p.locks.run(this.r.lockName, async () => {
+      if ((await this.p.storage.get(`${HEADERS}${header.copy}`)) === null) return false;
+      await this.p.storage.write({ put: [[`${HEADERS}${header.copy}`, encoder.encode(JSON.stringify(header))]] });
+      return true;
+    });
+    if (!written) return "wiped";
+    this.h = header;
+    return this.align(answer.vaults);
+  }
+
+  /**
    * Told of every vault's mirror that went because the server no longer gives it to this device (not listed by a
    * contact or the vault list, re-keyed), in this tab or another, whichever path found it first: the host's notice
    * follows the removal (§3a). Not of one the device no longer chooses to keep. Removals made before it listened, at
@@ -278,9 +359,10 @@ export class SealedMirror {
 
   /**
    * Drops one vault's mirror, its unsynced changes too. Returns how many changes went with it. `left`: for the
-   * server's reasons (told, listenRemoved); false for the device's own choice.
+   * server's reasons (told, listenRemoved); false for the device's own choice. `forGood`: its part of the device's
+   * choice goes in the same write; false for a vault re-keyed, which comes again under its new tag.
    */
-  async purge(id: string, left = true): Promise<number> {
+  async purge(id: string, left = true, forGood = true): Promise<number> {
     this.assertOpen();
     const vault = this.vaults.get(id);
     if (vault === undefined) return 0;
@@ -288,7 +370,23 @@ export class SealedMirror {
     vault.drop();
     this.vaults.delete(id);
     await this.onDrop?.(id);
-    await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ remove: [vault.metaKey], removePrefix: [vault.dataPrefix] }));
+    const key = await this.choiceKey();
+    let readopted = false;
+    const chosen = await this.p.locks.run(this.r.lockName, async () => {
+      const now = (await this.r.openJson<OfflineChoice>(key, await this.p.storage.get(key))) ?? DEFAULT_CHOICE;
+      const next = forGood ? without(now, id) : now;
+      const put = next === now ? [] : [await this.r.sealJson(key, next)];
+      // Another tab may have purged and adopted it again already: a re-key leaves that new life alone.
+      const stored = await this.r.openJson<{ epoch?: string }>(vault.metaKey, await this.p.storage.get(vault.metaKey));
+      readopted = !forGood && stored !== null && stored.epoch !== vault.epoch;
+      await this.p.storage.write(readopted ? { put } : { put, remove: [vault.metaKey], removePrefix: [vault.dataPrefix] });
+      return next === now ? null : next;
+    });
+    if (readopted) await this.reopen(id);
+    if (chosen !== null) {
+      this.chosen = chosen;
+      this.r.channel.post({ type: "choice" });
+    }
     this.r.channel.post(left ? { type: "purged", vault: id, left: { lost } } : { type: "purged", vault: id });
     if (left) this.removed({ vaults: 1, lost });
     return lost;
@@ -334,7 +432,7 @@ export class SealedMirror {
       const now = this.listed.get(vault.id);
       // Not listed: access lost, deleted or marked discreet, alike by design. Another tag: re-keyed, synced afresh.
       if (now === undefined || now.tag !== vault.tag) {
-        purged.lost += await this.purge(vault.id);
+        purged.lost += await this.purge(vault.id, true, now === undefined);
         purged.vaults++;
       } else if (now.canWrite !== vault.canWrite) {
         await vault.setMeta({ canWrite: now.canWrite });
@@ -372,6 +470,9 @@ export class SealedMirror {
         await this.onDrop?.(m.vault);
         // Not again where this tab's own contact removed it first.
         if (held !== undefined && m.left !== undefined) this.removed({ vaults: 1, lost: m.left.lost });
+        // Synced afresh at another tab's opening, its meta still stored: this tab takes up the new life. A purge
+        // removed the meta, so nothing opens.
+        await this.reopen(m.vault);
       }
       this.onPurged?.(m.vault);
       return;
@@ -381,7 +482,16 @@ export class SealedMirror {
       // Adopted in another tab.
       await this.reopen(m.vault);
     } else {
-      await vault.refresh(m.paths);
+      try {
+        vault.assertHeld();
+        await vault.refresh(m.paths);
+      } catch (e) {
+        if (!(e instanceof MirrorLockedError) || this.locked) throw e;
+        // Purged and adopted again in another tab, and this one missed the purge: it takes up the new life.
+        if (this.vaults.get(m.vault) === vault) this.vaults.delete(m.vault);
+        await this.onDrop?.(m.vault);
+        await this.reopen(m.vault);
+      }
     }
     this.onChanged?.(m.vault, m.paths);
   }

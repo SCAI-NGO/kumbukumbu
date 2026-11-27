@@ -49,6 +49,17 @@ public sealed record SimilarResult(IReadOnlyList<SimilarHit> Hits, int Pending, 
 /// </summary>
 public static class SimilarSearch
 {
+    /// <summary>
+    /// The most chunks of one note compared, its first by position: the work of a pair grows with the product of its
+    /// notes' chunks. Measured: 256 against 256 cost 9 ms, 3,800 against 3,800 (a note of 1 MB) 2.7 s. A note of about
+    /// 80,000 characters of prose stays within it, so ordinary notes score as before.
+    /// </summary>
+    public const int MaxChunks = 256;
+
+    /// <summary>A note's chunks as compared: its first <see cref="MaxChunks"/> by position.</summary>
+    internal static IEnumerable<ChunkVector> FirstChunks(IEnumerable<ChunkVector> chunks) =>
+        chunks.OrderBy(c => c.StartLine).ThenBy(c => c.Part).Take(MaxChunks);
+
     private sealed record Resolved(SimilarSource Source, string Space, IReadOnlyList<float[]> Vectors);
 
     public static async Task<SimilarResult> RunAsync(INoteReader notes, ISearchIndex index, SimilarQuery query, CancellationToken ct)
@@ -78,7 +89,7 @@ public static class SimilarSearch
             .Where(n => !sourcePaths.Contains(n.Path) && (archive || !ArchiveFolder.Contains(n.Path)) && query.LeftOut?.Invoke(n) != true)
             .ToDictionary(n => n.Path);
 
-        var (best, otherModel) = Rank(sources, candidates, stored.Chunks, space, index.Bound);
+        var (best, otherModel) = Rank(sources, candidates, [.. stored.Chunks.GroupBy(c => c.Path).SelectMany(FirstChunks)], space, index.Bound, ct);
 
         // Link distances per source, in its vault's graph, walked without the notes left out by tag or archive.
         var filter = new GraphFilter([], [], Archive: archive) { WithoutTags = query.WithoutTags ?? [] };
@@ -119,8 +130,8 @@ public static class SimilarSearch
 
         var stored = await index.VectorsAsync(path, ct);
         if (stored.State != SemanticState.Ready) return (null, stored.Reason ?? "search by meaning isn't available");
-        var own = stored.Chunks
-            .Where(v => v.Path == path && (overlapping is null || overlapping.Any(c => c.StartLine <= v.StartLine && v.StartLine < c.EndLine)))
+        var own = FirstChunks(stored.Chunks
+            .Where(v => v.Path == path && (overlapping is null || overlapping.Any(c => c.StartLine <= v.StartLine && v.StartLine < c.EndLine))))
             .ToList();
         if (own.Count == 0)
         {
@@ -137,7 +148,8 @@ public static class SimilarSearch
     /// is matched to the note's current chunk as semsearch matches it, and headings with nothing below them don't count.
     /// </summary>
     private static (Dictionary<VaultPath, (Chunk Chunk, double Score, double[] Scores)> Best, int OtherModel) Rank(
-        IReadOnlyList<Resolved> sources, Dictionary<VaultPath, Note> candidates, IReadOnlyList<ChunkVector> stored, string space, ChunkBound bound)
+        IReadOnlyList<Resolved> sources, Dictionary<VaultPath, Note> candidates, IReadOnlyList<ChunkVector> stored, string space, ChunkBound bound,
+        CancellationToken ct)
     {
         var length = sources[0].Vectors[0].Length;
         var best = new Dictionary<VaultPath, (Chunk Chunk, double Score, double[] Scores)>();
@@ -146,6 +158,7 @@ public static class SimilarSearch
         var chunksOf = new Dictionary<VaultPath, List<Chunk>>();
         foreach (var vector in stored)
         {
+            ct.ThrowIfCancellationRequested();
             if (!candidates.TryGetValue(vector.Path, out var note)) continue;
             if (vector.Space != space || vector.Vector.Length != length)
             {

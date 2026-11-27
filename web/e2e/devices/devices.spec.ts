@@ -8,7 +8,7 @@
 //    name shows, the server holds it, and the copy stays as it was (it still opens offline with the password)
 //    → "devices #1: Rename …".
 // 2. Remove offline copy on another device asks first, naming the changes it hadn't uploaded and that the copy goes
-//    when that device next comes online, with the password as it had changes waiting; afterwards the device is gone
+//    when that device next comes online, with the password as for every other device's copy (ADR 0042); afterwards the device is gone
 //    from the list and the server answers its next contact "wipe" → "devices #2: Remove offline copy …". The wipe in
 //    that browser is offline.spec.ts test 6, not repeated here.
 // 3. Deactivating a user deletes their copies: the admin's confirmation says so, their browser purges its copy at its
@@ -53,7 +53,7 @@ type Who = { username: string; password: string; reserve: () => Promise<void> };
 const alice = (): Who => ({ username: usernames.alice, password: secrets().passwords.alice, reserve: () => reservePassword("alice") });
 const asUser = (u: TestUser): Who => ({ username: u.username, password: u.password, reserve: u.reservePassword });
 
-/** The mirror slots this test made: removed after it, with Alice's password where they had changes waiting. */
+/** The mirror slots this test made: removed after it, with Alice's password where they are another session's. */
 let made: string[] = [];
 
 test.afterEach(async ({ aliceApi }) => {

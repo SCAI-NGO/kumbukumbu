@@ -8,6 +8,9 @@ import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
 import { fakeApi, json, navigateAway, noContent, renderApp, user } from "../../test/app";
 
+const contact = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../offline/mode", async (original) => ({ ...(await original<typeof import("../../offline/mode")>()), contact }));
+
 const recoveryKey = "WXYZ-2345-6789-ABCD";
 
 function api(overrides: Record<string, (r: Request) => Response | Promise<Response>> = {}) {
@@ -155,13 +158,27 @@ describe("Settings: Security", () => {
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain(recoveryKey);
   });
 
+  it("re-encrypting my vaults makes contact once it succeeds", async () => {
+    contact.mockClear();
+    api({ "POST /api/account/reencrypt": () => json(200, { recoveryKey }) });
+    renderApp("/settings/security");
+    const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
+    await userEvent.type(within(part).getByLabelText("Current password"), "my password");
+    await userEvent.click(within(part).getByRole("button", { name: "Re-encrypt my vaults" }));
+    expect(await within(part).findByText(recoveryKey)).toBeInTheDocument();
+    // The copy on this device learns at once that its slot went, while it is online and has nothing waiting.
+    expect(contact).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the server's sentence when re-encrypting is refused", async () => {
+    contact.mockClear();
     api({ "POST /api/account/reencrypt": () => json(400, { error: "The password is wrong." }) });
     renderApp("/settings/security");
     const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
     await userEvent.type(within(part).getByLabelText("Current password"), "wrong");
     await userEvent.click(within(part).getByRole("button", { name: "Re-encrypt my vaults" }));
     expect(await within(part).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(contact).not.toHaveBeenCalled();
   });
 
   it("says a re-encryption may have gone through when its answer is lost, and to make a new recovery key", async () => {
@@ -191,6 +208,16 @@ describe("Settings: Security", () => {
     await userEvent.click(within(section("Sessions")).getByRole("button", { name: "Sign out other sessions" }));
     expect(await within(section("Sessions")).findByText(/Every other session has ended\./)).toBeInTheDocument();
     expect(ended).toBe(1);
+  });
+
+  it("End other sessions says every other device's copy stays", async () => {
+    api({ "POST /api/sessions/end-others": () => noContent() });
+    renderApp("/settings/security");
+    await screen.findByRole("region", { name: "Sessions" });
+    await userEvent.click(within(section("Sessions")).getByRole("button", { name: "Sign out other sessions" }));
+    expect(await within(section("Sessions")).findByText(/Every other session has ended\./)).toHaveTextContent(
+      "Every other device's offline copy stays until you remove it in Settings, Offline.",
+    );
   });
 });
 

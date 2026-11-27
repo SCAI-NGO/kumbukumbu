@@ -7,8 +7,9 @@ import { vaultHinted } from "../api/history";
 import { useVaults } from "../api/notes";
 import { followRename } from "../api/sharing";
 import { leaveVaults } from "../discreet/leftElsewhere";
-import { enginesHinted, enginesReconnected } from "../offline/engines";
+import { confirmSession, enginesHinted, enginesReconnected } from "../offline/engines";
 import { contact, useOfflineMode } from "../offline/mode";
+import { useSession } from "../state/session";
 import { presenceKey, useSyncStatus } from "../state/sync";
 import { useShellNavigate } from "../windows/context";
 
@@ -18,6 +19,8 @@ const REPLACED = 4409;
 const HIDDEN = 4412;
 /** Within this of the last at-once reconnect for {@link HIDDEN}, the next one backs off as any other close. */
 const HIDDEN_AGAIN = 5_000;
+/** A close without a close frame, as a lost network gives: the socket is tried again with the back-off. */
+const ABNORMAL = 1006;
 const MAX_DELAY = 30_000;
 /** WebSocket.OPEN. */
 const OPEN = 1;
@@ -126,12 +129,25 @@ export function useSyncSocket() {
     let attempt = 0;
     /** When it last connected again at once for {@link HIDDEN}. */
     let hiddenAt = -Infinity;
+    /** Ends the open socket's life here, as its close does: set for each socket. */
+    let ended: ((code: number) => void) | null = null;
 
     const retry = () => {
       if (stopped) return;
       timer = setTimeout(() => void connect(), Math.min(MAX_DELAY, 1000 * 2 ** attempt++));
     };
     const connect = async () => {
+      // After an offline sign-in the tab knows the username only, and the cookie may be someone else's: the session is
+      // read first, and nothing goes on under another person's.
+      if (useSession.getState().user?.id === "") {
+        const view = await confirmSession();
+        if (stopped) return;
+        if (view === null) {
+          if (useSession.getState().user?.id === "") retry();
+          return;
+        }
+        queryClient.setQueryData(["session"], view);
+      }
       const names = queryClient.getQueryData<{ name: string }[]>(["vaults"]);
       let ticket: string;
       try {
@@ -167,13 +183,14 @@ export function useSyncSocket() {
         opened.current = true;
       };
       s.onmessage = (e: MessageEvent) => onFrame(queryClient, navigate.current, e.data);
-      s.onclose = (e: CloseEvent) => {
+      const end = (code: number) => {
         if (socket !== s) return;
         socket = null;
+        ended = null;
         useSyncStatus.setState(down);
         useOfflineMode.getState().socket(false);
         // What the session shows changed: its discreet mode, and the vault list with it.
-        if (e.code === HIDDEN) void queryClient.invalidateQueries({ queryKey: ["session"] });
+        if (code === HIDDEN) void queryClient.invalidateQueries({ queryKey: ["session"] });
         // What the list held, for once it is read again; a second close before that adds to the first.
         const listed = queryClient.getQueryData<{ name: string; discreet?: boolean }[]>(["vaults"]);
         if (listed?.length) {
@@ -182,21 +199,30 @@ export function useSyncSocket() {
           before.current = { all, ordinary, since: Infinity };
         }
         // At once only for a socket that was up, and not again soon: a server that closes every socket gets the back-off.
-        if (e.code === HIDDEN && wasOpen && Date.now() - hiddenAt >= HIDDEN_AGAIN) {
+        if (code === HIDDEN && wasOpen && Date.now() - hiddenAt >= HIDDEN_AGAIN) {
           hiddenAt = Date.now();
           attempt = 0;
           if (!stopped) void connect();
-        } else if (e.code !== REPLACED) retry();
+        } else if (code !== REPLACED) retry();
       };
+      ended = end;
+      s.onclose = (e: CloseEvent) => end(e.code);
     };
 
-    // Without a network the socket is dead, but may not hear of it for minutes (no packet says so): closed at once,
-    // so the offline mode, which waits for the socket to be down, switches (offline mode design §3a).
-    const lost = () => socket?.close();
+    // Without a network the socket is dead, but may not hear of it for minutes (no packet says so), and on a dead link
+    // its close comes only once the browser's closing handshake gives up: it counts as down at once, so the offline
+    // mode, which waits for the socket to be down, switches (offline mode design §3a), and the next one is tried.
+    const lost = () => {
+      const s = socket;
+      ended?.(ABNORMAL);
+      s?.close();
+    };
     window.addEventListener("offline", lost);
+    useSyncStatus.setState({ drop: lost });
     void connect();
     return () => {
       window.removeEventListener("offline", lost);
+      useSyncStatus.setState({ drop: () => {} });
       stopped = true;
       clearTimeout(timer);
       const s = socket;

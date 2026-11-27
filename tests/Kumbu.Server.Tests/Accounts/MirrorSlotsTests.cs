@@ -396,45 +396,57 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Ending_other_sessions_removes_the_other_browsers_slots()
+    public async Task Ending_other_sessions_leaves_every_other_browsers_copy()
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");
         var here = await CreateAsync(alice, "Here");
         var elsewhere = await alice.SignInAgainAsync();
-        var there = await CreateAsync(elsewhere, "There");
-        await ContactedAsync(elsewhere, there.Token);
-
-        using (var ended = await alice.SendAsync(HttpMethod.Post, "/api/sessions/end-others")) Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
-
-        Assert.Equal([here.Id], (await ListAsync(alice)).Select(s => s!["id"]!.GetValue<string>()));
-        Assert.Equal(here.Key, (await ContactedAsync(alice, here.Token))["key"]!.GetValue<string>());
-        using var gone = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, elsewhere.Session, there.Token);
-        await AssertWipeAsync(gone, HttpStatusCode.Unauthorized);
-    }
-
-    [Fact]
-    public async Task Ending_other_sessions_leaves_a_slot_with_changes_waiting_or_not_yet_counted()
-    {
-        var alice = await NewAsync(app.PublicApi, vault: "Work");
-        var elsewhere = await alice.SignInAgainAsync();
+        var counted = await CreateAsync(elsewhere, "Counted");
+        await ContactedAsync(elsewhere, counted.Token);
         var waiting = await CreateAsync(elsewhere, "Waiting");
         await ContactedAsync(elsewhere, waiting.Token, waiting: 3);
         var third = await alice.SignInAgainAsync();
-        var uncounted = await CreateAsync(third, "Not counted");
+        await CreateAsync(third, "Not counted");
 
         using (var ended = await alice.SendAsync(HttpMethod.Post, "/api/sessions/end-others")) Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
 
-        // Their sessions are gone; their unsent changes, which nothing else in Kumbu² keeps, wait for a removal with the password.
-        Assert.Equal(["Not counted", "Waiting"], (await ListAsync(alice)).Select(s => s!["label"]!.GetValue<string>()).Order(StringComparer.Ordinal));
+        // Their sessions are gone; their copies, and what they haven't uploaded, wait for a removal with the password.
+        Assert.Equal(
+            ["Counted", "Here", "Not counted", "Waiting"],
+            (await ListAsync(alice)).Select(s => s!["label"]!.GetValue<string>()).Order(StringComparer.Ordinal));
+        Assert.Equal(here.Key, (await ContactedAsync(alice, here.Token))["key"]!.GetValue<string>());
+        using var signedOut = await RawAsync(alice, HttpMethod.Get, "/api/vaults", null, Origin, elsewhere.Session, counted.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, signedOut.StatusCode);
+        Assert.Null((await JsonAsync(signedOut))["code"]);
     }
 
     [Fact]
-    public async Task Removing_a_slot_with_changes_waiting_asks_for_the_password()
+    public async Task Ending_other_sessions_leaves_this_browsers_copy_before_its_new_sessions_first_contact()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var here = await CreateAsync(alice, "Here");
+        await ContactedAsync(alice, here.Token);
+        // This browser signs in again; its slot still names the session before.
+        var again = await alice.SignInAgainAsync();
+
+        using (var ended = await again.SendAsync(HttpMethod.Post, "/api/sessions/end-others")) Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
+
+        Assert.Equal(here.Key, (await ContactedAsync(again, here.Token))["key"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    [InlineData(null)]
+    public async Task Removing_another_browsers_copy_asks_for_the_password_whatever_its_last_contact_said(int? waiting)
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");
         var elsewhere = await alice.SignInAgainAsync();
         var slot = await CreateAsync(elsewhere);
-        await ContactedAsync(elsewhere, slot.Token, waiting: 2);
+        using (var contact = await elsewhere.SendAsync(HttpMethod.Post, Contact, waiting is null ? new { token = slot.Token } : new { token = slot.Token, waiting }))
+        {
+            Assert.Equal(HttpStatusCode.OK, contact.StatusCode);
+        }
 
         using (var asked = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{slot.Id}"))
         {
@@ -446,47 +458,49 @@ public sealed class MirrorSlotsTests(KumbuAppFactory app)
 
         using (var removed = await alice.SendAsync(HttpMethod.Post, $"{Url}/{slot.Id}/remove", new { password = Password })) Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
         Assert.Empty(await ListAsync(alice));
+        using var gone = await ContactAsync(elsewhere, slot.Token);
+        await AssertWipeAsync(gone);
     }
 
     [Fact]
-    public async Task A_contact_without_a_count_leaves_it_unknown_and_its_removal_asks_for_the_password()
+    public async Task A_contact_without_a_count_leaves_it_unknown()
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");
-        var elsewhere = await alice.SignInAgainAsync();
-        var slot = await CreateAsync(elsewhere);
-        await ContactedAsync(elsewhere, slot.Token, waiting: 0);
+        var slot = await CreateAsync(alice);
+        await ContactedAsync(alice, slot.Token, waiting: 0);
         // The browser unlocks again and can't count yet: "not known", never "none", even after a count of 0.
-        using (var uncounted = await elsewhere.SendAsync(HttpMethod.Post, Contact, new { token = slot.Token })) Assert.Equal(HttpStatusCode.OK, uncounted.StatusCode);
+        using (var uncounted = await alice.SendAsync(HttpMethod.Post, Contact, new { token = slot.Token })) Assert.Equal(HttpStatusCode.OK, uncounted.StatusCode);
 
         var entry = Assert.Single(await ListAsync(alice))!;
         Assert.NotNull(entry["contactAt"]);
         Assert.Null(entry["waiting"]);
+    }
+
+    [Fact]
+    public async Task Removing_a_copy_not_yet_counted_asks_for_the_password()
+    {
+        var alice = await NewAsync(app.PublicApi, vault: "Work");
+        var elsewhere = await alice.SignInAgainAsync();
+        var slot = await CreateAsync(elsewhere);
+
         using (var asked = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{slot.Id}"))
         {
             Assert.Equal(HttpStatusCode.BadRequest, asked.StatusCode);
             Assert.Equal("changes-waiting", (await JsonAsync(asked))["code"]?.GetValue<string>());
         }
-        // So does "End other sessions": the copy waits for a removal with the password.
-        using (var ended = await alice.SendAsync(HttpMethod.Post, "/api/sessions/end-others")) Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
         Assert.Single(await ListAsync(alice));
     }
 
     [Fact]
-    public async Task Removing_a_slot_not_yet_counted_asks_for_the_password_but_this_browsers_own_does_not()
+    public async Task Removing_this_browsers_own_copy_needs_no_password()
     {
         var alice = await NewAsync(app.PublicApi, vault: "Work");
-        var elsewhere = await alice.SignInAgainAsync();
-        var there = await CreateAsync(elsewhere, "There");
         var here = await CreateAsync(alice, "Here");
         await ContactedAsync(alice, here.Token, waiting: 5);
 
-        using (var asked = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{there.Id}"))
-        {
-            Assert.Equal("changes-waiting", (await JsonAsync(asked))["code"]?.GetValue<string>());
-        }
         // Its own copy this browser removes itself, and has said what goes with it.
         using (var own = await alice.SendAsync(HttpMethod.Delete, $"{Url}/{here.Id}")) Assert.Equal(HttpStatusCode.NoContent, own.StatusCode);
-        Assert.Equal([there.Id], (await ListAsync(alice)).Select(s => s!["id"]!.GetValue<string>()));
+        Assert.Empty(await ListAsync(alice));
     }
 
     [Fact]

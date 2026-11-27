@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { ownedBy, type CopyHeader } from "eidolon-core/store/mirror";
 import createClient, { type Middleware } from "openapi-fetch";
 import { useOfflineCopy } from "../offline/copy";
-import { lockCopy, useOfflineMode, wipeCopy } from "../offline/mode";
+import { useOfflineMode, wipeCopy } from "../offline/mode";
 import { endPendingSignOut, signOutPending } from "../offline/unlock";
 import { usePasswordPrompt } from "../state/passwordPrompt";
 import { useSession } from "../state/session";
@@ -50,43 +51,60 @@ export async function isPasswordRequired(response: Response): Promise<boolean> {
   return !!body && typeof body === "object" && "type" in body && body.type === "password-required";
 }
 
-/** A 401 for a missing session ends it. `key`: "PUT /api/files/{vault}/{path}". */
-async function endOnLostSession(key: string, response: Response) {
-  if (response.status !== 401 || anonymous.has(key) || (await isPasswordRequired(response))) return;
+/** The request handed in the offline copy's slot, which is gone: the copy goes too (offline mode design §4.6). */
+export async function isMirrorWipe(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
   const body: unknown = await response.clone().json().catch(() => null);
-  // The request handed in the offline copy's slot, which is gone: the copy goes too (offline mode design §4.6).
-  if (!!body && typeof body === "object" && "code" in body && body.code === "mirror-wipe") return void (await wipeCopy());
+  return !!body && typeof body === "object" && "code" in body && body.code === "mirror-wipe";
+}
+
+/** A 401 for a missing session ends it. `key`: "PUT /api/files/{vault}/{path}"; `token`: the copy's, if the request carried it. */
+async function endOnLostSession(key: string, token: string | null, response: Response) {
+  if (response.status !== 401 || anonymous.has(key) || (await isPasswordRequired(response))) return;
+  if (await isMirrorWipe(response)) return void (await wipeCopy(token));
   // Back from offline with changes waiting: the bar asks to sign in again over the app, which keeps the place (§3a).
   const mode = useOfflineMode.getState();
   if (mode.offline && mode.waiting > 0) return mode.sessionLost();
   // After a sign-out, the page being left may still ask (or hear back) for a moment; those 401s are the sign-out
   // itself. Asking for the session is the way back in, and still leads to sign-in.
   if (useSession.getState().signedOut && key !== "GET /api/session") return;
-  // The copy's life in the tab follows the session's: no way back past the sign-in page without the password, and
+  // The copy locks with it (the session store's rule): no way back past the sign-in page without the password, and
   // the next user never inherits it.
-  void lockCopy();
   useSession.getState().end();
 }
 
 const sessionEnds: Middleware = {
-  onResponse: ({ request, response, schemaPath }) => endOnLostSession(`${request.method} ${schemaPath}`, response),
+  onResponse: ({ request, response, schemaPath }) => endOnLostSession(`${request.method} ${schemaPath}`, request.headers.get("Kumbu-Mirror"), response),
 };
 
-/** Gateways answer these while Kumbu² behind them is down. */
-const unreachable = new Set([502, 503, 504]);
+/** Gateways answer these while Kumbu² behind them is down. Kumbu²'s own 503 (a vault being re-encrypted, the server busy
+ * for a moment) carries its version, and reached it. */
+const unreachable = (response: Response) => [502, 503, 504].includes(response.status) && !response.headers.has("X-Kumbu-Version");
+
+/**
+ * Whether a request may carry the copy's slot token (ADRs 0029, 0033): under the session of the copy's own user, or
+ * with nobody signed in, but never with a request that signs in (`key` as above). After an offline sign-in the tab
+ * knows the username only (id "", owning nothing) and the cookie may be someone else's: none goes until the session
+ * is read.
+ */
+export async function carriesToken(header: CopyHeader, key: string): Promise<boolean> {
+  const user = useSession.getState().user;
+  if (user === null) return !anonymous.has(key);
+  return ownedBy(header, user.id);
+}
 
 /**
  * What the offline mode needs to hear of every request (offline mode design §3a): whether it reached Kumbu²; and the
  * offline copy's slot token goes with it, so a 401 can say the copy was removed (§4.6).
  */
 const reachWatch: Middleware = {
-  onRequest({ request }) {
-    const token = useOfflineCopy.getState().header?.slot.token;
-    if (token !== undefined) request.headers.set("Kumbu-Mirror", token);
+  async onRequest({ request, schemaPath }) {
+    const header = useOfflineCopy.getState().header;
+    if (header !== null && (await carriesToken(header, `${request.method} ${schemaPath}`))) request.headers.set("Kumbu-Mirror", header.slot.token);
     return request;
   },
   onResponse({ response }) {
-    if (unreachable.has(response.status)) return void useOfflineMode.getState().failed();
+    if (unreachable(response)) return void useOfflineMode.getState().failed();
     useOfflineMode.getState().reached();
     // Kumbu² answers again: a sign-out made while away reaches it now, not only at the next start.
     if (signOutPending()) void endPendingSignOut();
@@ -106,10 +124,11 @@ const versionWatch: Middleware = {
 
 /** What the middleware hears of every answer, for a request sent without openapi-fetch (an upload with progress). */
 export async function heard(key: string, response: Response) {
-  if (unreachable.has(response.status)) useOfflineMode.getState().failed();
+  if (unreachable(response)) useOfflineMode.getState().failed();
   else useOfflineMode.getState().reached();
   useUpdate.getState().report(response.headers.get("X-Kumbu-Version"));
-  await endOnLostSession(key, response);
+  // Sent without the copy's token.
+  await endOnLostSession(key, null, response);
 }
 
 // What a guarded request sent, by openapi-fetch's request id, to send again once the password is confirmed. Reads are

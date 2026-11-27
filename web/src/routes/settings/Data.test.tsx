@@ -2,6 +2,8 @@
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SealedMirror } from "eidolon-core/store/mirror";
+import { useOfflineCopy } from "../../offline/copy";
 import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../../test/app";
@@ -29,6 +31,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useOfflineCopy.getState().clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   useSession.getState().reset();
@@ -69,6 +72,21 @@ describe("Settings: Your data", () => {
     // Nothing of the account stays on the device: its last note goes with it.
     expect(localStorage.getItem("kumbu.lastNote.u1")).toBeNull();
     expect(await screen.findByRole("status")).toHaveTextContent("Your account is deleted");
+  });
+
+  it("deleting the account removes the offline copy from this device", async () => {
+    const mirror = { header: { copy: "c1", slot: { id: "s1", token: "tok-ada" } }, locked: false, lock: vi.fn(), lockEverywhere: vi.fn() };
+    useOfflineCopy.getState().set(mirror.header as never, mirror as unknown as SealedMirror);
+    api({ "POST /api/account/delete": () => noContent() });
+    const router = renderApp("/settings/data");
+    const form = await screen.findByRole("region", { name: "Delete account" });
+    await userEvent.type(within(form).getByLabelText("Current password"), "my password, long");
+    await userEvent.type(within(form).getByLabelText("Type ada to confirm"), "ada");
+    await userEvent.click(within(form).getByRole("button", { name: "Delete my account" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    expect(mirror.lock).toHaveBeenCalled();
+    // Gone, not only locked: no header of it is left in the tab.
+    expect(useOfflineCopy.getState()).toMatchObject({ header: null, mirror: null });
   });
 
   it("lists her shared vaults and sends the choice", async () => {

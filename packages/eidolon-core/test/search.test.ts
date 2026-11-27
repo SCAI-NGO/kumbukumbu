@@ -5,7 +5,7 @@
 import { describe, expect, test } from "vitest";
 import { MirrorSearch, NoSuchTagError } from "../src/read/search";
 import { sectionsOf, snippetOf } from "../src/search/sections";
-import { carries, tagsOf } from "../src/search/tags";
+import { carries, normaliseTag, tagsOf } from "../src/search/tags";
 import { prepare, searchWords } from "../src/search/words";
 import { MirrorCopies } from "../src/store/mirror";
 import { FakeBrowser } from "./fakeStore";
@@ -37,6 +37,15 @@ describe("sections", () => {
     expect(sections.map((s) => s.address)).toEqual(["#A", "#A#Notes[1]", "#A#Notes[2]", "#Q\\#A", "#x\\[2]"]);
   });
 
+  test("reads headings as before", () => {
+    const address = (line: string) => sectionsOf("/Demo/n.md", `${line}\nbody\n`)[0]!.address;
+    expect(["# A", "## A ##", "# A #  ", "#\tA\t#\t", "# A#", "## B ## x", "#   A  b  ", "   # A", "# #", "# a \\#"].map(address)).toEqual(
+      ["#A", "#A", "#A", "#A", "#A\\#", "#B \\#\\# x", "#A  b", "#A", "#\\#", "#a \\#"],
+    );
+    expect(["#", "#  ", "###### ######"].map(address)).toEqual(["#", "#", "#\\#\\#\\#\\#\\#\\#"]);
+    expect(["####### A", "    # A", "#tag", "A # B"].map(address)).toEqual(["", "", "", ""]);
+  });
+
   test("the snippet is the line with the whole query, else the one with most of its words, else the start", () => {
     const [section] = sectionsOf("/Demo/n.md", "# Pump\nThe pump runs.\nPumpe 50 is red and blue.\nblue only\n");
     expect(snippetOf(section!, "pumpe 5")).toBe("Pumpe 50 is red and blue.");
@@ -57,6 +66,12 @@ describe("tags", () => {
     ["```\n#fenced\n```\n\n    #indented\n#123 a#b #ok/", ["ok"]],
     ["- item\n    #nested", ["nested"]],
   ])("%j", (content, expected) => expect(tagsOf(content)).toEqual(expected));
+
+  test("strips a tag's trailing slashes, in the text, the front matter and a query", () => {
+    expect(tagsOf("#plan/ and #a//b and #work///\n")).toEqual(["plan", "a//b", "work"]);
+    expect(tagsOf("---\ntags: [plan/, 'idea//']\n---\n")).toEqual(["plan", "idea"]);
+    expect([normaliseTag("#plan/"), normaliseTag("a/b//"), normaliseTag("///"), normaliseTag("#")]).toEqual(["plan", "a/b", null, null]);
+  });
 
   test("a tag carries its nested ones, ignoring case", () => {
     expect(carries(tagsOf("#Project/Kumbu"), "project")).toBe(true);

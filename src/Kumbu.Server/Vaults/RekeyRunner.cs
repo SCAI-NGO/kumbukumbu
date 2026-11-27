@@ -23,7 +23,7 @@ namespace Kumbu.Server.Vaults;
 /// failure, so that one hung run doesn't hold up the queue. A restart loses the queue, not the state: the vault stays
 /// pending in MongoDB.
 /// </summary>
-public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime life, TimeProvider time, ILogger<RekeyRunner> log) : IHostedService
+public sealed class RekeyRunner(VaultCatalog catalog, Sync.SyncHub hub, IHostApplicationLifetime life, TimeProvider time, ILogger<RekeyRunner> log) : IHostedService
 {
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromHours(1);
 
@@ -172,6 +172,8 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
             var summary = await catalog.RekeyAsync(entry.VaultId, userId, userKey, attempt.Token).WaitAsync(attempt.Token);
             End(entry);
             entry.Next.TrySetResult(summary);
+            // Its tag changed: the copies holding it, the members' too, bring it in line now rather than at their next contact.
+            await hub.VaultRekeyedAsync(entry.VaultId, CancellationToken.None);
         }
         catch (VaultNotRekeyableException e) when (KeyReplaced(entry, userId, userKey))
         {

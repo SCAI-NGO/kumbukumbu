@@ -5,8 +5,8 @@ import { decide, type Action } from "./decide";
 import { makePlan, type Choice, type FirstSyncSummary, type MergePlan } from "./firstSync";
 import { attachmentKind, conflictCopyPath, eligibility, isMarker, MARKER } from "./paths";
 import {
-  AuthError, OfflineError, RejectedError,
-  type Clock, type FetchPolicy, type FileStat, type MoveResult, type VersionsAnswer, type ConnectionMode, type LocalFiles, type NotSynced, type RemoteApi,
+  AuthError, OfflineError, RejectedError, VaultChangedError,
+  type CameBack, type Clock, type FetchPolicy, type FileStat, type MoveResult, type VersionsAnswer, type ConnectionMode, type LocalFiles, type NotSynced, type RemoteApi,
   type StateStore, type SyncState, type SyncStatus, type Version,
 } from "./ports";
 import { SerialQueue } from "./queue";
@@ -16,7 +16,10 @@ export interface EngineOptions {
   vault: string; device: string; local: LocalFiles; remote: RemoteApi; state: StateStore; clock: Clock;
   onStatus(s: SyncStatus): void;
   onConflict(original: string, copy: string): void;
+  onCameBack?(path: string, why: CameBack): void;
   onAuthLost(): void;
+  /** The name this engine asks by is another vault's now: the host reads the vault list again. */
+  onVaultChanged?(): void;
   /** A first sync finished, also one that finished on a retry after its first attempt failed. */
   onFirstSyncDone?(summary: FirstSyncSummary): void;
   /** The user closed the first sync's question without an answer: nothing was saved. */
@@ -113,6 +116,11 @@ export class SyncEngine {
   private offline = false;
   private retryHandle: unknown = null;
   private retryDelay = 0;
+  /**
+   * A full check ended before it looked at every path (the network went): the next check is full too, as only a full
+   * one finds a file changed while the engine wasn't running.
+   */
+  private fullOwed = false;
   private copiesMade = 0;
   /**
    * Folders a remote delete or move took a note out of. Kumbu² has no empty folders, so each is deleted once it is
@@ -343,7 +351,7 @@ export class SyncEngine {
     if (this.stopped) return Promise.resolve();
     if (this.firstSyncChoose !== null) return this.firstSyncJob().then(() => undefined);
     const last = this.state.lastSyncAt === null ? NaN : Date.parse(this.state.lastSyncAt);
-    const asFull = full || this.state.cursor === null || !(this.o.clock.now() - last < FULL_AFTER_MS);
+    const asFull = full || this.fullOwed || this.state.cursor === null || !(this.o.clock.now() - last < FULL_AFTER_MS);
     return this.run(() => this.runCheck(asFull), asFull ? "check:full" : "check");
   }
 
@@ -401,6 +409,7 @@ export class SyncEngine {
   }
 
   private async runCheck(full: boolean): Promise<void> {
+    if (full) this.fullOwed = true;
     const answer = await this.o.remote.versions(full ? null : this.state.cursor, null);
     await this.readShared();
     if (this.checkedRights !== null && this.rights !== this.checkedRights) this.retryRefused();
@@ -423,6 +432,7 @@ export class SyncEngine {
         pathFailed = true;
       }
     }
+    if (full) this.fullOwed = false;
     // The old cursor stays while a path failed, so the next check asks for it again.
     if (!pathFailed) await this.finishCheck(answer);
   }
@@ -794,8 +804,13 @@ export class SyncEngine {
         return undefined;
 
       case "upload":
-      case "reupload":
-        return this.upload(key, content!, action.kind === "upload" ? action.base : null);
+        return this.upload(key, content!, action.base);
+
+      case "reupload": {
+        const again = await this.upload(key, content!, null);
+        if (again === undefined && !isFile(key) && !this.tooLarge.has(key)) this.o.onCameBack?.(key, "trashed-elsewhere");
+        return again;
+      }
 
       case "download": {
         const theirs = await this.readRemote(key);
@@ -805,9 +820,12 @@ export class SyncEngine {
           return { remote: null };
         }
         if (!(await this.writeLocalIf(path, local, theirs.content))) return { remote: theirs.version };
+        // Gone here with a base: trashed here, and Kumbu²'s edit since brings it back.
+        const cameBack = local === null && this.state.bases[key] !== undefined && !isFile(key);
         this.localPathOf.set(key, path);
         this.forgetProblems(key);
         await this.setBase(key, theirs.version);
+        if (cameBack) this.o.onCameBack?.(key, "trashed-here");
         return undefined;
       }
 
@@ -1025,6 +1043,7 @@ export class SyncEngine {
     }
     // Offline, or anything unexpected: nothing is dropped (dirty paths stay), and a check is tried again later.
     if (!(e instanceof OfflineError)) console.error("Kumbu² Sync:", e);
+    if (e instanceof VaultChangedError) this.o.onVaultChanged?.();
     this.offline = true;
     const backoff = this.retryDelay === 0 ? RETRY_FIRST_MS : Math.min(RETRY_MAX_MS, this.retryDelay * 2);
     this.retryDelay = backoff;

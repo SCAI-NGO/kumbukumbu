@@ -1,7 +1,7 @@
 # 0009. Ask for the password before removing another device's copy with changes waiting
 
 - **Date:** 2026-11-23
-- **Status:** Accepted (implementation in progress)
+- **Status:** Superseded by [0042](0042-removing-another-devices-copy-always-asks-for-the-password.md)
 - **Decided by:** Chris
 - **Spec:** [offline mode](../superpowers/specs/2026-11-22-offline-mode-design.md) §3a "Settings, Offline", §4.6
 

@@ -63,6 +63,10 @@ public static class ApiErrors
     public static ApiException TooMany(TimeSpan retryAfter, string message = "Too many attempts; try again in a minute.") =>
         new(StatusCodes.Status429TooManyRequests, message, retryAfter);
 
+    /// <summary>A call that costs seconds of CPU ran out of time: 503, to be tried again in a moment.</summary>
+    public static ApiException Busy() =>
+        new(StatusCodes.Status503ServiceUnavailable, "The server is busy; try again in a moment.", BusyRetryAfter);
+
     /// <summary>The refusal of <see cref="AccountLimits.PasswordCheck"/>: successful checks count too, so someone who
     /// deletes several vaults in a row needs to know why the next one waits.</summary>
     public static ApiException TooManyPasswordChecks(TimeSpan retryAfter) =>

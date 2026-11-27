@@ -29,10 +29,16 @@ export function codeLines(lines: readonly string[]): boolean[] {
   return code;
 }
 
-/** The line after YAML frontmatter ("---" on the first line up to the next "---" or "..."), or 0. */
-export function frontmatterEnd(lines: readonly string[]): number {
+/**
+ * The line after YAML frontmatter ("---" on the first line up to the next "---" or "..."), or 0; also 0 when its
+ * lines, each with its line break, hold more than `limit` characters.
+ */
+export function frontmatterEnd(lines: readonly string[], limit = Infinity): number {
   if (lines.length === 0 || trimEnd(lines[0]!) !== "---") return 0;
+  let length = lines[0]!.length + 1;
   for (let i = 1; i < lines.length; i++) {
+    length += lines[i]!.length + 1;
+    if (length > limit) return 0;
     const line = trimEnd(lines[i]!);
     if (line === "---" || line === "...") return i + 1;
   }
@@ -60,17 +66,22 @@ export function codeSpans(line: string): Array<[start: number, end: number]> {
 }
 
 // .NET's char.IsWhiteSpace, which string.Trim uses: unlike JavaScript's trim, it keeps U+FEFF and takes U+0085.
-const SPACE = "[\\t-\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
-const LEADING = new RegExp(`^${SPACE}+`);
-const TRAILING = new RegExp(`${SPACE}+$`);
+function isSpace(code: number): boolean {
+  return (code >= 0x09 && code <= 0x0d) || code === 0x20 || code === 0x85 || code === 0xa0 || code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) || code === 0x2028 || code === 0x2029 || code === 0x202f || code === 0x205f || code === 0x3000;
+}
 
 /** string.Trim() as the server trims. */
 export function trim(text: string): string {
-  return text.replace(LEADING, "").replace(TRAILING, "");
+  let start = 0;
+  while (start < text.length && isSpace(text.charCodeAt(start))) start++;
+  return trimEnd(text.slice(start));
 }
 
 function trimEnd(text: string): string {
-  return text.replace(TRAILING, "");
+  let end = text.length;
+  while (end > 0 && isSpace(text.charCodeAt(end - 1))) end--;
+  return text.slice(0, end);
 }
 
 const ASCII = /^[\x00-\x7f]*$/;

@@ -7,6 +7,7 @@ import { endPendingSignOut } from "./offline/unlock";
 import { initScheme } from "./theme/apply";
 import { registerShell } from "./update/serviceWorker";
 import { runEngines } from "./offline/engines";
+import { startHeartbeat } from "./offline/heartbeat";
 import { runOfflineHost } from "./offline/host";
 import { keepStrayDrops } from "./upload/strayDrops";
 
@@ -15,6 +16,7 @@ keepStrayDrops();
 void registerShell();
 runEngines();
 runOfflineHost(queryClient);
+startHeartbeat();
 
 // A sign-out made offline ends its session before anything else reaches the server (offline mode design §3a).
 void endPendingSignOut().then(() =>

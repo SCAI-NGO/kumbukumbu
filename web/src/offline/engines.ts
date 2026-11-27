@@ -2,20 +2,21 @@
 // The sync engines of this tab's unlocked copy (offline mode design §3, §6), over fetch and the session cookie. They run
 // while the copy is open and this tab leads it; the app hears their conflicts, lost sessions and changes waiting.
 import { KumbuApi, type HttpFn } from "eidolon-core/api/client";
-import type { ListedVault } from "eidolon-core/engine/ports";
+import { AuthError, type CameBack, type ListedVault } from "eidolon-core/engine/ports";
 import type { OfflineChoice } from "eidolon-core/store/choice";
 import { MirrorEngines } from "eidolon-core/store/engines";
 import type { SealedMirror } from "eidolon-core/store/mirror";
-import { api, call } from "../api/client";
+import { api, call, carriesToken, isMirrorWipe } from "../api/client";
 import { useOfflineCopy } from "./copy";
-import { useSession } from "../state/session";
+import { useSession, type SessionView } from "../state/session";
 import { deviceLabel } from "./deviceLabel";
-import { openCopy } from "./mode";
+import { mirrorCopies, openCopy, wipeCopy } from "./mode";
 import { nameVaults } from "./source";
 import { draftsFor } from "./writing";
 
 export interface EngineEvents {
-  conflict(vaultId: string, original: string, copy: string): void;
+  /** With `came`, no copy: the note itself came back after a trash met an edit. */
+  conflict(vaultId: string, original: string, copy: string, came?: CameBack): void;
   sessionLost(): void;
   waitingChanged(): void;
 }
@@ -27,16 +28,54 @@ export function listenToEngines(events: EngineEvents): () => void {
   return () => void listeners.delete(events);
 }
 
-/** The engines' HTTP: same origin, the session cookie with it. */
+/**
+ * The engines' HTTP: same origin, the session cookie with it, and the copy's token as the API client sends it, so an
+ * answer that the slot is gone removes the copy here too (§4.11).
+ */
 export const mirrorHttp: HttpFn = async (r) => {
-  const response = await fetch(r.url, { method: r.method, headers: r.headers, body: r.body, credentials: "same-origin" });
+  const header = useOfflineCopy.getState().header;
+  const sent = { ...r.headers };
+  if (header !== null && (await carriesToken(header, `${r.method} ${new URL(r.url).pathname}`))) sent["Kumbu-Mirror"] = header.slot.token;
+  const response = await fetch(r.url, { method: r.method, headers: sent, body: r.body, credentials: "same-origin" });
+  if (await isMirrorWipe(response)) void wipeCopy(sent["Kumbu-Mirror"] ?? null);
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => (headers[key] = value));
   const bytes = await response.arrayBuffer();
   return { status: response.status, headers, text: new TextDecoder().decode(bytes), bytes };
 };
 
+let reading: Promise<SessionView | null> | null = null;
+
+/**
+ * Reads the session and holds it against the copy this tab has open: the cookie is the browser's, and after an
+ * offline sign-in (the tab knows the username only) it may still be someone else's. The copy's own user's: the tab's
+ * session is that one from now on, and the view comes back. Another person's: the copy locks, its changes stay sealed,
+ * and the tab goes to sign-in. Null for that, and when Kumbu² can't be reached or there is no copy open.
+ */
+export function confirmSession(): Promise<SessionView | null> {
+  reading ??= (async () => {
+    try {
+      const mirror = useOfflineCopy.getState().mirror;
+      if (mirror === null || mirror.locked) return null;
+      const view = await call(api.GET("/api/session"));
+      // As the slot port compares them: by the hash of the user id in the copy's header.
+      if ((await (await mirrorCopies()).forUser(view.user.id))?.copy !== mirror.header.copy) {
+        // The session's end locks the copy.
+        useSession.getState().end();
+        return null;
+      }
+      if (useSession.getState().user?.id === "") useSession.getState().signedIn(view);
+      return view;
+    } catch {
+      // Unreachable, or a 401, which the API client has dealt with.
+      return null;
+    }
+  })().finally(() => (reading = null));
+  return reading;
+}
+
 async function listVaults(): Promise<ListedVault[]> {
+  if ((await confirmSession()) === null) throw new AuthError("This offline copy isn't the signed-in user's.");
   return (await call(api.GET("/api/vaults"))).map((v) => ({
     id: v.id, name: v.name, canWrite: v.canWrite, shared: v.shared, level: v.level, discreet: v.discreet,
   }));
@@ -54,10 +93,10 @@ function follow(mirror: SealedMirror | null): void {
     // The open editors are the engine's drafts while offline writes are on (§4.9); the vault keeps the caller's name (§4.8).
     files: (vault) => vault.files(draftsFor(vault.id)),
     adopted: (ref) => nameVaults(mirror, [ref]),
-    remote: (name) => new KumbuApi(mirrorHttp, window.location.origin, name, null),
+    remote: (name, id) => new KumbuApi(mirrorHttp, window.location.origin, name, null, id),
     clock: { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as number) },
     onStatus: () => listeners.forEach((l) => l.waitingChanged()),
-    onConflict: (vault, original, copy) => listeners.forEach((l) => l.conflict(vault, original, copy)),
+    onConflict: (vault, original, copy, came) => listeners.forEach((l) => l.conflict(vault, original, copy, came)),
     onAuthLost: () => listeners.forEach((l) => l.sessionLost()),
   });
   running = { mirror, engines };
@@ -96,7 +135,7 @@ export function enginesLocalChanged(vaultId: string, path: string): void {
 
 /** The socket is (back) up: the vault list and the engines are brought in line. */
 export function enginesReconnected(): void {
-  void running?.engines.refresh().catch(() => {});
+  void running?.engines.reconnected().catch(() => {});
 }
 
 /** An attachment opened online: kept on this device within the budget (§6). Nothing without an open copy. */

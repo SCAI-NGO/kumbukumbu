@@ -23,11 +23,11 @@ internal static class SharedVaults
     }
 
     /// <summary>A shell as Bob, a member: his own writes are those under his writer id.</summary>
-    internal static Shell AsBob(InMemoryNoteStore store)
+    internal static Shell AsBob(InMemoryNoteStore store, Kumbu.Core.Search.ISearchIndex? search = null)
     {
         var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
         return new Shell(
-            store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)), labels: new BobsLabels());
+            store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)), search: search, labels: new BobsLabels());
     }
 
     private sealed class BobsLabels : IWriterLabels

@@ -11,6 +11,7 @@ import { RecoveryKeyReveal } from "../../components/RecoveryKeyReveal";
 import { useMarkDiscreet } from "../../discreet/api";
 import SetPinDialog from "../../discreet/SetPinDialog";
 import { useDiscreet } from "../../discreet/state";
+import { contact, keepSessionThroughWipe } from "../../offline/mode";
 import { markPasswordChanged } from "../../offline/PasswordChangedCopies";
 import { useSession } from "../../state/session";
 import { Done, Section } from "./Section";
@@ -233,15 +234,30 @@ function ReencryptSection() {
   // As for a new recovery key: the key lives in component state only, until the reveal is done.
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // The copy here goes with every slot, at this tab's contact or the socket's frame, maybe before the answer: the
+  // session stays, and with it the reveal, until the new key was seen.
+  const sessionKept = useRef<(() => void) | null>(null);
+  const letSessionGo = () => {
+    sessionKept.current?.();
+    sessionKept.current = null;
+  };
+  useEffect(() => letSessionGo, []);
   const reencrypt = useMutation({
     mutationFn: () => call(api.POST("/api/account/reencrypt", { body: { password } })),
     // The result carries the new recovery key: never in the client-wide mutation cache.
     gcTime: 0,
+    onMutate: () => {
+      letSessionGo();
+      sessionKept.current = keepSessionThroughWipe();
+    },
+    onError: letSessionGo,
     onSuccess: (view) => {
       setPassword("");
       setDone(false);
       setRecoveryKey(view.recoveryKey);
       void Promise.all(["vaults", "keys", "connections", "dav-shares"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      // Every slot went: the copy here learns it now, while online, rather than at its next contact.
+      void contact();
     },
   });
 
@@ -259,6 +275,7 @@ function ReencryptSection() {
             reencrypt.reset();
             setRecoveryKey(null);
             setDone(true);
+            letSessionGo();
           }}
         />
       ) : (
@@ -297,7 +314,7 @@ function SessionsSection() {
       <p className="text-text-body">Signs you out everywhere else, such as a browser you forgot to sign out of. This one stays.</p>
       {endOthers.isError && <FormError>{errorText(endOthers.error)}</FormError>}
       {endOthers.isSuccess && (
-        <Done>Every other session has ended. Offline copies with changes waiting stay until you remove them in Settings, Offline.</Done>
+        <Done>Every other session has ended. Every other device's offline copy stays until you remove it in Settings, Offline.</Done>
       )}
       <button type="button" disabled={endOthers.isPending} onClick={() => endOthers.mutate()} className={secondaryButtonClass}>
         Sign out other sessions

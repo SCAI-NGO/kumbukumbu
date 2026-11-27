@@ -44,8 +44,8 @@ public sealed class MirrorSlotDocument
     [BsonElement("waiting")]
     public int? Waiting { get; set; } = 0;
 
-    /// <summary>The session (<see cref="Sessions.SubjectOf"/>) that made the slot or last contacted it: "end other
-    /// sessions" keeps only the slots of the session that asks.</summary>
+    /// <summary>The session (<see cref="Sessions.SubjectOf"/>) that made the slot or last contacted it: the device list
+    /// marks it as this browser's for that session.</summary>
     [BsonElement("session"), BsonIgnoreIfNull]
     public string? Session { get; set; }
 }
@@ -57,8 +57,8 @@ public sealed record MirrorSlot(string Id, string Label, DateTime CreatedAt, Dat
 /// The offline mirror's key slots (offline mode design §4.2, §4.4). One per browser: a random mirror key, made here and
 /// sealed under the user key and a random token the browser keeps in the clear, beside its sealed mirror. A signed-in tab
 /// hands in the token at every contact and gets the key back, so it unwraps its mirror without asking for the password.
-/// A slot ends with its removal from the device list, "end other sessions" (but the asking session's), a rotation of the
-/// user key, the user's deactivation and the account's deletion; a browser that then hands in its token is told to purge its whole mirror.
+/// A slot ends with its removal from the device list, a rotation of the user key, the user's deactivation and the
+/// account's deletion; a browser that then hands in its token is told to purge its whole mirror.
 /// </summary>
 public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
 {
@@ -169,24 +169,12 @@ public sealed class MirrorSlots(IMongoDatabase db, TimeProvider time)
         return (await Slots.UpdateOneAsync(m => m.Id == objectId && m.User == userId, update, cancellationToken: ct)).MatchedCount > 0;
     }
 
-    /// <summary>A slot whose last contact reported no change waiting: nothing but the copy goes with it.</summary>
-    public static bool Counted(int? waiting, DateTime? contactAt) => waiting == 0 && contactAt is not null;
-
-    /// <summary>Deletes the user's slot <paramref name="id"/> ("Remove offline copy"); false if the user has none of that id,
-    /// or, <paramref name="onlyCounted"/>, if it isn't <see cref="Counted"/> (any more).</summary>
-    public async Task<bool> DeleteAsync(string userId, string id, bool onlyCounted, CancellationToken ct)
+    /// <summary>Deletes the user's slot <paramref name="id"/> ("Remove offline copy"); false if the user has none of that id.</summary>
+    public async Task<bool> DeleteAsync(string userId, string id, CancellationToken ct)
     {
         if (!ObjectId.TryParse(id, out var objectId)) return false;
-        var deleted = onlyCounted
-            ? await Slots.DeleteOneAsync(m => m.Id == objectId && m.User == userId && m.Waiting == 0 && m.ContactAt != null, ct)
-            : await Slots.DeleteOneAsync(m => m.Id == objectId && m.User == userId, ct);
-        return deleted.DeletedCount > 0;
+        return (await Slots.DeleteOneAsync(m => m.Id == objectId && m.User == userId, ct)).DeletedCount > 0;
     }
-
-    /// <summary>"End other sessions": every slot of the user but those the asking session made or last contacted, and
-    /// those with changes waiting or none reported yet: they wait for a removal with the password.</summary>
-    public Task EndOthersAsync(string userId, string? sessionSubject, CancellationToken ct) =>
-        Slots.DeleteManyAsync(m => m.User == userId && m.Session != sessionSubject && m.Waiting == 0 && m.ContactAt != null, ct);
 
     /// <summary>Every slot of the user, inside the caller's transaction (a rotation of the user key, a deactivation, the account's deletion).</summary>
     internal static Task DeleteAllAsync(IMongoDatabase db, IClientSessionHandle session, string userId, CancellationToken ct) =>

@@ -52,9 +52,9 @@ public static class FileApi
     public static void MapFileApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapGet("/files/{vault}/{**path}", ReadAsync).ProducesFile().Errors(400, 401, 404, 503);
-        api.MapPut("/files/{vault}/{**path}", WriteAsync).TakesFileBody().Errors(400, 401, 403, 404, 413, 503, 507);
-        api.MapDelete("/files/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapGet("/files/{vault}/{**path}", ReadAsync).AddEndpointFilter(SyncApi.VaultIdFilter).ProducesFile().Errors(400, 401, 404, 409, 503);
+        api.MapPut("/files/{vault}/{**path}", WriteAsync).AddEndpointFilter(SyncApi.VaultIdFilter).TakesFileBody().Errors(400, 401, 403, 404, 413, 503, 507);
+        api.MapDelete("/files/{vault}/{**path}", DeleteAsync).AddEndpointFilter(SyncApi.VaultIdFilter).Errors(400, 401, 403, 404, 409, 503);
     }
 
     /// <summary>The body of a route that stores it with <see cref="StoreAsync"/>: the size limit, and the file's bytes in

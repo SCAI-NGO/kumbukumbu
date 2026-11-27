@@ -2,7 +2,9 @@
 // The app shell's kept files, checked before they are served. Any page of the origin can write the worker's cache
 // (CacheStorage is the origin's, not the worker's), so a file kept there is served only while its bytes are the ones
 // the build listed; the list lives in the worker's own script, which the browser keeps and compares with the
-// server's, out of any page's reach.
+// server's, out of any page's reach. The worker answers with those bytes and headers of its own, never with the
+// response it found in the cache.
+import { appPolicy, isKdfWorker, kdfWorkerPolicy } from "./policy";
 
 /** SHA-256 of `bytes`, in hex, as the build writes it into the worker (vite.config.ts). */
 export async function sha256(bytes: BufferSource): Promise<string> {
@@ -17,26 +19,67 @@ export interface Kept {
   delete(path: string): Promise<boolean>;
 }
 
-const isBuilds = async (response: Response, expected: string) =>
-  response.status === 200 && (await sha256(await response.clone().arrayBuffer())) === expected;
+/** A file as the build lists it (vite.config.ts): its SHA-256 and the content type the server gives it. */
+export interface Listed {
+  sha256: string;
+  type: string;
+}
+
+const isBuilds = async (status: number, bytes: ArrayBuffer, file: Listed) => status === 200 && (await sha256(bytes)) === file.sha256;
+
+/**
+ * The worker's own answer for `path`: the checked bytes, with the headers the server gives a file of the app
+ * (Api/Security.cs), never those of the answer they came in. A new response has no URL, so the request's is the
+ * base its relative imports resolve against.
+ */
+function answer(path: string, bytes: ArrayBuffer, file: Listed): Response {
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      "Content-Type": file.type,
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "same-origin",
+      "Content-Security-Policy": isKdfWorker(path) ? kdfWorkerPolicy : appPolicy,
+    },
+  });
+}
 
 /** The kept answer for `path` if it is the build's; one that isn't is deleted, so nothing serves it again. */
-async function checked(cache: Kept, path: string, expected: string): Promise<Response | undefined> {
+async function checked(cache: Kept, path: string, file: Listed): Promise<Response | undefined> {
   const kept = await cache.match(path);
   if (kept === undefined) return undefined;
-  if (await isBuilds(kept, expected)) return kept;
+  const bytes = await kept.arrayBuffer();
+  if (await isBuilds(kept.status, bytes, file)) return answer(path, bytes, file);
   await cache.delete(path);
   return undefined;
 }
 
-/** A file of the build: kept, if it is the build's; else the network's, which is kept again when it is. */
-export async function asset(cache: Kept, path: string, expected: string, fetchIt: () => Promise<Response>): Promise<Response> {
-  const kept = await checked(cache, path, expected);
+/**
+ * A file of the build: kept, if it is the build's; else the network's, which is kept again when it is. Without a
+ * network, the error response a failed fetch is, so the browser gets an answer and nothing is left uncaught.
+ */
+export async function asset(cache: Kept, path: string, file: Listed, fetchIt: () => Promise<Response>): Promise<Response> {
+  const kept = await checked(cache, path, file);
   if (kept !== undefined) return kept;
-  const fresh = await fetchIt();
-  if (await isBuilds(fresh, expected)) await cache.put(path, fresh.clone());
-  return fresh;
+  const fresh = await fetchIt().catch(() => Response.error());
+  const bytes = await fresh.clone().arrayBuffer();
+  if (!(await isBuilds(fresh.status, bytes, file))) return fresh;
+  await cache.put(path, answer(path, bytes, file));
+  return answer(path, bytes, file);
 }
 
 /** The kept app page, for a start without a network, if it is the build's. */
-export const keptPage = (cache: Kept, expected: string): Promise<Response | undefined> => checked(cache, "/index.html", expected);
+export const keptPage = (cache: Kept, file: Listed): Promise<Response | undefined> => checked(cache, "/index.html", file);
+
+/**
+ * A page of the app: the server's whenever it answers, an error page included, so an online reload is always the
+ * server's build; the kept one only when there is no network at all, and only if it is the build's; else the error
+ * response a failed fetch is.
+ */
+export async function page(cache: Kept, file: Listed, fetchIt: () => Promise<Response>): Promise<Response> {
+  try {
+    return await fetchIt();
+  } catch {
+    return (await keptPage(cache, file)) ?? Response.error();
+  }
+}

@@ -4,5 +4,5 @@
     "lib": ["ES2023", "WebWorker"],
     "types": []
   },
-  "include": ["worker.ts", "shell.ts", "kept.ts"]
+  "include": ["worker.ts", "shell.ts", "kept.ts", "policy.ts"]
 }

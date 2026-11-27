@@ -6,11 +6,12 @@ import { afterEach, describe, expect, test } from "vitest";
 import { useOfflineCopy } from "./copy";
 import { useKeepOffline } from "./keepOffline";
 
-/** A copy that is open, with a choice kept in memory. */
-function open(choice: Partial<OfflineChoice> = {}) {
+/** A copy that is open and holds the vaults `held`, with a choice kept in memory. */
+function open(choice: Partial<OfflineChoice> = {}, held = ["v", "w"]) {
   const mirror = {
     locked: false,
     choice: { ...DEFAULT_CHOICE, ...choice },
+    vault: (id: string) => (held.includes(id) ? {} : undefined),
     async choose(change: (c: OfflineChoice) => OfflineChoice) {
       mirror.choice = change(mirror.choice);
       return mirror.choice;
@@ -28,6 +29,18 @@ describe("Keep offline in the tree's menus", () => {
     open({ all: false, vaults: ["w"] });
     expect(renderHook(() => useKeepOffline("v")).result.current("Scans")).toEqual([]);
     expect(renderHook(() => useKeepOffline("w")).result.current("Scans").map((i) => i.label)).toEqual(["Keep offline"]);
+  });
+
+  test("offers no Keep offline in a vault the copy doesn't hold", () => {
+    open({}, ["w"]);
+    expect(renderHook(() => useKeepOffline("v")).result.current("Scans")).toEqual([]);
+    expect(renderHook(() => useKeepOffline("v")).result.current("")).toEqual([]);
+  });
+
+  test("still offers it in a held vault", () => {
+    open({}, ["w"]);
+    expect(renderHook(() => useKeepOffline("w")).result.current("Scans").map((i) => i.label)).toEqual(["Keep offline"]);
+    expect(renderHook(() => useKeepOffline("w")).result.current("").map((i) => i.label)).toEqual(["Keep offline"]);
   });
 
   test("keeps a folder, then offers to stop; a folder inside one kept is kept already", async () => {

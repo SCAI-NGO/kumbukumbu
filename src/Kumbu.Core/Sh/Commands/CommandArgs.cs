@@ -137,10 +137,11 @@ internal static class CommandArgs
 
     /// <summary>
     /// The text a filter works on: the piped input, or the one note named by its operands when it starts
-    /// the pipeline. A path behind a pipe is an error rather than silently winning over the input.
+    /// the pipeline. A path behind a pipe is an error rather than silently winning over the input. With
+    /// <paramref name="marks"/>, a note another user wrote last carries the notice, as <c>cat</c>'s does.
     /// </summary>
     public static async Task<ShellResult> FilterInputAsync(
-        string command, INoteReader notes, IReadOnlyList<string> operands, string? input, CancellationToken ct, string? version = null)
+        string command, INoteReader notes, IReadOnlyList<string> operands, string? input, CancellationToken ct, string? version = null, WriterMarks? marks = null)
     {
         if (input is not null && version is not null)
         {
@@ -156,6 +157,8 @@ internal static class CommandArgs
 
         if (operands.Count == 0) return ShellResult.Error($"{command}: missing operand (give a path, or pipe into it)");
         if (operands.Count > 1) return ShellResult.Error($"{command}: too many arguments{QuoteHint}");
-        return await ReadAddressAsync(command, notes, operands[0], ct, version);
+        var read = await ReadAddressAsync(command, notes, operands[0], ct, version);
+        if (read.IsError || version is not null || marks is null || !VaultPath.TryParse(SectionAddress.Split(operands[0]).Path, out var path)) return read;
+        return read with { Notice = await marks.NoticeAsync([path], ct) };
     }
 }

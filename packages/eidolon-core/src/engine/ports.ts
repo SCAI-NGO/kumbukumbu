@@ -34,6 +34,17 @@ export class RejectedError extends Error {
 export class OfflineError extends Error {
   constructor(message: string, readonly retryAfterMs: number | null = null) { super(message); }
 }
+/**
+ * 409 `vault-changed`: the name asked by is another vault's now (renamed, or an alias moved), so nothing was read or
+ * written. Tried again as offline, after the host has read the vault list again.
+ */
+export class VaultChangedError extends OfflineError {}
+
+/**
+ * A note back after a trash met an edit: trashed here and edited elsewhere (Kumbu²'s edit came back here), or trashed
+ * elsewhere and edited here (made again in Kumbu² with this device's text). Nothing is lost either way; the person is told.
+ */
+export type CameBack = "trashed-here" | "trashed-elsewhere";
 
 /** `id`: stays when the vault is renamed, unlike its name, which is also per member (an alias). */
 export interface ListedVault { id?: string; name: string; canWrite: boolean; shared?: boolean; level?: string; discreet?: boolean; }

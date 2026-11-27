@@ -165,4 +165,39 @@ public class SuggestionServiceTests
         Assert.True(leftOut(c));
         Assert.False(leftOut(new Note(P("/Work/d.md"), "D\n")));
     }
+
+    [Fact]
+    public void A_not_related_entry_names_a_note_of_its_own_vault_only()
+    {
+        const string Entries = "---\nnot-related: [\"../Home/Mine\", \"Deep/../../Home/Mine\", \"[[../Home/Mine]]\", \"./b\", \"Deep/c\"]\n---\n";
+
+        Assert.Equal([P("/Work/Deep/c.md")], NotRelated.Of(P("/Work/a.md"), Entries));
+    }
+
+    [Theory]
+    [InlineData("/Work/Plan#Budget.md", "#")]
+    [InlineData("/Work/x]] and [[Plan.md", "]")]
+    [InlineData("/Work/Step^2.md", "^")]
+    public async Task Add_link_refuses_a_target_whose_name_holds_link_syntax_with_a_sentence(string target, string sign)
+    {
+        var store = new InMemoryNoteStore(("/Work/a.md", "A\n"), ("/Work/Plan.md", "Plan\n"), (target, "Target\n"));
+
+        var result = await Service(store).AddLinkAsync("/Work/a.md", target, Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal($"similar: {target} can't be linked: its name holds '{sign}', which a wiki link reads as its own; rename the note to link it", result.Output);
+        Assert.Equal("A\n", await Content(store, "/Work/a.md"));
+    }
+
+    [Fact]
+    public async Task Add_link_refuses_a_target_whose_name_no_writer_could_make()
+    {
+        var store = new InMemoryNoteStore(("/Work/a.md", "A\n"), ("/Work/a|b.md", "Target\n"));
+
+        var result = await Service(store).AddLinkAsync("/Work/a.md", "/Work/a|b.md", Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal("similar: 'a|b.md' contains '|', which Windows can't store", result.Output);
+        Assert.Equal("A\n", await Content(store, "/Work/a.md"));
+    }
 }

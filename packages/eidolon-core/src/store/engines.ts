@@ -4,7 +4,7 @@
 // attachments opened online kept after every change of either.
 import { SyncEngine } from "../engine/engine";
 import { SerialQueue } from "../engine/queue";
-import type { Clock, ListedVault, LocalFiles, RemoteApi, SyncStatus } from "../engine/ports";
+import type { CameBack, Clock, ListedVault, LocalFiles, RemoteApi, SyncStatus } from "../engine/ports";
 import { VaultHost, type MirrorEngine, type VaultRef } from "../host/vaults";
 import { evictions, forget, mirrors, wanted } from "./choice";
 import type { SealedMirror } from "./mirror";
@@ -14,8 +14,8 @@ export interface MirrorEnginesOptions {
   mirror: SealedMirror;
   /** The caller's vaults, `GET /api/vaults`. */
   listVaults(): Promise<ListedVault[]>;
-  /** The REST client for a vault, addressed by the caller's name for it. */
-  remote(vaultName: string): RemoteApi;
+  /** The REST client for a vault, addressed by the caller's name for it, which the server checks against the id. */
+  remote(vaultName: string, vaultId: string): RemoteApi;
   /** The device's name in conflict copies. */
   device: string;
   clock: Clock;
@@ -24,7 +24,8 @@ export interface MirrorEnginesOptions {
   /** A vault was taken into the copy, under the name the caller gives it now. */
   adopted?(vault: VaultRef): Promise<void>;
   onStatus?(vaultId: string, status: SyncStatus): void;
-  onConflict?(vaultId: string, original: string, copy: string): void;
+  /** A conflict copy made; with `came`, no copy: the note itself came back after a trash met an edit. */
+  onConflict?(vaultId: string, original: string, copy: string, came?: CameBack): void;
   onAuthLost?(): void;
 }
 
@@ -43,7 +44,11 @@ export class MirrorEngines {
       held: () => m.held().map((v) => v.id),
       mirrors: (vault) => mirrors(m.choice, vault.id),
       createEngine: (vault) => this.engineFor(vault),
-      onLeft: (id) => void m.purge(id),
+      // Unlocked offline, the vault list may be another session's (the cookie is the browser's, not the copy's): a vault
+      // it leaves out goes only once a contact of this copy has gone through, which is the copy's own word.
+      onLeft: (id, because) => {
+        if (because === "discreet" || m.contacted) void m.purge(id);
+      },
     });
     // The host may listen too (the mode counts the changes waiting): both hear it.
     const heard = m.onChanged;
@@ -74,16 +79,31 @@ export class MirrorEngines {
   }
 
   /**
-   * Brings the engines in line with the vault list and the device's choice: on start, every reconnect, and each
-   * change of the choice (`recheck`: the engines look at every path again, as the fetch policy may say yes now). A
-   * vault no longer chosen is dropped from the copy (Settings has said what that loses).
+   * Brings the engines in line with the vault list and the device's choice: on start, every reconnect, a name the
+   * server took for another vault, and each change of the choice (`recheck`: the engines look at every path again, as
+   * the fetch policy may say yes now). A vault no longer chosen is dropped from the copy (Settings has said what that
+   * loses).
    */
   async refresh(recheck = false): Promise<void> {
+    await this.align(recheck, false);
+  }
+
+  /**
+   * The network is back: as refresh, and the engines that ran before send what waits now rather than at their next
+   * retry, which a run of failures puts minutes away. Only here: an engine that failed for another reason keeps its
+   * backoff.
+   */
+  async reconnected(): Promise<void> {
+    await this.align(false, true);
+  }
+
+  private async align(recheck: boolean, wake: boolean): Promise<void> {
     if (!this.leading || this.stopped || this.o.mirror.locked) return;
+    const running = new Set(this.engines.values());
     await this.host.refresh();
     const m = this.o.mirror;
     for (const vault of m.held()) if (!mirrors(m.choice, vault.id)) await m.purge(vault.id, false);
-    if (recheck) await Promise.all([...this.engines.values()].map((e) => e.check(true)));
+    await Promise.all([...this.engines.values()].filter((e) => recheck || (wake && running.has(e))).map((e) => e.check(recheck)));
     await this.keepBudget();
   }
 
@@ -158,11 +178,14 @@ export class MirrorEngines {
         }
         await o.adopted?.(ref);
         const sync: SyncEngine = new SyncEngine({
-          vault: ref.name, device: o.device, local: o.files?.(vault) ?? vault.files(), remote: vault.inventory(o.remote(ref.name)),
+          vault: ref.name, device: o.device, local: o.files?.(vault) ?? vault.files(), remote: vault.inventory(o.remote(ref.name, ref.id)),
           state: vault.stateStore(), clock: o.clock,
           onStatus: (s) => o.onStatus?.(ref.id, s),
           onConflict: (original, copy) => o.onConflict?.(ref.id, original, copy),
+          onCameBack: (path, came) => o.onConflict?.(ref.id, path, path, came),
           onAuthLost: () => o.onAuthLost?.(),
+          // A failed list changes nothing: the engine's own retry comes, and so does the next refresh.
+          onVaultChanged: () => void this.refresh().catch(() => {}),
           fetchPolicy: vault.downloadOrder(() => void sync.check(true), (path) => wanted(o.mirror.choice, vault, path)),
         });
         engine = sync;

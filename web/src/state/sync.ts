@@ -11,6 +11,8 @@ interface SyncState {
   editors: Record<string, string[]>;
   /** Sends a frame on the open socket; false without one. */
   send(frame: unknown): boolean;
+  /** Closes the socket at once, as a lost network does: for a loss the browser doesn't report (the heartbeat's). */
+  drop(): void;
 }
 
-export const useSyncStatus = create<SyncState>(() => ({ connected: false, editors: {}, send: () => false }));
+export const useSyncStatus = create<SyncState>(() => ({ connected: false, editors: {}, send: () => false, drop: () => {} }));

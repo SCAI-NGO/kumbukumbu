@@ -12,7 +12,8 @@ namespace Kumbu.Server.Publishing;
 /// <summary><c>sh publish</c> for the request's caller (publish spec §3.9), over <see cref="Publications"/>, which
 /// makes every check. Paths are in the caller's view.</summary>
 internal sealed class ShellPublisher(
-    Publications publications, RequestCaller caller, EncryptedNoteStore store, IHttpContextAccessor http, IOptions<KumbuOptions> options) : IPublisher
+    Publications publications, RequestCaller caller, EncryptedNoteStore store, IHttpContextAccessor http, IOptions<KumbuOptions> options,
+    Api.HeavyCallGate gate) : IPublisher
 {
     public async Task<IReadOnlyList<PublicationLine>> ListAsync(VaultPath under, CancellationToken ct)
     {
@@ -33,6 +34,7 @@ internal sealed class ShellPublisher(
     public async Task<PublishOutcome> AddAsync(VaultPath note, PublishWalk options, CancellationToken ct)
     {
         var access = await AccessAsync(note, ct);
+        using var place = await PlaceAsync(ct);
         if (options.DryRun)
         {
             var preview = await publications.PreviewAsync(access, store, note, options.Depth ?? 0, options.Without ?? [], ct);
@@ -51,9 +53,15 @@ internal sealed class ShellPublisher(
     {
         var access = await AccessAsync(note, ct);
         var (by, byRef) = Writer(access);
+        using var place = await PlaceAsync(ct);
         var updated = await publications.UpdateAsync(access, store, note, by, byRef, BaseUrl, ct, options.Depth, options.Without);
         return Outcome(null, updated);
     }
+
+    /// <summary>A place of the caller's account at the gate of the calls that cost seconds of CPU, or busy.</summary>
+    private async Task<IDisposable> PlaceAsync(CancellationToken ct) =>
+        await gate.TryStartAsync(caller.User?.Id ?? "", ct)
+        ?? throw new PublishRefusedException("the server is busy; try again in a moment", ShellErrorKind.Unavailable);
 
     public async Task WithdrawAsync(VaultPath note, CancellationToken ct)
     {

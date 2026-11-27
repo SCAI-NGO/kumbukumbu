@@ -300,12 +300,23 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         await RefreshAsync(c => vaultIds.Any(c.Has), ct);
     }
 
-    /// <summary>A mirror slot of the user was removed: every socket of her sessions is told <see cref="MirrorFrame"/>, so the
-    /// browser whose copy it was purges it at once.</summary>
+    /// <summary>A mirror slot of the user was removed (or all of them, by a re-encryption or a recovery): every socket of
+    /// her sessions is told <see cref="MirrorFrame"/>, so the browser whose copy it was purges it at once.</summary>
     public async Task MirrorChangedAsync(string userId, CancellationToken ct)
     {
         if (BeforeAccessChange is { } before) await before();
         foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.Kind == SubjectKind.Session && c.Grant.Subject.User == userId))
+        {
+            connection.Notify(MirrorFrame);
+        }
+    }
+
+    /// <summary>The vault <paramref name="vaultId"/> was re-keyed, so its tag changed: every session socket holding it,
+    /// the owner's and the members', is told <see cref="MirrorFrame"/>, so each copy brings that vault in line at once.</summary>
+    public async Task VaultRekeyedAsync(string vaultId, CancellationToken ct)
+    {
+        if (BeforeAccessChange is { } before) await before();
+        foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.Kind == SubjectKind.Session && c.Has(vaultId)))
         {
             connection.Notify(MirrorFrame);
         }

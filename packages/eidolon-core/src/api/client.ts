@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Kumbu² REST API over an injected HTTP function: requestUrl in Obsidian, fetch in Node.
 import {
-  AuthError, OfflineError, RejectedError,
+  AuthError, OfflineError, RejectedError, VaultChangedError,
   type DeleteResult, type FileDeleteResult, type FilePutResult, type ListedVault, type MoveResult, type PutResult, type RemoteApi,
   type RemoteEntry, type RemoteFile, type RemoteNote, type Version, type VersionsAnswer,
 } from "../engine/ports";
@@ -26,8 +26,15 @@ export class KumbuApi implements RemoteApi {
   /** What the last versions answer said, for a 304, which says nothing; null until one has come. */
   private attachments: boolean | null = null;
 
-  /** `key`: a device's API key; null for a browser session, whose cookie the host's HTTP function sends. */
-  constructor(private readonly http: HttpFn, server: string, private readonly vault: string, private readonly key: string | null) {
+  /**
+   * `key`: a device's API key; null for a browser session, whose cookie the host's HTTP function sends. `vaultId`: sent
+   * with every request, so that the server refuses one whose name is another vault's by now; a key's device holds one
+   * vault and sends none.
+   */
+  constructor(
+    private readonly http: HttpFn, server: string, private readonly vault: string, private readonly key: string | null,
+    private readonly vaultId: string | null = null,
+  ) {
     this.server = trimServer(server);
   }
 
@@ -197,17 +204,29 @@ export class KumbuApi implements RemoteApi {
 
   private send(method: string, path: string, body?: unknown, extra: Record<string, string> = {}): Promise<HttpResponse> {
     const headers: Record<string, string> = { ...this.authorization(), ...extra };
-    return call(this.http, { method, url: this.server + path, headers }, body);
+    return this.checked(call(this.http, { method, url: this.server + path, headers }, body));
   }
 
   /** The body as it is: the server reads the format from the bytes and ignores the Content-Type. */
   private sendBytes(method: string, path: string, bytes: ArrayBuffer): Promise<HttpResponse> {
     const headers = { ...this.authorization(), "Content-Type": "application/octet-stream" };
-    return call(this.http, { method, url: this.server + path, headers, body: bytes });
+    return this.checked(call(this.http, { method, url: this.server + path, headers, body: bytes }));
   }
 
   private authorization(): Record<string, string> {
-    return this.key === null ? {} : { Authorization: `Bearer ${this.key}` };
+    return {
+      ...(this.key === null ? {} : { Authorization: `Bearer ${this.key}` }),
+      ...(this.vaultId === null ? {} : { "Kumbu-Vault-Id": this.vaultId }),
+    };
+  }
+
+  /** Before any other reading of the answer: a 409 for another vault is no conflict, and nothing may follow it. */
+  private async checked(response: Promise<HttpResponse>): Promise<HttpResponse> {
+    const r = await response;
+    if (r.status === 409 && errorField(r, "code") === "vault-changed") {
+      throw new VaultChangedError(errorOf(r) ?? `${this.vault} is another vault now.`);
+    }
+    return r;
   }
 }
 

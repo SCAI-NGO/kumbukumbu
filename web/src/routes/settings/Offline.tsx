@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Settings, Offline (offline mode design §3a): the copy on this device, which vaults it keeps, the attachments and
 // their budget, what is kept offline whole, the browser's storage, and the devices with a copy.
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { attachmentKind, isMarker } from "eidolon-core/engine/paths";
 import { attachmentsUsed, BUDGETS, mirrors } from "eidolon-core/store/choice";
 import type { SealedMirror } from "eidolon-core/store/mirror";
@@ -15,7 +15,7 @@ import { FormError, inputClass, secondaryButtonClass } from "../../components/fo
 import { useOfflineCopy } from "../../offline/copy";
 import { chooseOffline } from "../../offline/engines";
 import { storageUse } from "../../offline/ports";
-import { openCopy } from "../../offline/mode";
+import { NEEDS_CONNECTION, openCopy, switchCutShort, useOffline } from "../../offline/mode";
 import { turnOff, turnOn } from "../../offline/turnOn";
 import { useSession } from "../../state/session";
 import { isStandalone } from "../../update/InstallHint";
@@ -66,6 +66,15 @@ function KeepSection({ mirror }: { mirror: SealedMirror | null }) {
   const header = useOfflineCopy((s) => s.header);
   const [asking, setAsking] = useState<"on" | "off" | null>(null);
   const on = header !== null;
+  const [cutShort, setCutShort] = useState(false);
+  useEffect(() => {
+    if (user === null || on) return setCutShort(false);
+    let live = true;
+    void switchCutShort(user.id).then((cut) => live && setCutShort(cut));
+    return () => {
+      live = false;
+    };
+  }, [user, on]);
   return (
     <Section title="Offline">
       <label className="flex min-h-11 items-center gap-3 text-text">
@@ -84,19 +93,27 @@ function KeepSection({ mirror }: { mirror: SealedMirror | null }) {
         it.
       </p>
       {header && !mirror && <p className="text-muted">The copy on this device opens when you sign in.</p>}
+      {cutShort && <p className="text-muted">Keeping your notes on this device didn't finish. Turn it on again.</p>}
       {asking === "on" && user && <TurnOnDialog user={user} onClose={() => setAsking(null)} />}
       {asking === "off" && header && <RemoveCopyDialog waiting={mirror?.waiting() ?? null} onClose={() => setAsking(null)} />}
     </Section>
   );
 }
 
+const UNCOUNTED = "Changes that haven't uploaded go with the copy.";
+
 function RemoveSection({ mirror }: { mirror: SealedMirror | null }) {
   const [asking, setAsking] = useState(false);
-  const waiting = mirror?.waiting() ?? 0;
+  // Locked, the copy's count can't be read: it may hold changes, and says so rather than none.
+  const waiting = mirror?.waiting() ?? null;
   return (
     <Section title="Remove the copy from this device">
       <p className="text-text-body">
-        {waiting > 0 ? `${changes(waiting)} haven't uploaded yet: they go with the copy.` : "Everything on this device is uploaded."}
+        {waiting === null
+          ? UNCOUNTED
+          : waiting > 0
+            ? `${changes(waiting)} haven't uploaded yet: they go with the copy.`
+            : "Everything on this device is uploaded."}
       </p>
       <button type="button" onClick={() => setAsking(true)} className={`${secondaryButtonClass} self-start`}>
         Remove the copy
@@ -108,7 +125,15 @@ function RemoveSection({ mirror }: { mirror: SealedMirror | null }) {
 
 function TurnOnDialog({ user, onClose }: { user: { id: string; username: string }; onClose(): void }) {
   const [password, setPassword] = useState("");
-  const on = useMutation({ mutationFn: () => turnOn(user, password), onSuccess: onClose });
+  const queryClient = useQueryClient();
+  const on = useMutation({
+    mutationFn: () => turnOn(user, password),
+    // The list was read before this device had a copy: read again, it names this one too.
+    onSuccess: () => {
+      onClose();
+      return queryClient.invalidateQueries({ queryKey: ["offline-devices"] });
+    },
+  });
   return (
     <ConfirmTyped
       title="Keep your notes on this device"
@@ -127,7 +152,7 @@ function TurnOnDialog({ user, onClose }: { user: { id: string; username: string 
 function RemoveCopyDialog({ waiting, onClose }: { waiting: number | null; onClose(): void }) {
   const header = useOfflineCopy((s) => s.header);
   const off = useMutation({ mutationFn: () => turnOff(header!), onSuccess: onClose });
-  const lost = waiting !== null && waiting > 0 ? `${changes(waiting)} haven't uploaded yet and will be lost. ` : "";
+  const lost = waiting === null ? "The locked copy's changes can't be counted; any that haven't uploaded will be lost. " : waiting > 0 ? `${changes(waiting)} haven't uploaded yet and will be lost. ` : "";
   return (
     <Confirm
       title="Remove the copy from this device?"
@@ -159,6 +184,9 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
   // Never a discreet vault, shown or not (§4.3); nor one still being set up.
   const listed = vaults.data?.filter((v) => !v.discreet && !v.pending) ?? [];
   const chosen = useChoose(mirror);
+  // What this device keeps is the server's word: offline, the choice waits for a connection.
+  const offline = useOffline();
+  const reach = offline ? { disabled: true, title: NEEDS_CONNECTION } : {};
   const choose = (change: Parameters<typeof chooseOffline>[1]) => chosen(change).catch((e: unknown) => setError(failureText(e)));
   const set = (vault: VaultView, keep: boolean) => {
     const waiting = mirror.vault(vault.id)?.waiting() ?? 0;
@@ -176,16 +204,19 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
         <input
           type="checkbox"
           checked={choice.all}
+          {...reach}
           // Off, the vaults kept now stay chosen one by one: nothing goes until a vault is unticked.
           onChange={(e) => {
             const all = e.target.checked;
             void choose((c) => ({ ...c, all, vaults: all ? [] : listed.map((v) => v.id) }));
           }}
-          className="size-5 shrink-0 accent-accent"
+          className="size-5 shrink-0 accent-accent disabled:opacity-40"
         />
       </label>
+      {offline && <p className="text-sm text-muted">{NEEDS_CONNECTION}</p>}
       <p className="text-sm text-muted">New vaults, and vaults shared with you later, follow All my vaults.</p>
-      {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
+      {/* Offline, and while coming back, the bar is the one word on the connection: the list's read failing then is no news. */}
+      {vaults.isError && !offline && <FormError>{errorText(vaults.error)}</FormError>}
       <ul aria-label="Vaults on this device" className="flex flex-col gap-1">
         {listed.map((vault) => (
           <li key={vault.id}>
@@ -199,7 +230,8 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
                 aria-label={`Keep ${vault.name} on this device`}
                 checked={mirrors(choice, vault.id)}
                 onChange={(e) => set(vault, e.target.checked)}
-                className="size-5 shrink-0 accent-accent"
+                {...reach}
+                className="size-5 shrink-0 accent-accent disabled:opacity-40"
               />
             </label>
           </li>
@@ -225,6 +257,7 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
   const id = useId();
   const choice = mirror.choice;
   const choose = useChoose(mirror);
+  const offline = useOffline();
   return (
     <Section title="Attachments">
       <p className="text-text-body">
@@ -239,6 +272,8 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
         <select
           id={id}
           value={choice.budget}
+          disabled={offline}
+          title={offline ? NEEDS_CONNECTION : undefined}
           onChange={(e) => {
             // Read now: the change runs later, once the copy's lock is held.
             const budget = Number(e.target.value);
@@ -252,6 +287,7 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
             </option>
           ))}
         </select>
+        {offline && <p className="text-sm text-muted">{NEEDS_CONNECTION}</p>}
       </div>
     </Section>
   );
@@ -260,8 +296,12 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
 function KeptSection({ mirror }: { mirror: SealedMirror }) {
   const vaults = useVaults();
   const choose = useChoose(mirror);
-  const kept = Object.entries(mirror.choice.kept).flatMap(([vault, folders]) => folders.map((folder) => ({ vault, folder })));
-  const name = (id: string) => vaults.data?.find((v) => v.id === id)?.name ?? "A vault";
+  // Only the vaults the session lists: no line hints at one it doesn't show.
+  const names = new Map(vaults.data?.map((v) => [v.id, v.name]));
+  const kept = Object.entries(mirror.choice.kept)
+    .filter(([vault]) => names.has(vault))
+    .flatMap(([vault, folders]) => folders.map((folder) => ({ vault, folder })));
+  const name = (id: string) => names.get(id)!;
   return (
     <Section title="Kept offline">
       <p className="text-text-body">Every attachment in these folders stays on this device, whatever its size. Choose Keep offline in a folder's or vault's menu.</p>

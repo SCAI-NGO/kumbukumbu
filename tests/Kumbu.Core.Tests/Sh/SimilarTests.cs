@@ -19,6 +19,9 @@ public class SimilarTests
     {
         public bool Off { get; init; }
 
+        /// <summary>Run once the vectors below a vault or folder are read: before the candidates are ranked.</summary>
+        public Action? ScopeRead { get; init; }
+
         public Task<SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct) => throw new NotSupportedException();
 
         public async Task<StoredVectors> VectorsAsync(VaultPath scope, CancellationToken ct)
@@ -38,6 +41,7 @@ public class SimilarTests
                 chunks.AddRange(embedded);
             }
 
+            if (!scope.IsNote) ScopeRead?.Invoke();
             return new StoredVectors(SemanticState.Ready, chunks, pending);
         }
 
@@ -97,6 +101,69 @@ public class SimilarTests
             Hits(result));
         Assert.Contains("   viscosity of blood\n", result.Output);
         Assert.EndsWith("(by the stored embeddings, nothing sent to an embedding provider; distance counts links either way; cat \"path#Section\" reads one)", result.Output);
+    }
+
+    [Fact]
+    public async Task Ends_when_its_token_is_cancelled_while_it_ranks()
+    {
+        var store = Store();
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var caller = new FixedCaller(Writers.Dev);
+        using var left = new CancellationTokenSource();
+        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), search: new FakeIndex(store, Words) { ScopeRead = left.Cancel });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => shell.RunAsync("similar /R/Fish.md", left.Token));
+    }
+
+    [Fact]
+    public async Task Answers_busy_when_ranking_runs_out_of_time()
+    {
+        var store = Store();
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var caller = new FixedCaller(Writers.Dev);
+        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller),
+            search: new FakeIndex(store, Words) { ScopeRead = () => time.Advance(HeavyCall.TimeLimit) });
+
+        var result = await shell.RunAsync("similar /R/Fish.md", TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsError);
+        Assert.Equal("similar: the server is busy comparing notes; try again in a moment", result.Output);
+    }
+
+    private sealed class NoPlace : IHeavyCalls
+    {
+        public Task<IDisposable?> TryStartAsync(CancellationToken ct) => Task.FromResult<IDisposable?>(null);
+    }
+
+    [Fact]
+    public async Task Answers_busy_when_it_finds_no_place()
+    {
+        var store = Store();
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var caller = new FixedCaller(Writers.Dev);
+        var shell = new Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller), search: new FakeIndex(store, Words), heavy: new NoPlace());
+
+        var result = await shell.RunAsync("similar /R/Fish.md", TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsError);
+        Assert.Equal("similar: the server is busy comparing notes; try again in a moment", result.Output);
+    }
+
+    /// <summary>A note of <paramref name="count"/> sections of one word each, then one of <paramref name="last"/>.</summary>
+    private static string Sections(string word, int count, string last) =>
+        string.Concat(Enumerable.Range(0, count).Select(i => $"## Part {i}\n\n{string.Join(' ', Enumerable.Repeat(word, 80))}\n\n")) + $"## Last\n\n{last}\n";
+
+    [Fact]
+    public async Task A_note_over_the_chunk_cap_is_compared_by_its_first_chunks()
+    {
+        var store = Store(("/W/Long.md", Sections("island", SimilarSearch.MaxChunks, "far away")));
+
+        var asSource = Hits(await Run("similar /W/Long.md /R", store));
+        var asCandidate = Hits(await Run("similar /R/Far.md /W", store));
+
+        // Its last section, past the cap, would match Far exactly.
+        Assert.Contains("score 0.00", Assert.Single(asSource, h => h.Contains("/R/Far.md")));
+        Assert.Contains("score 0.00", Assert.Single(asCandidate, h => h.Contains("/W/Long.md")));
     }
 
     [Fact]
@@ -306,5 +373,20 @@ public class SimilarTests
         Assert.Contains("/R/Island.md", without);
         Assert.Contains("/R/Far.md", without);
         Assert.DoesNotContain("/R/Finding.md", without);
+    }
+
+    [Fact]
+    public async Task Similar_marks_a_note_another_user_wrote_last()
+    {
+        // As Bob in Alice's shared Garten: Carol wrote plan.md last, Alice's agent beet.md, Bob own.md.
+        var store = SharedVaults.SharedGarten(asMember: true);
+        var words = new Dictionary<string, float[]> { ["jäten"] = [1, 0, 0], ["planen"] = [0.9f, 0.43589f, 0], ["gießen"] = [0.8f, 0.6f, 0] };
+        var bob = SharedVaults.AsBob(store, new FakeIndex(store, words));
+
+        var result = await bob.RunAsync("similar /Garten/own.md", CancellationToken.None);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.StartsWith($"[{WriterMarks.Mark}: /Garten/plan.md, /Garten/beet.md]\nsimilar to /Garten/own.md", result.Output);
+        Assert.Contains("   Beete planen\n", result.Output);
     }
 }

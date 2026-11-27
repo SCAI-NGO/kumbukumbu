@@ -9,7 +9,7 @@ import { PasswordField } from "../../components/PasswordField";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
 import { useDialog } from "../../hooks/useDialog";
 import { ago } from "../../note/AgentBanner";
-import { listDeviceCopies, needsPassword, PasswordNeededError, removeDeviceCopy, renameDeviceCopy, type DeviceCopy } from "../../offline/slots";
+import { listDeviceCopies, needsPassword, removeDeviceCopy, renameDeviceCopy, type DeviceCopy } from "../../offline/slots";
 
 /** The store's and the slots' errors are the core's, not HttpError: their sentences are shown as errorText shows the API's. */
 export function failureText(e: unknown): string {
@@ -28,12 +28,9 @@ export function DeviceCopies(props: { othersOnly?: boolean }) {
   const [removing, setRemoving] = useState<DeviceCopy | null>(null);
   const [renaming, setRenaming] = useState<DeviceCopy | null>(null);
   const [password, setPassword] = useState("");
-  // The server can ask too: the device reported changes after the list was read.
-  const [asked, setAsked] = useState(false);
   const close = () => {
     setRemoving(null);
     setPassword("");
-    setAsked(false);
     remove.reset();
   };
   const remove = useMutation({
@@ -42,12 +39,9 @@ export function DeviceCopies(props: { othersOnly?: boolean }) {
       close();
       await queryClient.invalidateQueries({ queryKey: ["offline-devices"] });
     },
-    onError: (e) => {
-      if (e instanceof PasswordNeededError) setAsked(true);
-    },
   });
   const shown = devices.data?.filter((d) => !props.othersOnly || !d.current);
-  const withPassword = removing !== null && (needsPassword(removing) || asked);
+  const withPassword = removing !== null && needsPassword(removing);
   return (
     <>
       {devices.isError && <p className="text-muted">The list needs a connection.</p>}
@@ -162,7 +156,9 @@ function RenameDialog({ device, onClose, onRenamed }: { device: DeviceCopy; onCl
 function removalText(d: DeviceCopy): string {
   const lost = d.waiting !== null && d.waiting > 0
     ? `${changes(d.waiting)} on that device haven't uploaded and will be lost. `
-    : d.waiting === null || d.contactAt === null ? "That device hasn't said yet whether it has changes waiting; any it has will be lost. " : "";
+    : d.waiting === null || d.contactAt === null
+      ? "That device hasn't said yet whether it has changes waiting; any it has will be lost. "
+      : "Nothing was waiting at its last contact; any changes it has made since will be lost. ";
   return `${lost}The copy goes when that device next comes online.${needsPassword(d) ? " Enter your password to remove it." : ""}`;
 }
 

@@ -9,7 +9,8 @@
 //    the password, the tree and the notes read from it and a link leads to its note (§3a "Unlocking", §4.8)
 //    → "offline: after a reload offline the password opens the copy …".
 // 2. Offline, an edit, a new note and a trashed note go into the copy, the bar counts them, and they upload once back,
-//    with "All changes uploaded" (§3, §4.9) → "offline: an edit, a new note and a trashed note upload when back …".
+//    with "All changes uploaded" (§3, §4.9) → "offline: an edit, a new note and a trashed note upload when back …",
+//    with the browser's events and with a quiet network as well.
 // 3. A note changed elsewhere meanwhile keeps both: the server's text, and this device's beside it as a conflict copy,
 //    with the bar's conflicts line (§3a "The bar and the mark") → "offline: a note changed elsewhere meanwhile …".
 // 4. An offline unlock ends like a session: idle, the copy locks, the editor's unsaved text goes into it first, and
@@ -20,13 +21,17 @@
 //    (§4.4) → "offline: removing this device's copy elsewhere wipes it here".
 // 7. Attachments: a small one comes with the notes; a large one opens online only, until it was opened online once
 //    (§6) → "offline: a large attachment opens offline once it was opened online".
+// 8. A network lost and back with no event at all and a socket that dies silently (as Chromium on Linux has real
+//    Wi-Fi) shows the bar within about 15 seconds without a click, and takes it away once back (the heartbeat)
+//    → "offline: a quiet network loss shows the bar …".
 // Each runs in Chromium (desktop) and Firefox (offline-firefox). Not in WebKit: it sends no Secure cookie to
 // http://localhost, so the plain-HTTP stack can't sign it in; Safari waits for a hand test on a real device.
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { crc32, deflateSync } from "node:zlib";
 import { dismissInstallHint, notePage } from "../calendar/helpers";
 import { secrets, usernames } from "../support/env";
+import { quietNetwork } from "../support/network";
 import { limitWindow, reservePassword } from "../support/session";
 import { expect, test } from "../support/test";
 
@@ -37,7 +42,8 @@ const bar = (page: Page) => page.getByRole("status", { name: "Offline" });
 const source = (page: Page) => page.getByRole("textbox", { name: "Markdown source", exact: true });
 const article = (page: Page) => page.locator("article");
 
-/** The mirror slots this test's devices made: removed after it, as an account keeps at most 20. */
+/** The mirror slots this test's devices made: removed after it, as an account keeps at most 20, with Alice's password
+ * where they are another session's. */
 let made: string[] = [];
 
 /** The slot ids of the copies in this browser's IndexedDB: their headers are its one record in the clear. */
@@ -59,7 +65,12 @@ function slotIds(page: Page): Promise<string[]> {
 }
 
 test.afterEach(async ({ aliceApi }) => {
-  for (const id of made) await aliceApi.send("DELETE", `/api/account/mirror-slots/${id}`);
+  for (const id of made) {
+    const deleted = await aliceApi.send("DELETE", `/api/account/mirror-slots/${id}`);
+    if (deleted.status() !== 400) continue;
+    await reservePassword("alice");
+    await aliceApi.send("POST", `/api/account/mirror-slots/${id}/remove`, { data: { password: secrets().passwords.alice } });
+  }
   made = [];
 });
 
@@ -109,6 +120,18 @@ async function goOffline(page: Page, waiting?: number) {
   if (waiting === undefined) await expect(bar(page)).toContainText("You're offline.");
 }
 
+/**
+ * The two ways a network goes: Playwright's (both events, `onLine` false), and as Chromium on Linux has real Wi-Fi,
+ * with no event and `onLine` still true, so only the app's own asking finds out. Set up before the page opens.
+ */
+const networks = {
+  "with the browser's events": async (page: Page) => ({
+    lose: () => page.context().setOffline(true),
+    restore: () => page.context().setOffline(false),
+  }),
+  quietly: (page: Page) => quietNetwork(page.context()),
+};
+
 /** The sign-in form offline: the username finds the copy, the password opens it. */
 async function unlock(page: Page, user: "alice" | "bob" = "alice") {
   await expect(page).toHaveURL(/\/signin/);
@@ -156,44 +179,73 @@ test("offline: after a reload offline the password opens the copy, the tree and 
   await expect(page).toHaveURL(/Harbour\.md$/);
 });
 
-test("offline: an edit, a new note and a trashed note upload when back, and the bar counts them @offline", async ({ page, aliceApi, folder }) => {
+for (const [way, network] of Object.entries(networks)) {
+  test(`offline: an edit, a new note and a trashed note upload when back, and the bar counts them, the network lost ${way} @offline`, async ({ page, aliceApi, folder }) => {
+    const plan = `/Work/${folder}/Plan.md`;
+    const old = `/Work/${folder}/Old.md`;
+    await aliceApi.putNote(plan, "# Plan\n\nBefore. [[Old]]\n");
+    await aliceApi.putNote(old, "# Old\n\nBye.\n");
+    test.setTimeout(120_000);
+    const net = await network(page);
+    await turnOn(page);
+    await page.goto(notePage(plan));
+    await expect(article(page)).toContainText("Before.");
+
+    await net.lose();
+    // Without a click: the app's own requests, the socket or the heartbeat find out.
+    await expect(bar(page)).toContainText("You're offline.", { timeout: 30_000 });
+    await write(page, "# Plan\n\nWritten offline. [[Old]]\n");
+    await expect(article(page)).toContainText("Written offline.");
+
+    // A new note in the folder, through the dock's New menu.
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await page.getByRole("menuitem", { name: "New note" }).click();
+    await expect(source(page)).toBeVisible();
+    await source(page).fill("# Made offline\n\nNew here.\n");
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByRole("button", { name: "Done" })).toHaveCount(0);
+    const created = decodeURIComponent(new URL(page.url()).pathname.replace(/^\/notes/, ""));
+    expect(created).toContain(`/Work/${folder}/`);
+
+    // Back to Plan by the browser's history, then on to Old by its link: a reload would lock the copy.
+    await page.goBack();
+    await expect(article(page)).toContainText("Written offline.");
+    await article(page).getByRole("link", { name: "Old" }).click();
+    await expect(article(page)).toContainText("Bye.");
+    await page.getByRole("button", { name: "Note actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete note", exact: true }).click();
+    await page.getByRole("dialog", { name: "Delete Old?" }).getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(bar(page)).toContainText("3 changes will upload when you're back.");
+
+    await net.restore();
+    await expect(page.getByRole("status", { name: "Uploaded" })).toContainText("All changes uploaded", { timeout: 60_000 });
+    expect((await aliceApi.getNote(plan)).content).toBe("# Plan\n\nWritten offline. [[Old]]\n");
+    expect((await aliceApi.getNote(created)).content).toBe("# Made offline\n\nNew here.\n");
+    expect((await aliceApi.send("GET", `/api/notes/${old.slice(1).split("/").map(encodeURIComponent).join("/")}`)).status()).toBe(404);
+  });
+}
+
+test("offline: a quiet network loss shows the bar within 20 seconds without a click, and a quiet return takes it away @offline", async ({ page, aliceApi, folder }) => {
+  test.setTimeout(150_000);
   const plan = `/Work/${folder}/Plan.md`;
-  const old = `/Work/${folder}/Old.md`;
-  await aliceApi.putNote(plan, "# Plan\n\nBefore. [[Old]]\n");
-  await aliceApi.putNote(old, "# Old\n\nBye.\n");
+  await aliceApi.putNote(plan, "# Plan\n\nRead quietly.\n");
   await turnOn(page);
   await page.goto(notePage(plan));
-  await expect(article(page)).toContainText("Before.");
+  await expect(article(page)).toContainText("Read quietly.");
 
-  await goOffline(page);
-  await write(page, "# Plan\n\nWritten offline. [[Old]]\n");
-  await expect(article(page)).toContainText("Written offline.");
+  // Someone reading, nothing clicked, and the socket left as it is (on real Wi-Fi it dies silently): only the
+  // heartbeat asks.
+  const refuse = (route: Route) => route.abort("internetdisconnected");
+  await page.context().route("**/api/**", refuse);
+  await expect(bar(page)).toContainText("You're offline.", { timeout: 20_000 });
+  await expect(article(page)).toContainText("Read quietly.");
+  // Offline for longer than a mode holds (15 seconds).
+  await page.waitForTimeout(20_000);
 
-  // A new note in the folder, through the dock's New menu.
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await page.getByRole("menuitem", { name: "New note" }).click();
-  await expect(source(page)).toBeVisible();
-  await source(page).fill("# Made offline\n\nNew here.\n");
-  await page.getByRole("button", { name: "Done" }).click();
-  await expect(page.getByRole("button", { name: "Done" })).toHaveCount(0);
-  const created = decodeURIComponent(new URL(page.url()).pathname.replace(/^\/notes/, ""));
-  expect(created).toContain(`/Work/${folder}/`);
-
-  // Back to Plan by the browser's history, then on to Old by its link: a reload would lock the copy.
-  await page.goBack();
-  await expect(article(page)).toContainText("Written offline.");
-  await article(page).getByRole("link", { name: "Old" }).click();
-  await expect(article(page)).toContainText("Bye.");
-  await page.getByRole("button", { name: "Note actions" }).click();
-  await page.getByRole("menuitem", { name: "Delete note", exact: true }).click();
-  await page.getByRole("dialog", { name: "Delete Old?" }).getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(bar(page)).toContainText("3 changes will upload when you're back.");
-
-  await page.context().setOffline(false);
-  await expect(page.getByRole("status", { name: "Uploaded" })).toContainText("All changes uploaded", { timeout: 30_000 });
-  expect((await aliceApi.getNote(plan)).content).toBe("# Plan\n\nWritten offline. [[Old]]\n");
-  expect((await aliceApi.getNote(created)).content).toBe("# Made offline\n\nNew here.\n");
-  expect((await aliceApi.send("GET", `/api/notes/${old.slice(1).split("/").map(encodeURIComponent).join("/")}`)).status()).toBe(404);
+  await page.context().unroute("**/api/**", refuse);
+  await expect(bar(page)).toHaveCount(0, { timeout: 60_000 });
+  await expect(page.getByText("The server can't be reached right now. Try again in a moment.")).toHaveCount(0);
+  await expect(article(page)).toContainText("Read quietly.");
 });
 
 test("offline: a note changed elsewhere meanwhile keeps both, this device's text beside it as a conflict copy @offline", async ({ page, aliceApi, folder }) => {

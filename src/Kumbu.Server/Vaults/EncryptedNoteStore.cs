@@ -199,7 +199,7 @@ public sealed class EncryptedNoteStore(
     /// ADR 0025), in the publication's transaction under the vault's gate, which the caller holds and which checked their
     /// versions in the working set. Returns what to change in the working set once the transaction committed, under the
     /// same gate; a note changed in MongoDB meanwhile throws <see cref="Publishing.PublishingConflictException"/>, so the
-    /// publication is made again. Only the mark and the revision change: no content, so nothing is recorded or indexed.
+    /// publication is made again. Only the mark and the revision change: no content, so nothing new is recorded or indexed.
     /// </summary>
     internal async Task<Action> MarkCopiedAsync(IClientSessionHandle session, UnlockedVault vault, IEnumerable<VaultPath> stored, CancellationToken ct)
     {
@@ -208,7 +208,9 @@ public sealed class EncryptedNoteStore(
         {
             var (id, note) = vault.Notes[path];
             if (note.Copied) continue;
-            var next = note with { Revision = note.Revision + 1, Copied = true };
+            // The revision counts up: what is read off revision 1, the creation and who wrote the lines, is recorded, as a move does.
+            var (createdAt, createdAtLeast) = NoteCreation.Of(note);
+            var next = note with { Revision = note.Revision + 1, Copied = true, CreatedAt = createdAt, CreatedAtLeast = createdAtLeast, Authorship = Authorship.Of(note) };
             if (!await ReplaceAtRevisionAsync(session, catalog.Notes, vault, id, path, note.Revision, next.Revision, vault.SealNote(id, next), ct))
             {
                 throw new Publishing.PublishingConflictException();

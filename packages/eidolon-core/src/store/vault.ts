@@ -13,12 +13,14 @@
 // stale check; afterwards the other tabs are told which paths changed. Each write stamps its records with a new
 // generation and moves the head to it in the same transaction: an older record put back in its place (by someone
 // without the key, who can still copy records) no longer matches the head, and is read as damage, never acted on.
+// Each adoption of the vault is a life of its own, with a random epoch in the meta that the head and every record
+// carry: the generations start again in a new life, and a record of an earlier one never opens in it (ADR 0044).
 import type {
   FetchPolicy, FileKind, FileStat, LocalFiles, RemoteApi, RemoteEntry, StateStore, SyncState, Version, VersionsAnswer,
 } from "../engine/ports";
 import { eligibility, isMarker } from "../engine/paths";
 import { versionOf, versionOfBytes } from "../engine/version";
-import { deriveKeys, nameOf, open, seal, type MirrorKeys } from "./crypto";
+import { deriveKeys, nameOf, open, seal, toBase64Url, type MirrorKeys } from "./crypto";
 import type { StorePorts, TabChannel } from "./ports";
 
 type Bytes = Uint8Array<ArrayBuffer>;
@@ -64,6 +66,8 @@ export interface VaultMeta {
    * by it, and the contact carries no names. The host sets it from the vault list whenever it is online.
    */
   name?: string;
+  /** This adoption's life. A copy from before epochs has none: its records, which carry none either, still match. */
+  epoch?: string;
 }
 
 /** The editor's unsaved text (WP7 fills it): `LocalFiles.read` gives it, and `writeIf` checks against it. */
@@ -131,25 +135,28 @@ export class Records {
   }
 }
 
+const newEpoch = (r: Records) => toBase64Url(r.p.crypto.randomBytes(16));
 const aad = (key: string, bind: string | undefined) => (bind === undefined ? key : `${key}\0${bind}`);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 /** Which generation of each record is current. A record of another generation is an older one put back. */
-interface Head { g: number; state: number | null; seqs: Record<string, number> }
-const emptyHead = (): Head => ({ g: 0, state: null, seqs: {} });
+interface Head { g: number; e?: string; state: number | null; seqs: Record<string, number> }
+const emptyHead = (e: string | undefined): Head => ({ g: 0, ...(e === undefined ? {} : { e }), state: null, seqs: {} });
 
 const emptyState = (): SyncState => ({ bases: {}, cursor: null, lastFullAt: null, lastSyncAt: null });
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-/** A record as stored: its value, and the generation it was written in. */
-type Stamped<K extends string, T> = { g?: number } & { [k in K]?: T };
+/** A record as stored: its value, and the generation and life it was written in. */
+type Stamped<K extends string, T> = { g?: number; e?: string } & { [k in K]?: T };
 
 export class VaultMirror {
   private readonly entries = new Map<string, Entry>();
   private readonly names = new Map<string, string>();
   private state: SyncState = emptyState();
   private lastMtime = 0;
+  /** The highest generation this tab has seen of the vault's head. */
+  private lastG = 0;
   private onNotesDone: (() => void) | null = null;
   /** Purged, or its copy locked: nothing reads or writes through it any more. */
   private dropped = false;
@@ -161,9 +168,22 @@ export class VaultMirror {
     const v = new VaultMirror(r, meta, await r.vaultNames(meta.id));
     // Under the lock, so the head and the records are of one moment.
     await r.p.locks.run(r.lockName, async () => {
-      const head = await v.readHead();
       // Entries only: the bodies, attachments among them, stay on disk until asked for.
-      for (const [key, sealed] of await r.p.storage.scan(`${v.keys.data}e/`)) {
+      const entries = await r.p.storage.scan(`${v.keys.data}e/`);
+      const head = await v.readHead();
+      if (head === null) {
+        // Records without their head: damage. Counting from zero again would let an older record of this life match,
+        // so the vault starts a new one and is synced afresh, as a vault just taken in.
+        if (entries.length > 0 || (await r.p.storage.get(v.stateKey)) !== null) {
+          console.warn("The offline copy of a vault is damaged on this device; it is synced afresh.");
+          v.meta = { ...v.meta, epoch: newEpoch(r), notesDone: false };
+          await r.p.storage.write({ removePrefix: [v.keys.data], put: [await r.sealJson(v.keys.meta, v.meta)] });
+          // A tab holding the vault would go on writing in the old life: it drops the vault, as at a purge.
+          r.channel.post({ type: "purged", vault: meta.id });
+        }
+        return;
+      }
+      for (const [key, sealed] of entries) {
         const entry = v.current(head, await r.openJson<Stamped<"entry", Entry>>(key, sealed));
         if (entry !== undefined) v.remember(entry);
       }
@@ -188,22 +208,35 @@ export class VaultMirror {
   get id(): string { return this.meta.id; }
   get canWrite(): boolean { return this.meta.canWrite; }
   get tag(): string { return this.meta.tag; }
+  get epoch(): string | undefined { return this.meta.epoch; }
   get name(): string | undefined { return this.meta.name; }
   get metaKey(): string { return this.keys.meta; }
   get dataPrefix(): string { return this.keys.data; }
   private get stateKey(): string { return `${this.keys.data}s`; }
   private get headKey(): string { return `${this.keys.data}h`; }
 
-  /** A vault taken into the copy: its meta, and nothing else under its name, whatever an earlier mirror left there. */
-  static async writeMeta(r: Records, meta: VaultMeta): Promise<void> {
+  /**
+   * A vault taken into the copy: its meta, in a new life, and nothing else under its name, whatever an earlier mirror
+   * left there. Returns the meta as written.
+   */
+  static async writeMeta(r: Records, meta: VaultMeta): Promise<VaultMeta> {
     const keys = await r.vaultNames(meta.id);
-    await r.p.locks.run(r.lockName, async () => r.p.storage.write({ removePrefix: [keys.data], put: [await r.sealJson(keys.meta, meta)] }));
+    const adopted = { ...meta, epoch: newEpoch(r) };
+    await r.p.locks.run(r.lockName, async () => r.p.storage.write({ removePrefix: [keys.data], put: [await r.sealJson(keys.meta, adopted)] }));
+    return adopted;
   }
 
   async setMeta(change: Partial<Omit<VaultMeta, "id">>): Promise<void> {
     this.assertHeld();
-    this.meta = { ...this.meta, ...change };
-    await this.r.p.storage.write({ put: [await this.r.sealJson(this.keys.meta, this.meta)] });
+    await this.r.p.locks.run(this.r.lockName, async () => {
+      this.assertHeld();
+      // Gone from storage, or adopted again since in a new life: another tab purged the vault, and this one hasn't
+      // heard yet.
+      const stored = await this.r.openJson<VaultMeta>(this.keys.meta, await this.r.p.storage.get(this.keys.meta));
+      if (stored === null || stored.epoch !== this.meta.epoch) return;
+      this.meta = { ...this.meta, ...change };
+      await this.r.p.storage.write({ put: [await this.r.sealJson(this.keys.meta, this.meta)] });
+    });
   }
 
   /** Every path the mirror knows, from the inventory or on this device: the tree, before the texts are all here. */
@@ -254,7 +287,7 @@ export class VaultMirror {
   async refresh(paths: readonly string[]): Promise<void> {
     await this.r.p.locks.run(this.r.lockName, async () => {
       if (this.dropped) return;
-      const head = await this.readHead();
+      const head = await this.headNow();
       for (const path of paths) {
         const entry = await this.readEntry(head, path);
         if (entry === undefined) this.entries.delete(path);
@@ -277,16 +310,16 @@ export class VaultMirror {
         // A check that went through to the end has every note's text here: the small attachments' turn (design §3a).
         const notesNowDone = await this.r.p.locks.run(this.r.lockName, async () => {
           this.assertHeld();
-          const head = await this.readHead();
+          const head = await this.headNow();
           head.state = ++head.g;
           this.state = clone(state);
-          const put = [await this.r.sealJson(this.stateKey, { g: head.g, state }), await this.r.sealJson(this.headKey, head)];
+          const put = [await this.r.sealJson(this.stateKey, { g: head.g, e: this.meta.epoch, state })];
           const done = !this.meta.notesDone && state.lastSyncAt !== null;
           if (done) {
             this.meta = { ...this.meta, notesDone: true };
             put.push(await this.r.sealJson(this.keys.meta, this.meta));
           }
-          await this.r.p.storage.write({ put });
+          await this.writeWithHead(head, put);
           return done;
         });
         this.r.channel.post({ type: "changed", vault: this.id, paths: [] });
@@ -370,7 +403,7 @@ export class VaultMirror {
     this.assertHeld();
     return this.r.p.locks.run(this.r.lockName, async () => {
       this.assertHeld();
-      const head = await this.readHead();
+      const head = await this.headNow();
       const put: [string, Bytes][] = [];
       const remove: string[] = [];
       const done: boolean[] = [];
@@ -392,14 +425,14 @@ export class VaultMirror {
           delete head.seqs[path];
         } else {
           head.seqs[path] = ++head.g;
-          put.push(await this.r.sealJson(key, { g: head.g, entry }));
+          put.push(await this.r.sealJson(key, { g: head.g, e: this.meta.epoch, entry }));
         }
         const body = await this.bodyKey(path);
         if (outcome.body === null || entry === null) remove.push(body);
         else if (outcome.body !== undefined) put.push([body, await this.r.seal(body, outcome.body, entry.local?.version)]);
         after.set(path, entry);
       }
-      if (put.length > 0 || remove.length > 0) await this.r.p.storage.write({ put: [...put, await this.r.sealJson(this.headKey, head)], remove });
+      if (put.length > 0 || remove.length > 0) await this.writeWithHead(head, put, remove);
       for (const [path, entry] of after) {
         if (entry === null) this.entries.delete(path);
         else this.entries.set(path, entry);
@@ -415,8 +448,36 @@ export class VaultMirror {
     return this.lastMtime;
   }
 
-  private async readHead(): Promise<Head> {
-    return (await this.r.openJson<Head>(this.headKey, await this.r.p.storage.get(this.headKey))) ?? emptyHead();
+  /** The head of this life; null if it is missing, doesn't open, or is of another life. */
+  private async readHead(): Promise<Head | null> {
+    const head = await this.r.openJson<Head>(this.headKey, await this.r.p.storage.get(this.headKey));
+    if (head === null) return null;
+    if (head.e === this.meta.epoch) {
+      this.lastG = Math.max(this.lastG, head.g);
+      return head;
+    }
+    console.warn("A head of an earlier mirror of the vault was put back; it is left out.");
+    return null;
+  }
+
+  /**
+   * The head to write on. One gone since the vault was opened leaves the generations where this tab saw them last,
+   * so a record written before still doesn't match. Under the lock.
+   */
+  private async headNow(): Promise<Head> {
+    // Gone from storage, or adopted again since in a new life: this tab hasn't heard yet, and must not write the old
+    // life's head over the new one.
+    const stored = await this.r.openJson<VaultMeta>(this.keys.meta, await this.r.p.storage.get(this.keys.meta));
+    if (stored === null || stored.epoch !== this.meta.epoch) {
+      this.drop();
+      throw new MirrorLockedError();
+    }
+    return (await this.readHead()) ?? { ...emptyHead(this.meta.epoch), g: this.lastG };
+  }
+
+  private async writeWithHead(head: Head, put: [string, Bytes][], remove: string[] = []): Promise<void> {
+    await this.r.p.storage.write({ put: [...put, await this.r.sealJson(this.headKey, head)], remove });
+    this.lastG = Math.max(this.lastG, head.g);
   }
 
   private async readEntry(head: Head, path: string): Promise<Entry | undefined> {
@@ -427,7 +488,7 @@ export class VaultMirror {
   private async readState(head: Head): Promise<SyncState | null> {
     const stamped = await this.r.openJson<Stamped<"state", SyncState>>(this.stateKey, await this.r.p.storage.get(this.stateKey));
     if (stamped === null) return null;
-    if (stamped.g === head.state && stamped.state !== undefined) return stamped.state;
+    if (stamped.g === head.state && stamped.e === this.meta.epoch && stamped.state !== undefined) return stamped.state;
     console.warn("An older state of the offline copy was put back; it is left out.");
     return null;
   }
@@ -436,7 +497,7 @@ export class VaultMirror {
   private current(head: Head, stamped: Stamped<"entry", Entry> | null): Entry | undefined {
     if (stamped === null) return undefined;
     const entry = stamped.entry;
-    if (entry !== undefined && typeof entry.path === "string" && stamped.g === head.seqs[entry.path]) return entry;
+    if (entry !== undefined && typeof entry.path === "string" && stamped.g === head.seqs[entry.path] && stamped.e === this.meta.epoch) return entry;
     console.warn("An older record of the offline copy was put back; it is left out.");
     return undefined;
   }
@@ -479,19 +540,22 @@ class MirrorFiles implements LocalFiles {
   async read(path: string): Promise<string | null> {
     this.v.assertHeld();
     if (this.v.damaged(path)) throw new DamagedRecordError(path);
-    const draft = this.drafts?.text(path) ?? null;
+    const draft = this.draft(path);
     if (draft !== null && this.v.entry(path)?.local !== undefined) return draft;
     const bytes = await this.v.bytes(path);
     return bytes === null ? null : decoder.decode(bytes);
   }
 
+  // A folder marker is never read, only looked at: these tell damage from a deletion too.
   async size(path: string): Promise<number | null> {
     this.v.assertHeld();
+    if (this.v.damaged(path)) throw new DamagedRecordError(path);
     return this.v.entry(path)?.local?.size ?? null;
   }
 
   async stat(path: string): Promise<FileStat | null> {
     this.v.assertHeld();
+    if (this.v.damaged(path)) throw new DamagedRecordError(path);
     const local = this.v.entry(path)?.local;
     return local === undefined ? null : { size: local.size, mtime: local.mtime };
   }
@@ -555,6 +619,14 @@ class MirrorFiles implements LocalFiles {
   isEmptyFolder(): Promise<boolean> { return Promise.resolve(false); }
   madeFolder(): boolean { return false; }
 
+  /**
+   * The open editor's unsaved text, which the engine reads as the file. None in a vault held read-only (a role
+   * lowered while the person typed): that text stays in the editor, and nothing of it is uploaded or copied here.
+   */
+  private draft(path: string): string | null {
+    return this.v.canWrite ? (this.drafts?.text(path) ?? null) : null;
+  }
+
   private held(): string[] {
     return this.v.list().filter((e) => e.local !== undefined).map((e) => e.path);
   }
@@ -570,7 +642,7 @@ class MirrorFiles implements LocalFiles {
   /** The version of the text the user sees: the draft's if one is open, else the stored text's. */
   private async textVersion(path: string, entry: Entry | undefined): Promise<Version | null> {
     if (entry?.local === undefined) return null;
-    const draft = this.drafts?.text(path) ?? null;
+    const draft = this.draft(path);
     if (draft !== null) return versionOf(draft);
     if (entry.local.text) return entry.local.version;
     const bytes = await this.v.bytes(path);
