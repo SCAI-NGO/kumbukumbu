@@ -305,6 +305,15 @@ test("a sign-in locks the copies of other users open in the browser, and leaves 
   bobs.lock();
 });
 
+test("a sign-in of someone with no copy here still locks the copies of other users open in the browser", async () => {
+  await adasCopy();
+  const copies = new MirrorCopies(await browserPorts());
+  const adas = (await copies.unlockOffline((await copies.forUser(user.id))!, "pw"))!;
+  useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+  await openCopy(bob.id);
+  await vi.waitFor(() => expect(adas.locked).toBe(true));
+});
+
 test("the sign-in page removes a copy whose slot is gone, and keeps one whose slot is there", async () => {
   oneTab();
   await adasCopy();
