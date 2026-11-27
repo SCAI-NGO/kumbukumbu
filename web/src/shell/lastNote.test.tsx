@@ -74,7 +74,7 @@ const keep = (path: string) => localStorage.setItem(keyOf("u1"), path);
 const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 describe("the last note", () => {
-  it("keeps the note under a key that names no user", async () => {
+  it("keeps the note under the header's hash of the user id", async () => {
     signedInApi();
     const router = renderApp("/notes/Work/inbox.md");
     expect(await screen.findByRole("heading", { name: "inbox" })).toBeInTheDocument();

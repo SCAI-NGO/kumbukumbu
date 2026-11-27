@@ -7,7 +7,7 @@
 
 ## Context
 
-Since 0.5.0 the app starts on the last note a person opened in an ordinary vault, per device and user, and a session that ends keeps that start for the next sign-in; only signing out, deleting the account and the consent page's sign-out forget it. The path was kept in local storage under the user's id. Everything else the device keeps of a person's notes is sealed in the offline copy, whose only unsealed record, its header, holds the user id as a hash; the start should name no one on the device either.
+Since 0.5.0 the app starts on the last note a person opened in an ordinary vault, per device and user, and a session that ends keeps that start for the next sign-in; only signing out, deleting the account and the consent page's sign-out forget it. Everything else the device keeps of a person's notes is sealed in the offline copy, whose only unsealed record, its header, holds the user id as a hash; the start now follows the same rule.
 
 ## Decision
 
@@ -15,7 +15,7 @@ With the user's copy unlocked in the tab, the last note's path is a record of th
 
 ## Why
 
-- A person's start stays as Chris decided it for 0.5.0, while nothing on the device names whose start it is.
+- A person's start stays as Chris decided it for 0.5.0, kept the way the copy keeps everything else of the person's notes.
 - The header's hash is the one key both sides know: the app knows the user id, and the sign-in page, which knows no user, knows the headers of the copies it removes. A plain hash of the id would leave the sweep nothing to match.
 - A record of its own rather than a field of the device's choice keeps the choice's shape and its messages between tabs as they are.
 - Forgetting the start at every end of a session would have been simpler, and lost: it takes away what Chris decided the start is for.
