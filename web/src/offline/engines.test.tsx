@@ -13,7 +13,7 @@ import { useSession } from "../state/session";
 import { json } from "../test/app";
 import { FakeSocket } from "../test/socket";
 import { useOfflineCopy } from "./copy";
-import { enginesReconnected, runEngines } from "./engines";
+import { enginesReconnected, mirrorHttp, runEngines } from "./engines";
 import { runOfflineHost } from "./host";
 import { lockCopy, resetOfflineMode, useOfflineMode } from "./mode";
 import { browserPorts } from "./ports";
@@ -107,6 +107,44 @@ afterEach(async () => {
   resetOfflineMode();
   localStorage.clear();
   await (await browserPorts()).storage.write({ removePrefix: [""] });
+});
+
+describe("the engines' requests", () => {
+  /** Alice's copy on this device, locked; its header as the tab knows it. */
+  async function alicesHeader() {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s1", token: "tok-a", key, vaults: [home] }))));
+    const copies = new MirrorCopies(await browserPorts());
+    (await copies.create({ userId: alice.id, username: "alice", password: "pw", label: "Test", idleMs: 60_000 })).lock();
+    vi.unstubAllGlobals();
+    return (await copies.forUser(alice.id))!;
+  }
+
+  /** Signed in as `who`, the tab knowing Alice's copy: the token each engine request sent. */
+  async function sentUnder(who: typeof alice, answer: () => Response = () => json(200, [])) {
+    const header = await alicesHeader();
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    useSession.getState().signedIn({ user: who, previousSignInAt: null });
+    await settle();
+    useOfflineCopy.getState().set(header, null);
+    const sent: (string | null)[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => (sent.push(new Headers(init?.headers).get("Kumbu-Mirror")), answer())));
+    await mirrorHttp({ method: "GET", url: `${window.location.origin}/api/vaults/Home/versions`, headers: {} });
+    return sent;
+  }
+
+  test("engine requests carry the copy's token under its owner", async () => {
+    expect(await sentUnder(alice)).toEqual(["tok-a"]);
+  });
+
+  test("engine requests carry no token under another person's session", async () => {
+    expect(await sentUnder(bob)).toEqual([null]);
+  });
+
+  test("an engine request answered 401 mirror-wipe wipes the copy", async () => {
+    await sentUnder(alice, () => json(401, { error: "Gone.", code: "mirror-wipe" }));
+    await waitFor(() => expect(useOfflineCopy.getState().header).toBeNull());
+    expect(await new MirrorCopies(await browserPorts()).forUser(alice.id)).toBeNull();
+  });
 });
 
 describe("in a second tab", () => {

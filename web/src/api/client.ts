@@ -51,12 +51,17 @@ export async function isPasswordRequired(response: Response): Promise<boolean> {
   return !!body && typeof body === "object" && "type" in body && body.type === "password-required";
 }
 
+/** The request handed in the offline copy's slot, which is gone: the copy goes too (offline mode design §4.6). */
+export async function isMirrorWipe(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
+  const body: unknown = await response.clone().json().catch(() => null);
+  return !!body && typeof body === "object" && "code" in body && body.code === "mirror-wipe";
+}
+
 /** A 401 for a missing session ends it. `key`: "PUT /api/files/{vault}/{path}". */
 async function endOnLostSession(key: string, response: Response) {
   if (response.status !== 401 || anonymous.has(key) || (await isPasswordRequired(response))) return;
-  const body: unknown = await response.clone().json().catch(() => null);
-  // The request handed in the offline copy's slot, which is gone: the copy goes too (offline mode design §4.6).
-  if (!!body && typeof body === "object" && "code" in body && body.code === "mirror-wipe") return void (await wipeCopy());
+  if (await isMirrorWipe(response)) return void (await wipeCopy());
   // Back from offline with changes waiting: the bar asks to sign in again over the app, which keeps the place (§3a).
   const mode = useOfflineMode.getState();
   if (mode.offline && mode.waiting > 0) return mode.sessionLost();

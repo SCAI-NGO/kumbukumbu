@@ -6,11 +6,11 @@ import { AuthError, type CameBack, type ListedVault } from "eidolon-core/engine/
 import type { OfflineChoice } from "eidolon-core/store/choice";
 import { MirrorEngines } from "eidolon-core/store/engines";
 import type { SealedMirror } from "eidolon-core/store/mirror";
-import { api, call } from "../api/client";
+import { api, call, carriesToken, isMirrorWipe } from "../api/client";
 import { useOfflineCopy } from "./copy";
 import { useSession, type SessionView } from "../state/session";
 import { deviceLabel } from "./deviceLabel";
-import { mirrorCopies, openCopy } from "./mode";
+import { mirrorCopies, openCopy, wipeCopy } from "./mode";
 import { nameVaults } from "./source";
 import { draftsFor } from "./writing";
 
@@ -28,9 +28,16 @@ export function listenToEngines(events: EngineEvents): () => void {
   return () => void listeners.delete(events);
 }
 
-/** The engines' HTTP: same origin, the session cookie with it. */
+/**
+ * The engines' HTTP: same origin, the session cookie with it, and the copy's token as the API client sends it, so an
+ * answer that the slot is gone removes the copy here too (§4.11).
+ */
 export const mirrorHttp: HttpFn = async (r) => {
-  const response = await fetch(r.url, { method: r.method, headers: r.headers, body: r.body, credentials: "same-origin" });
+  const header = useOfflineCopy.getState().header;
+  const sent = { ...r.headers };
+  if (header !== null && (await carriesToken(header, `${r.method} ${new URL(r.url).pathname}`))) sent["Kumbu-Mirror"] = header.slot.token;
+  const response = await fetch(r.url, { method: r.method, headers: sent, body: r.body, credentials: "same-origin" });
+  if (await isMirrorWipe(response)) void wipeCopy();
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => (headers[key] = value));
   const bytes = await response.arrayBuffer();
