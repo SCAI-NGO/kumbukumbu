@@ -2,6 +2,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { userKey } from "eidolon-core/store/mirror";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDiscreet } from "../discreet/state";
 import { useEditor } from "../state/editor";
@@ -96,15 +97,16 @@ describe("Discreet in the vault's menu", () => {
   });
 
   it("forgets the last note of a vault as it is marked discreet, before the list says so", async () => {
+    const key = `kumbu.lastNote.${await userKey(user.id)}`;
     let kept: string | null = "";
     api(true, own, {
       "PUT /api/account/discreet/vaults/Work": () => {
-        kept = localStorage.getItem("kumbu.lastNote.u1");
+        kept = localStorage.getItem(key);
         return noContent();
       },
     });
     await openMenu(true);
-    expect(localStorage.getItem("kumbu.lastNote.u1")).toBe("/Work/inbox.md");
+    await waitFor(() => expect(localStorage.getItem(key)).toBe("/Work/inbox.md"));
     await userEvent.click(screen.getByRole("menuitem", { name: "Discreet" }));
     await waitFor(() => expect(drawer().querySelector("[aria-live='polite']")).toHaveTextContent("Marked as discreet"));
     expect(kept).toBeNull();

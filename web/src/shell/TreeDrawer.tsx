@@ -470,7 +470,10 @@ function AccountRow() {
     const { offline, waiting } = useOfflineMode.getState();
     if (copy === undefined && waiting > 0) return setWaitingAsk(waiting);
     let notice: string | null = null;
+    // Forgotten before the copy locks: with the copy open, the note is kept there.
+    const forget = () => forgetLastNote(useSession.getState().user?.id);
     if (offline) {
+      await forget();
       // Said only where the mark was kept: without it, the session ends by its own limits.
       if (await signOutOffline(copy === "remove")) notice = PENDING_NOTICE;
     } else {
@@ -481,12 +484,12 @@ function AccountRow() {
       } catch {
         return setFailed(true);
       }
+      await forget();
       if (copy === "remove") await useOfflineCopy.getState().mirror?.remove();
       else await lockEverywhere();
       useOfflineCopy.getState().clear();
     }
     useEditor.getState().reset();
-    forgetLastNote(useSession.getState().user?.id);
     useSession.getState().signOut();
     if (notice !== null) useSession.setState({ notice });
     // The cache goes on the sign-in page: cleared here, the shell still shown would ask for the session again.

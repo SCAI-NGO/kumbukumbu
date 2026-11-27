@@ -61,11 +61,11 @@ function DeleteAccountSection() {
   const shared = (vaults.data ?? []).filter((v) => v.owner == null && Number(v.members ?? 0) > 0);
   const remove = useMutation({
     mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: me?.username ?? typed, ...(shared.length > 0 && { sharedVaults: choice }) } })),
-    onSuccess: () => {
+    onSuccess: async () => {
       setPassword("");
       queryClient.clear();
       useEditor.getState().reset();
-      forgetLastNote(me?.id);
+      await forgetLastNote(me?.id);
       useSession.getState().end("Your account is deleted, with all your vaults and notes.", "wipe");
     },
   });

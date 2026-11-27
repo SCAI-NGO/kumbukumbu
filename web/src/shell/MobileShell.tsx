@@ -31,13 +31,13 @@ import InstallHint from "../update/InstallHint";
 import OfflineInvite from "../offline/OfflineInvite";
 import PasswordChangedCopies from "../offline/PasswordChangedCopies";
 import OfflineBar from "../offline/OfflineBar";
-import { NEEDS_CONNECTION } from "../offline/mode";
+import { NEEDS_CONNECTION, openCopy } from "../offline/mode";
 import UpdateBar from "../update/UpdateBar";
 import { movedPath, useEditor, type Side } from "../state/editor";
 import { useSession } from "../state/session";
 import { usePaletteShortcut } from "../palette/usePaletteShortcut";
 import DeleteFileDialog from "../attachments/DeleteFileDialog";
-import { forgetLastNote, keepLastNote, lastNote, ordinary, settleStart, startSettled, treeHas } from "./lastNote";
+import { forgetLastNote, keepLastNote, loadLastNote, ordinary, settleStart, startSettled, treeHas, useLastNote } from "./lastNote";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
@@ -221,36 +221,42 @@ export default function MobileShell() {
   // while one is open the kept path stays the last ordinary note.
   const loaded = useNoteLoaded(path);
   useEffect(() => {
-    if (userId && path && loaded && ordinary(vaults.data, discreetNames, vaultOf(path))) keepLastNote(userId, path);
+    if (userId && path && loaded && ordinary(vaults.data, discreetNames, vaultOf(path))) void keepLastNote(userId, path);
   }, [userId, path, loaded, vaults.data, discreetNames]);
+  // Read once the tab's opening of the user's copy is done: with the copy unlocked, the note is kept there.
+  const keptNote = useLastNote(userId);
+  useEffect(() => {
+    if (userId && keptNote === undefined) void loadLastNote(userId, openCopy(userId));
+  }, [userId, keptNote]);
   // It goes once its vault is no longer an ordinary one: marked discreet (here, or in another session: the list then
   // marks it or, hidden, leaves it out), removed, or no longer shared.
   useEffect(() => {
-    if (!userId || !vaults.data) return;
-    const kept = lastNote(userId);
-    if (kept && !ordinary(vaults.data, discreetNames, vaultOf(kept))) forgetLastNote(userId);
-  }, [userId, vaults.data, discreetNames]);
+    if (userId && vaults.data && keptNote && !ordinary(vaults.data, discreetNames, vaultOf(keptNote))) void forgetLastNote(userId);
+  }, [userId, vaults.data, discreetNames, keptNote]);
   // On start only, with no note in the address, and not when a vault was chosen before the shell was shown (Share's
   // "Open"). Read once per page load: once a note was shown or the start was decided, `/` is the vaults.
   const [chosen] = useState(() => useEditor.getState().activeVault !== null);
-  const kept = userId && !startSettled(userId) && !chosen && !path && !overview && !recentPaths.length && vaults.data ? lastNote(userId) : null;
+  const starting = !!userId && !startSettled(userId) && !chosen && !path && !overview && !recentPaths.length;
+  // Until it is read, the start waits as for the kept note's tree.
+  const keptLoading = starting && keptNote === undefined;
+  const kept = starting && vaults.data ? (keptNote ?? null) : null;
   const keptVault = kept !== null && ordinary(vaults.data, discreetNames, vaultOf(kept)) ? vaultOf(kept) : null;
   const keptTree = useTree(keptVault);
   const keptThere = !!keptVault && !!keptTree.data && treeHas(keptTree.data.root, kept!);
   // Settled with a note shown, or with the vault list in and nothing to open.
   useEffect(() => {
-    if (path || (vaults.data && !keptVault)) settleStart(userId);
-  }, [path, vaults.data, keptVault, userId]);
+    if (path || (vaults.data && !keptVault && !keptLoading)) settleStart(userId);
+  }, [path, vaults.data, keptVault, keptLoading, userId]);
   // A note that is gone opens its vault's root and is forgotten; with its tree unreadable for now, that vault's root
   // opens too, and the note stays kept for the next start.
   useEffect(() => {
     if (!keptVault || !(keptTree.data || keptTree.isError) || keptThere) return;
-    if (keptTree.data) forgetLastNote(userId);
+    if (keptTree.data) void forgetLastNote(userId);
     settleStart(userId);
     setActiveVault(keptVault);
   }, [keptVault, keptTree.data, keptTree.isError, keptThere, userId, setActiveVault]);
   // Until the tree says, the vaults aren't shown: they would flash before the note opens.
-  const keptPending = !!keptVault && !keptThere && keptTree.isPending;
+  const keptPending = keptLoading || (!!keptVault && !keptThere && keptTree.isPending);
   useSyncSocket();
   useTellOpenNote();
   const [vaultDialog, setVaultDialog] = useState(false);
@@ -439,8 +445,8 @@ export default function MobileShell() {
   // Skills sorts before Welcome, where a new user should start: the Skills vault only when there is no other.
   // The store's own value, not the render's: the effect above may have just opened a note in another vault (a deep link).
   useEffect(() => {
-    if (!useEditor.getState().activeVault && vaults.data?.length) setActiveVault(keptVault ?? (vaults.data.find((v) => v.kind !== "skills") ?? vaults.data[0]).name);
-  }, [activeVault, vaults.data, setActiveVault, keptVault]);
+    if (!useEditor.getState().activeVault && vaults.data?.length && !keptLoading) setActiveVault(keptVault ?? (vaults.data.find((v) => v.kind !== "skills") ?? vaults.data[0]).name);
+  }, [activeVault, vaults.data, setActiveVault, keptVault, keptLoading]);
 
   // A note the caller can't change (any more: her role was lowered) is only read (`useNoteAccess`; each pane ends Write
   // mode in it). The top bar's Write is the focused pane's, the split view's start the left one's.

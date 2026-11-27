@@ -79,7 +79,8 @@ const listedNames = (queryClient: QueryClient) => queryClient.getQueryData<{ nam
 async function tabOn(path: string, at: { names: string[] }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = renderApp([path], queryClient);
-  expect(await screen.findByText("Liebeskummer")).toBeInTheDocument();
+  // A split view shows the text in both panes.
+  expect((await screen.findAllByText("Liebeskummer"))[0]).toBeInTheDocument();
   await waitFor(() => expect(listedNames(queryClient)).toEqual(at.names));
   await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
   last().open();

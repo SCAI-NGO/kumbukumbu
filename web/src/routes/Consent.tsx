@@ -78,8 +78,9 @@ export default function Consent() {
       // A 401: the session had ended already, which is what was asked for.
       if (!response.ok && response.status !== 401) throw new Error("sign-out failed");
     },
-    onSuccess: () => {
-      forgetLastNote(useSession.getState().user?.id);
+    // Forgotten before the sign-out locks the copy, which may keep it.
+    onSuccess: async () => {
+      await forgetLastNote(useSession.getState().user?.id);
       useSession.getState().signOut();
       navigate(`/signin?next=${encodeURIComponent(`/consent?request=${id}`)}`, { replace: true });
       queryClient.clear();

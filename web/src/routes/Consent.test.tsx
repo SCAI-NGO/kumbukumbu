@@ -3,7 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SealedMirror } from "eidolon-core/store/mirror";
+import { userKey, type SealedMirror } from "eidolon-core/store/mirror";
 import { useOfflineCopy } from "../offline/copy";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -190,7 +190,8 @@ describe("Consent", () => {
   });
 
   it("another account's request offers sign-out, which forgets the last note", async () => {
-    localStorage.setItem("kumbu.lastNote.u1", "/Work/inbox.md");
+    const key = `kumbu.lastNote.${await userKey(user.id)}`;
+    localStorage.setItem(key, "/Work/inbox.md");
     let signedOut = false;
     const fetch = api({
       "GET /api/oauth/requests/r1": () => json(404, { error: otherAccount, type: "other-account" }),
@@ -206,7 +207,7 @@ describe("Consent", () => {
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(path(router)).toBe("/signin?next=%2Fconsent%3Frequest%3Dr1"));
     expect(fetch.mock.calls.some(([r]) => (r as Request).method === "DELETE" && (r as Request).url.endsWith("/api/session"))).toBe(true);
-    expect(localStorage.getItem("kumbu.lastNote.u1")).toBeNull();
+    expect(localStorage.getItem(key)).toBeNull();
   });
 
   it("its sign-out locks the offline copy in every tab", async () => {

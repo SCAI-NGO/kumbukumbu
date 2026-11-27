@@ -39,6 +39,8 @@ async function hashOf(label: string): Promise<string> {
 }
 
 const userHash = (userId: string) => hashOf(`kumbu-mirror user\0${userId}`);
+/** The hash of the user id a header holds: what the host keeps of a user outside the copy goes under it, naming no one. */
+export const userKey = userHash;
 const loginHash = (username: string) => hashOf(`kumbu-mirror login\0${username.normalize("NFC").toLowerCase()}`);
 const wrapAad = (copy: string) => `kumbu-mirror wrap\0${copy}`;
 /** The copy's lock across tabs, as its records take it (Records.lockName). */
@@ -301,6 +303,19 @@ export class SealedMirror {
     });
   }
 
+  /** The last note opened with this copy, for the next start: the host's, sealed like the rest; null for none. */
+  async lastNote(): Promise<string | null> {
+    this.assertOpen();
+    const key = await this.lastNoteKey();
+    return (await this.r.openJson<{ path: string }>(key, await this.p.storage.get(key)))?.path ?? null;
+  }
+
+  async keepLastNote(path: string | null): Promise<void> {
+    this.assertOpen();
+    const key = await this.lastNoteKey();
+    await this.p.storage.write(path === null ? { remove: [key] } : { put: [await this.r.sealJson(key, { path })] });
+  }
+
   /** The changes waiting to upload, across the copy's vaults. */
   waiting(): number {
     return [...this.vaults.values()].reduce((n, v) => n + v.waiting(), 0);
@@ -510,6 +525,10 @@ export class SealedMirror {
 
   private async choiceKey(): Promise<string> {
     return `${this.r.prefix}o/${await this.r.name("choice")}`;
+  }
+
+  private async lastNoteKey(): Promise<string> {
+    return `${this.r.prefix}o/${await this.r.name("last")}`;
   }
 
   private async reopen(id: string): Promise<void> {

@@ -2,7 +2,7 @@
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SealedMirror } from "eidolon-core/store/mirror";
+import { userKey, type SealedMirror } from "eidolon-core/store/mirror";
 import { useOfflineCopy } from "../../offline/copy";
 import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
@@ -51,7 +51,8 @@ describe("Settings: Your data", () => {
   });
 
   it("deletes the account with the password and the username typed, and goes to sign-in", async () => {
-    localStorage.setItem("kumbu.lastNote.u1", "/Work/inbox.md");
+    const key = `kumbu.lastNote.${await userKey(user.id)}`;
+    localStorage.setItem(key, "/Work/inbox.md");
     const bodies: unknown[] = [];
     // As the server: once the account is gone, its session is too.
     let deleted = false;
@@ -70,7 +71,7 @@ describe("Settings: Your data", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
     expect(bodies).toEqual([{ password: "my password, long", confirm: "ada" }]);
     // Nothing of the account stays on the device: its last note goes with it.
-    expect(localStorage.getItem("kumbu.lastNote.u1")).toBeNull();
+    expect(localStorage.getItem(key)).toBeNull();
     expect(await screen.findByRole("status")).toHaveTextContent("Your account is deleted");
   });
 

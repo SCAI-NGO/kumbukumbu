@@ -138,6 +138,23 @@ describe("a copy", () => {
     await expect(vault.files().writeIf("x.md", null, "x")).rejects.toThrow(MirrorLockedError);
   });
 
+  test("the last note opened is sealed in the copy and goes with it", async () => {
+    const { browser, copies, mirror } = await setup();
+    expect(await mirror.lastNote()).toBeNull();
+    await mirror.keepLastNote("/Diary/Secret crush.md");
+    expect(browser.storage.dump()).not.toContain("crush");
+    mirror.lock();
+    await expect(mirror.keepLastNote("/Diary/x.md")).rejects.toThrow(MirrorLockedError);
+
+    const again = (await copies.unlockOffline(mirror.header, signIn.password))!;
+    expect(await again.lastNote()).toBe("/Diary/Secret crush.md");
+    await again.keepLastNote(null);
+    expect(await again.lastNote()).toBeNull();
+    await again.keepLastNote("/Diary/Plan.md");
+    await again.remove();
+    expect([...browser.storage.records.keys()]).toEqual([]);
+  });
+
   test("never mirrors a vault the server didn't list, as it leaves out discreet ones", async () => {
     const { mirror } = await setup([work]);
     await expect(mirror.adopt("vault-discreet")).rejects.toThrow(/lists/);
