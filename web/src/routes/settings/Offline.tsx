@@ -100,13 +100,20 @@ function KeepSection({ mirror }: { mirror: SealedMirror | null }) {
   );
 }
 
+const UNCOUNTED = "Changes that haven't uploaded go with the copy.";
+
 function RemoveSection({ mirror }: { mirror: SealedMirror | null }) {
   const [asking, setAsking] = useState(false);
-  const waiting = mirror?.waiting() ?? 0;
+  // Locked, the copy's count can't be read: it may hold changes, and says so rather than none.
+  const waiting = mirror?.waiting() ?? null;
   return (
     <Section title="Remove the copy from this device">
       <p className="text-text-body">
-        {waiting > 0 ? `${changes(waiting)} haven't uploaded yet: they go with the copy.` : "Everything on this device is uploaded."}
+        {waiting === null
+          ? UNCOUNTED
+          : waiting > 0
+            ? `${changes(waiting)} haven't uploaded yet: they go with the copy.`
+            : "Everything on this device is uploaded."}
       </p>
       <button type="button" onClick={() => setAsking(true)} className={`${secondaryButtonClass} self-start`}>
         Remove the copy
@@ -145,7 +152,7 @@ function TurnOnDialog({ user, onClose }: { user: { id: string; username: string 
 function RemoveCopyDialog({ waiting, onClose }: { waiting: number | null; onClose(): void }) {
   const header = useOfflineCopy((s) => s.header);
   const off = useMutation({ mutationFn: () => turnOff(header!), onSuccess: onClose });
-  const lost = waiting !== null && waiting > 0 ? `${changes(waiting)} haven't uploaded yet and will be lost. ` : "";
+  const lost = waiting === null ? "The locked copy's changes can't be counted; any that haven't uploaded will be lost. " : waiting > 0 ? `${changes(waiting)} haven't uploaded yet and will be lost. ` : "";
   return (
     <Confirm
       title="Remove the copy from this device?"

@@ -5,7 +5,7 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useOfflineCopy } from "../../offline/copy";
-import { useOfflineMode } from "../../offline/mode";
+import { lockCopy, useOfflineMode } from "../../offline/mode";
 import { turnOff } from "../../offline/turnOn";
 import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
@@ -291,6 +291,18 @@ describe("Settings: Offline", () => {
     expect(calls(fake, "DELETE /api/account/mirror-slots/s1")).toHaveLength(1);
     expect(screen.getByRole("switch", { name: "Keep my notes on this device" })).not.toBeChecked();
   });
+  it("with the copy locked the section says Changes that haven't uploaded go with the copy, and the dialog that they will be lost", { timeout: 20_000 }, async () => {
+    await turnedOn();
+    await act(() => lockCopy());
+    const section = await screen.findByRole("region", { name: "Remove the copy from this device" });
+    expect(section).toHaveTextContent("Changes that haven't uploaded go with the copy.");
+    expect(section).not.toHaveTextContent("Everything on this device is uploaded.");
+    await userEvent.click(within(section).getByRole("button", { name: "Remove the copy" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      "The locked copy's changes can't be counted; any that haven't uploaded will be lost. Your notes stay in Kumbu²; this device no longer has them offline.",
+    );
+  });
+
   describe("a switch cut off by a reload either finishes at the next start or says it didn't", () => {
     async function keepThemHere() {
       renderApp("/settings/offline");
