@@ -338,6 +338,13 @@ describe("the copy's token in Kumbu-Mirror", () => {
     expect(mirrorHeaders(calls)).toEqual([["GET /api/vaults", "tok-ada"], ["POST /api/session", null]]);
   });
 
+  test("a sign-in request goes out with no offline header, whoever is signed in", async () => {
+    await openedOnline();
+    const calls = server({ "POST /api/session": () => json(401, { error: "Wrong." }) });
+    await api.POST("/api/session", { body: { username: "ada", password: "pw", remember: false } });
+    expect(mirrorHeaders(calls)).toEqual([["POST /api/session", null]]);
+  });
+
   test("after Bob's sign-in no request carries Ada's copy token", async () => {
     await openedOnline();
     await lockCopy();
