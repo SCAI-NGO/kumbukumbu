@@ -190,7 +190,8 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
       </label>
       {offline && <p className="text-sm text-muted">{NEEDS_CONNECTION}</p>}
       <p className="text-sm text-muted">New vaults, and vaults shared with you later, follow All my vaults.</p>
-      {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
+      {/* Offline, and while coming back, the bar is the one word on the connection: the list's read failing then is no news. */}
+      {vaults.isError && !offline && <FormError>{errorText(vaults.error)}</FormError>}
       <ul aria-label="Vaults on this device" className="flex flex-col gap-1">
         {listed.map((vault) => (
           <li key={vault.id}>

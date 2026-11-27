@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import "fake-indexeddb/auto";
+import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,9 +69,9 @@ afterEach(async () => {
   useEditor.getState().reset();
 });
 
-async function turnedOn() {
-  const fake = api();
-  renderApp("/settings/offline");
+async function turnedOn(overrides: Parameters<typeof api>[0] = {}, queryClient?: QueryClient) {
+  const fake = api(overrides);
+  renderApp("/settings/offline", queryClient);
   await userEvent.click(await screen.findByRole("switch", { name: "Keep my notes on this device" }));
   const dialog = screen.getByRole("alertdialog", { name: "Keep your notes on this device" });
   await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
@@ -154,6 +155,19 @@ describe("Settings: Offline", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Keep Work on this device" }));
     expect(useOfflineCopy.getState().mirror!.choice).toMatchObject({ all: true });
     expect(screen.queryByText(/can't be reached/)).toBeNull();
+  });
+
+  it("says nothing failed while the app is switching back online", { timeout: 20_000 }, async () => {
+    let reachable = true;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await turnedOn({ "GET /api/vaults": () => (reachable ? json(200, [work, diary]) : Promise.reject(new TypeError("Failed to fetch"))) }, queryClient);
+    act(() => useOfflineMode.setState({ offline: true, phase: "uploading" }));
+    reachable = false;
+    await act(() => queryClient.invalidateQueries({ queryKey: ["vaults"] }));
+    await waitFor(() => expect(queryClient.getQueryState(["vaults"])?.status).toBe("error"));
+    const page = screen.getByRole("region", { name: "Vaults on this device" }).parentElement!;
+    expect(within(page).queryByText(/can't be reached/)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Keep Work on this device" })).toBeInTheDocument();
   });
 
   it("renames a device's copy, this one too, and lists it under the new name", async () => {
