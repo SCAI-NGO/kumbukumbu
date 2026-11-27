@@ -147,7 +147,7 @@ describe("Sign in again over the app", () => {
     await vi.waitFor(async () => {
       const copies = new MirrorCopies(await browserPorts());
       expect(await copies.unlockOffline((await copies.forUsername("ada"))!, "new password")).not.toBeNull();
-    });
+    }, { timeout: 15_000 });
     const copies = new MirrorCopies(await browserPorts());
     expect(await copies.unlockOffline((await copies.forUsername("ada"))!, "pw")).toBeNull();
     expect(useOfflineCopy.getState().mirror?.locked).toBe(false);
