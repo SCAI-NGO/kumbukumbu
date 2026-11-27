@@ -11,18 +11,23 @@ const WAIT_MS = 5_000;
 /** Gateways answer these while Kumbu² behind them is down (as the API client counts them). */
 const unreachable = new Set([502, 503, 504]);
 
-/**
- * No answer: the socket is closed as the `offline` event closes it, as it may not hear of the loss for minutes, and
- * the mode switches only once it is down.
- */
-function missed() {
-  useSyncStatus.getState().drop();
-  useOfflineMode.getState().failed();
-}
-
 export function startHeartbeat(): () => void {
   let timer: ReturnType<typeof setInterval> | undefined;
   let asking = false;
+  /** Taken down since the last answer: a server that is only slow gets one reconnect, not one every 15 seconds. */
+  let dropped = false;
+
+  /**
+   * No answer: a socket may not hear of the loss for minutes, a background tab's no sooner, and the mode switches only
+   * with none up. So this tab's goes down as on the `offline` event, and every tab's counts as down until one opens
+   * again. Further misses before an answer are failed requests only.
+   */
+  function missed() {
+    if (dropped) return useOfflineMode.getState().failed();
+    dropped = true;
+    useSyncStatus.getState().drop();
+    useOfflineMode.getState().lost();
+  }
 
   async function ask() {
     if (asking || document.visibilityState !== "visible") return;
@@ -33,7 +38,10 @@ export function startHeartbeat(): () => void {
       // Anonymous and without the cookie or the copy's token: it renews no session and carries nothing secret.
       const response = await fetch("/api/version", { credentials: "omit", cache: "no-store", signal: abort.signal });
       if (unreachable.has(response.status)) missed();
-      else useOfflineMode.getState().reached();
+      else {
+        dropped = false;
+        useOfflineMode.getState().reached();
+      }
     } catch {
       missed();
     } finally {

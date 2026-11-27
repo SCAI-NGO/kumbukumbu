@@ -2,6 +2,7 @@
 // The heartbeat: a network that goes without the browser saying so still shows as offline (fixes of 0.7.0, §3 item 9).
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { startHeartbeat } from "./heartbeat";
+import { useSyncStatus } from "../state/sync";
 import { resetOfflineMode, useOfflineMode } from "./mode";
 
 let visibility: DocumentVisibilityState = "visible";
@@ -9,6 +10,8 @@ const connection = new EventTarget();
 let fetch: ReturnType<typeof vi.fn<(url: string, init: RequestInit) => Promise<Response>>>;
 let failed: ReturnType<typeof vi.fn<() => void>>;
 let reached: ReturnType<typeof vi.fn<() => void>>;
+let lost: ReturnType<typeof vi.fn<() => void>>;
+let drop: ReturnType<typeof vi.fn<() => void>>;
 let stop: () => void;
 
 function show(state: DocumentVisibilityState) {
@@ -25,7 +28,10 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetch);
   failed = vi.fn<() => void>();
   reached = vi.fn<() => void>();
-  useOfflineMode.setState({ failed, reached });
+  lost = vi.fn<() => void>();
+  useOfflineMode.setState({ failed, reached, lost });
+  drop = vi.fn<() => void>();
+  useSyncStatus.setState({ drop });
   stop = startHeartbeat();
 });
 
@@ -36,7 +42,8 @@ afterEach(() => {
   delete (navigator as { connection?: unknown }).connection;
   delete (document as { visibilityState?: unknown }).visibilityState;
   const actual = useOfflineMode.getInitialState();
-  useOfflineMode.setState({ failed: actual.failed, reached: actual.reached });
+  useOfflineMode.setState({ failed: actual.failed, reached: actual.reached, lost: actual.lost });
+  useSyncStatus.setState({ drop: () => {} });
   resetOfflineMode();
 });
 
@@ -82,9 +89,30 @@ describe("the heartbeat", () => {
     // A second ask while the first waits adds no second failure.
     connection.dispatchEvent(new Event("change"));
     await vi.advanceTimersByTimeAsync(1);
-    expect(failed).toHaveBeenCalledTimes(1);
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect(failed).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(reached).not.toHaveBeenCalled();
+  });
+
+  test("a miss takes the socket down and counts every tab's socket down, once until an answer comes again", async () => {
+    // A slow server, up all along: every ask runs into the 5 seconds.
+    const slow = (_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => init.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))));
+    fetch.mockImplementation(slow);
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Asked at 15, 30, 45 and 60 seconds; the first three missed, the fourth still waits.
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(drop).toHaveBeenCalledTimes(1);
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect(failed).toHaveBeenCalledTimes(2);
+    // Answered again: the next miss takes the socket down again.
+    fetch.mockImplementationOnce(() => Promise.resolve(new Response("{}", { status: 200 })));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(reached).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(drop).toHaveBeenCalledTimes(2);
+    expect(lost).toHaveBeenCalledTimes(2);
   });
 
   test("a network error or a gateway's 503 counts as failed", async () => {
@@ -94,7 +122,8 @@ describe("the heartbeat", () => {
     fetch.mockResolvedValueOnce(new Response("down", { status: 503 }));
     connection.dispatchEvent(new Event("change"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(failed).toHaveBeenCalledTimes(2);
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect(failed).toHaveBeenCalledTimes(1);
     expect(reached).not.toHaveBeenCalled();
   });
 
@@ -122,3 +151,33 @@ describe("the heartbeat", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+describe("the heartbeat with the offline mode", () => {
+  test("a slow server that is up switches the app offline at most once in a minute, and it comes back", async () => {
+    const actual = useOfflineMode.getInitialState();
+    useOfflineMode.setState({ failed: actual.failed, reached: actual.reached, lost: actual.lost });
+    // The socket: up, and once taken down it opens again a second later, as the server is there.
+    useOfflineMode.getState().socket(true);
+    let drops = 0;
+    useSyncStatus.setState({
+      drop: () => {
+        drops++;
+        useOfflineMode.getState().socket(false);
+        setTimeout(() => useOfflineMode.getState().socket(true), 1_000);
+      },
+    });
+    const switches: boolean[] = [];
+    const unsubscribe = useOfflineMode.subscribe((s, before) => {
+      if (s.offline !== before.offline) switches.push(s.offline);
+    });
+    fetch.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => init.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")))),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    unsubscribe();
+    expect(drops).toBe(1);
+    expect(switches).toEqual([true, false]);
+  });
+});
+
