@@ -281,8 +281,7 @@ describe("contact", () => {
     expect(mirror.choice).toMatchObject(left);
     expect(mirror.choice.kept).not.toHaveProperty(team.id);
     expect(mirror.choice.opened).not.toHaveProperty(team.id);
-    await delivered();
-    expect(other.choice).toMatchObject(left);
+    await vi.waitFor(() => expect(other.choice).toMatchObject(left), { timeout: 5000 });
     mirror.lock();
     other.lock();
     const again = (await copies.unlockOffline(mirror.header, signIn.password))!;
