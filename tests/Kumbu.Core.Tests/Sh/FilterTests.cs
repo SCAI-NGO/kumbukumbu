@@ -91,6 +91,22 @@ public class FilterTests
     [InlineData("sort -rn /W/unsorted.md", "10 ten\n9 nine\nB\nb\nb\na\n-1 minus")]
     [InlineData("ls /W | sort -r | head -2", "words.md\nunsorted.md")]
     public async Task Sort(string line, string expected) => Assert.Equal(expected, await Ok(line));
+
+    [Fact]
+    public async Task Head_tail_and_sort_mark_a_note_another_user_wrote_last_as_cat_does()
+    {
+        // As Alice in her shared Garten: Carol wrote plan.md last, Alice's agent beet.md.
+        var alice = TestShell.Of(SharedVaults.SharedGarten(asMember: false));
+
+        foreach (var command in (string[])["head", "tail", "sort"])
+        {
+            var marked = await alice.RunAsync($"{command} /Garten/plan.md", CancellationToken.None);
+            Assert.Equal($"[/Garten/plan.md: {WriterMarks.Mark}]\nBeete planen", marked.Output);
+            Assert.Equal("Beete gießen", (await alice.RunAsync($"{command} /Garten/beet.md", CancellationToken.None)).Output);
+        }
+
+        Assert.Equal($"[/Garten/plan.md: {WriterMarks.Mark}]\nBeete planen", (await alice.RunAsync("cat /Garten/plan.md | head -n 1", CancellationToken.None)).Output);
+    }
 }
 
 public class TextOrderTests

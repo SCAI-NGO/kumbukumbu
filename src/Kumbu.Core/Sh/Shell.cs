@@ -83,10 +83,10 @@ public sealed class Shell
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
     private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, ICallerZone zone, IAttachmentPixels? pixels, bool live = true, WriterMarks? marks = null) =>
     [
-        new Ls(notes), new Cat(notes, pixels, marks), new OutlineCommand(notes), new Rg(notes, live ? pixels : null, marks),
+        new Ls(notes), new Cat(notes, pixels, marks), new OutlineCommand(notes, marks), new Rg(notes, live ? pixels : null, marks),
         new LinksCommand(notes), new Backlinks(notes), new GraphCommand(notes), new TagsCommand(notes), new BoardCommand(notes, now),
         new CalendarCommand(notes, now, zone),
-        new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
+        new Head(notes, marks), new Tail(notes, marks), new Wc(notes), new Sort(notes, marks),
     ];
 
     public async Task<ShellResult> RunAsync(string commandLine, CancellationToken ct)

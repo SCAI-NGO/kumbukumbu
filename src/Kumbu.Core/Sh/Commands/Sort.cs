@@ -5,7 +5,7 @@ using Kumbu.Core.Notes;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed partial class Sort(INoteReader notes) : ICommand
+public sealed partial class Sort(INoteReader notes, WriterMarks? marks = null) : ICommand
 {
     private static readonly Option[] Spec =
     [
@@ -38,7 +38,7 @@ public sealed partial class Sort(INoteReader notes) : ICommand
     {
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
 
-        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"));
+        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"), marks);
         if (text.IsError) return text;
 
         var keyComparer = options.Has("numeric-sort")
@@ -55,7 +55,7 @@ public sealed partial class Sort(INoteReader notes) : ICommand
         }
 
         if (options.Has("reverse")) sorted.Reverse();
-        return ShellResult.Ok(Lines.Join(sorted));
+        return ShellResult.Ok(Lines.Join(sorted)) with { Notice = text.Notice };
     }
 
     private static double LeadingNumber(string line)

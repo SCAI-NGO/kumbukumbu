@@ -94,4 +94,13 @@ public class SectionCommandsTests
     [InlineData("cat \"/W/My Note.md#Nope\"", "cat: /W/My Note.md#Nope: no such section ('outline \"/W/My Note.md\"' lists them)")]
     [InlineData("rg x /W/plan.md#Goals", "rg: /W/plan.md#Goals: rg searches whole notes; for one section use: cat \"/W/plan.md#Goals\" | rg …")]
     public async Task SectionErrors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));
+
+    [Fact]
+    public async Task Outline_marks_a_note_another_user_wrote_last()
+    {
+        var alice = TestShell.Of(SharedVaults.SharedGarten(asMember: false));
+
+        Assert.StartsWith($"[/Garten/plan.md: {WriterMarks.Mark}]\n/Garten/plan.md: no headings", (await alice.RunAsync("outline /Garten/plan.md", CancellationToken.None)).Output);
+        Assert.StartsWith("/Garten/beet.md: no headings", (await alice.RunAsync("outline /Garten/beet.md", CancellationToken.None)).Output);
+    }
 }

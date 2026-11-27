@@ -3,7 +3,7 @@ using Kumbu.Core.Notes;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class Head(INoteReader notes) : ICommand
+public sealed class Head(INoteReader notes, WriterMarks? marks = null) : ICommand
 {
     private static readonly Option[] Spec = [new('n', "lines", TakesValue: true), new(null, "version", TakesValue: true)];
 
@@ -35,9 +35,9 @@ public sealed class Head(INoteReader notes) : ICommand
             return ShellResult.Error($"head: invalid number of lines: '{value}'");
         }
 
-        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"));
+        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"), marks);
         if (text.IsError) return text;
 
-        return ShellResult.Ok(Lines.Join(Lines.Split(text.Output).Take(count)));
+        return ShellResult.Ok(Lines.Join(Lines.Split(text.Output).Take(count))) with { Notice = text.Notice };
     }
 }

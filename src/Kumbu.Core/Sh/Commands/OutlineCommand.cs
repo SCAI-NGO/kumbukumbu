@@ -5,7 +5,7 @@ using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class OutlineCommand(INoteReader notes) : ICommand
+public sealed class OutlineCommand(INoteReader notes, WriterMarks? marks = null) : ICommand
 {
     public string Name => "outline";
 
@@ -41,7 +41,8 @@ public sealed class OutlineCommand(INoteReader notes) : ICommand
         var note = version is null
             ? await CommandArgs.ReadNoteAsync(Name, notes, path, ct)
             : await CommandArgs.ReadVersionAsync(Name, notes, path, version, ct);
-        return note.IsError ? note : note with { Output = Render(path, note.Output) };
+        if (note.IsError) return note;
+        return note with { Output = Render(path, note.Output), Notice = version is null && marks is not null ? await marks.NoticeAsync([path], ct) : null };
     }
 
     /// <summary>The outline as the command prints it; also what a too long <c>cat</c> returns.</summary>
