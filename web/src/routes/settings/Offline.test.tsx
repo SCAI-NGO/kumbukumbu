@@ -5,7 +5,7 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useOfflineCopy } from "../../offline/copy";
-import { lockCopy, useOfflineMode } from "../../offline/mode";
+import { lockCopy, useOfflineMode, wipeCopy } from "../../offline/mode";
 import { turnOff } from "../../offline/turnOn";
 import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
@@ -69,9 +69,10 @@ afterEach(async () => {
   useEditor.getState().reset();
 });
 
-async function turnedOn(overrides: Parameters<typeof api>[0] = {}, queryClient?: QueryClient) {
+async function turnedOn(overrides: Parameters<typeof api>[0] = {}, queryClient?: QueryClient, onRouter?: (router: ReturnType<typeof renderApp>) => void) {
   const fake = api(overrides);
-  renderApp("/settings/offline", queryClient);
+  const router = renderApp("/settings/offline", queryClient);
+  onRouter?.(router);
   await userEvent.click(await screen.findByRole("switch", { name: "Keep my notes on this device" }));
   const dialog = screen.getByRole("alertdialog", { name: "Keep your notes on this device" });
   await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
@@ -366,5 +367,32 @@ describe("Settings: Offline", () => {
     await waitFor(() => expect(useOfflineCopy.getState().header).toBeNull());
     expect(contacted).toBe(true);
     expect(calls(fake, "DELETE /api/account/mirror-slots/s1")).toHaveLength(1);
+  });
+  it("re-encrypting with a copy here keeps the session and the new recovery key on screen, and removes the copy", { timeout: 20_000 }, async () => {
+    // Re-encrypting removes every slot, this one too: its next contact answers that it is gone.
+    let reencrypted = false;
+    let router!: ReturnType<typeof renderApp>;
+    await turnedOn({
+      "POST /api/account/reencrypt": () => ((reencrypted = true), json(200, { recoveryKey: "WXYZ-2345-6789-ABCD" })),
+      "POST /api/account/mirror-slots/contact": () => (reencrypted
+        ? json(404, { error: "This offline copy was removed.", code: "mirror-wipe" })
+        : json(200, { id: "s1", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] })),
+    }, undefined, (r) => (router = r));
+    await router.navigate("/settings/security");
+    const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
+    await userEvent.type(within(part).getByLabelText("Current password"), "my password");
+    await userEvent.click(within(part).getByRole("button", { name: "Re-encrypt my vaults" }));
+    expect(await within(part).findByText("WXYZ-2345-6789-ABCD")).toBeInTheDocument();
+    await waitFor(() => expect(useOfflineCopy.getState().header).toBeNull());
+    expect(useSession.getState().user).not.toBeNull();
+    expect(router.state.location.pathname).toBe("/settings/security");
+    expect(within(part).getByText("WXYZ-2345-6789-ABCD")).toBeInTheDocument();
+    // Once the key was seen, a copy found gone ends the session in the tab again.
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+    await userEvent.click(within(part).getByRole("button", { name: "Copy" }));
+    await userEvent.click(within(part).getByLabelText(/I have stored my recovery key/));
+    await userEvent.click(within(part).getByRole("button", { name: "Continue" }));
+    await wipeCopy(null);
+    expect(useSession.getState().user).toBeNull();
   });
 });

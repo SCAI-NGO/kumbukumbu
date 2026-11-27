@@ -135,13 +135,29 @@ export function onContacted(fn: (mirror: SealedMirror) => void): () => void {
 let copies: Promise<MirrorCopies> | null = null;
 export const mirrorCopies = () => (copies ??= browserPorts().then((p) => new MirrorCopies(p)));
 
+let sessionKept = 0;
+
+/**
+ * While held, a copy found gone leaves this tab's session as it is: this session's own re-encryption removes every
+ * slot, this browser's too, and keeps the session, whose new recovery key is on screen until it is seen. Answers the
+ * release.
+ */
+export function keepSessionThroughWipe(): () => void {
+  sessionKept++;
+  let released = false;
+  return () => {
+    if (!released) sessionKept--;
+    released = true;
+  };
+}
+
 /** The copy went: this tab forgets it, and the sign-in page says so. */
 function wiped() {
   idle?.stop();
   idle = null;
   useOfflineCopy.getState().mirror?.lock();
   useOfflineCopy.getState().clear();
-  useSession.getState().end(WIPED);
+  if (sessionKept === 0) useSession.getState().end(WIPED);
 }
 
 const beforeLock = new Set<() => void | Promise<void>>();

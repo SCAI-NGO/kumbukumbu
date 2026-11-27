@@ -11,7 +11,7 @@ import { RecoveryKeyReveal } from "../../components/RecoveryKeyReveal";
 import { useMarkDiscreet } from "../../discreet/api";
 import SetPinDialog from "../../discreet/SetPinDialog";
 import { useDiscreet } from "../../discreet/state";
-import { contact } from "../../offline/mode";
+import { contact, keepSessionThroughWipe } from "../../offline/mode";
 import { markPasswordChanged } from "../../offline/PasswordChangedCopies";
 import { useSession } from "../../state/session";
 import { Done, Section } from "./Section";
@@ -234,10 +234,23 @@ function ReencryptSection() {
   // As for a new recovery key: the key lives in component state only, until the reveal is done.
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // The copy here goes with every slot, at this tab's contact or the socket's frame, maybe before the answer: the
+  // session stays, and with it the reveal, until the new key was seen.
+  const sessionKept = useRef<(() => void) | null>(null);
+  const letSessionGo = () => {
+    sessionKept.current?.();
+    sessionKept.current = null;
+  };
+  useEffect(() => letSessionGo, []);
   const reencrypt = useMutation({
     mutationFn: () => call(api.POST("/api/account/reencrypt", { body: { password } })),
     // The result carries the new recovery key: never in the client-wide mutation cache.
     gcTime: 0,
+    onMutate: () => {
+      letSessionGo();
+      sessionKept.current = keepSessionThroughWipe();
+    },
+    onError: letSessionGo,
     onSuccess: (view) => {
       setPassword("");
       setDone(false);
@@ -262,6 +275,7 @@ function ReencryptSection() {
             reencrypt.reset();
             setRecoveryKey(null);
             setDone(true);
+            letSessionGo();
           }}
         />
       ) : (
