@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useBlocker, type BlockerFunction, type Location } from "react-router-dom";
 import { versionOf } from "eidolon-core/engine/version";
 import { api, HttpError, isRefusal } from "../api/client";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { besideOf, folderOf, inVault, titleOf, vaultOf } from "../api/paths";
 import { goneVault, useDiscreet } from "../discreet/state";
-import { createOffline, offlineWrites, useOfflineDraft } from "../offline/writing";
+import { LeaveDialog } from "../components/shownOnce";
+import { createOffline, offlineWrites, useNotKeptHere, useOfflineDraft } from "../offline/writing";
 import { topDialog } from "../hooks/useDialog";
 import { PaneSide, useOpenNote } from "../shell/openInPane";
 import { useEditor, type Pane, type Side } from "../state/editor";
@@ -176,6 +177,7 @@ export default function MarkdownEditor({
   const templates = useEditor((s) => s.templates);
   // Why a template's properties weren't added, until the list is opened again.
   const [templateHint, setTemplateHint] = useState<string | null>(null);
+  const discardId = useId();
   useEffect(() => () => useEditor.getState().setTemplates(false), []);
   // However the list opens, from the toolbar or the palette.
   useEffect(() => {
@@ -338,14 +340,28 @@ export default function MarkdownEditor({
     [path, side, unresolved, stop],
   );
   const blocker = useBlocker(shouldBlock);
+  // Offline in a vault this device doesn't keep, a save has nowhere to go: leaving asks to discard the text or stay.
+  const notKept = useNotKeptHere(path);
+  const [discarding, setDiscarding] = useState(false);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
     void flush().then((done) => {
-      if (!done) return blocker.reset();
+      if (!done) return notKept ? setDiscarding(true) : blocker.reset();
       blocker.proceed();
       if (held.current) useEditor.getState().setPane(side, held.current);
     });
-  }, [blocker, flush, side]);
+  }, [blocker, flush, side, notKept]);
+  const stay = () => {
+    setDiscarding(false);
+    blocker.reset?.();
+  };
+  const discard = () => {
+    // Nothing is saved from here on, also not as the editor goes.
+    stop();
+    setDiscarding(false);
+    blocker.proceed?.();
+    if (held.current) useEditor.getState().setPane(side, held.current);
+  };
 
   const chooseKeepMine = () => {
     setDiff(false);
@@ -420,6 +436,16 @@ export default function MarkdownEditor({
         {templateHint && <p className="mx-3 mb-2 rounded-[12px] border border-line bg-surface-2 px-3.5 py-2 text-sm text-text">{templateHint}</p>}
       </div>
       {templates && <TemplateList path={path} textarea={textarea} onChange={change} onHint={setTemplateHint} />}
+      {discarding && (
+        <LeaveDialog
+          id={discardId}
+          title="Discard what isn't saved?"
+          text={`${vaultOf(path)} isn't kept on this device, so this text can't be saved until you're online.`}
+          leaveLabel="Discard"
+          onStay={stay}
+          onLeave={discard}
+        />
+      )}
       <MarkdownToolbar textarea={textarea} onChange={change} onDone={() => void useEditor.getState().endWrite()} onTemplates={toggleTemplates} templatesOpen={templates} />
     </>
   );

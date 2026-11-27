@@ -16,6 +16,7 @@ import { goneVault, useDiscreet } from "../discreet/state";
 import { flaggable } from "../flags/FlagMenu";
 import DuplicateNotice from "../note/DuplicateNotice";
 import { parseProperties, splitFrontmatter } from "../note/properties";
+import { useNotKeptHere } from "../offline/writing";
 import { staleNotes } from "../palette/rows";
 import { previewSide, useEditor } from "../state/editor";
 import { useMarking } from "./ConfirmMark";
@@ -105,6 +106,9 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
   const removeDate = useRemoveFromCalendar(copied.say);
   const switchTask = useTaskSwitch(copied.say);
   const noteChanges = !!path && mayChange(noteLevel, path);
+  // Offline in a vault this device doesn't keep, every change needs a connection: dimmed, with the reason.
+  const notKept = useNotKeptHere(path);
+  const needing = (items: MenuItem[]) => (notKept ? items.map((item) => ({ ...item, needsConnection: true })) : items);
   // The note's properties show in a box with + Add property when it has keys to show; without (no frontmatter, an
   // empty one, or one that can't be read) the note's ⋯ offers it.
   const shownFrontmatter = noteText === undefined ? undefined : splitFrontmatter(noteText).frontmatter;
@@ -151,7 +155,7 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
           : []),
         ...publishingActions,
         ...(noteChanges
-          ? [
+          ? needing([
               // Not while it is being named from its heading: a name given by hand must not lose that race. No copy of
               // an archived note: it would be archived too.
               // Offline, the copy can make, change and trash notes, nothing else (offline mode design §3, §4.9).
@@ -165,7 +169,7 @@ export function useNoteActions(path: string | null, shell: NoteActionsShell): { 
                     ...calendarItems(path, dated, shell.onDate, removeDate, switchTask),
                   ]),
               ...(boxless && mode === "read" && !preview ? [{ label: "Add property…", icon: ListPlus, onSelect: () => useEditor.getState().setNoteTool("addProperty") }] : []),
-            ]
+            ])
           : []),
       ]
     : [];

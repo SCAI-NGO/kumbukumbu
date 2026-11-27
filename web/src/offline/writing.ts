@@ -160,6 +160,15 @@ export function useOfflineDraft(path: string, editor: OpenEditor & { flush(): Pr
 }
 
 /**
+ * Whether the note at `path` is in a vault this device doesn't keep, while offline writes are on: writing there needs a
+ * connection, and its writing actions are dimmed (offline mode design §3a).
+ */
+export function useNotKeptHere(path: string | null): boolean {
+  const on = useSyncExternalStore((fn) => (switched.add(fn), () => switched.delete(fn)), offlineWrites);
+  return on !== null && path !== null && on.vaultFor(path) === null;
+}
+
+/**
  * Saves what the open editors hold unsaved into the copy: before it locks (idle, signing out), which ends an offline
  * unlock like a session (§3a). A save that fails or meets a conflict leaves the text in its editor.
  */

@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useOfflineMode } from "../offline/mode";
+import { setOfflineWrites } from "../offline/writing";
 import { routes } from "../router";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -1457,5 +1459,64 @@ describe("Insert template", () => {
     await palette();
     await wait(50);
     expect(screen.queryByRole("option", { name: "Insert template, plan" })).toBeNull();
+  });
+});
+
+describe("Offline in a vault this device doesn't keep", () => {
+  afterEach(() => {
+    setOfflineWrites(null);
+    useOfflineMode.setState({ offline: false });
+  });
+
+  /** The connection goes: offline writes on, with no copy of Work on this device. */
+  const goOffline = () =>
+    act(() => {
+      setOfflineWrites({ vaultFor: () => null, written() {} });
+      useOfflineMode.setState({ offline: true });
+    });
+
+  it("dims Write and the note's writing actions with Needs a connection, and the note stays readable", async () => {
+    editorApi();
+    renderApp(planUrl);
+    await screen.findByRole("button", { name: "Write" });
+    expect(screen.getByRole("button", { name: "Write" })).toBeEnabled();
+    goOffline();
+    const write = screen.getByRole("button", { name: "Write" });
+    expect(write).toBeDisabled();
+    expect(write).toHaveAttribute("title", "Needs a connection");
+    const bar = screen.getByRole("group", { name: "This note" });
+    for (const name of ["Rename or move", "Delete note"]) {
+      expect(within(bar).getByRole("button", { name })).toBeDisabled();
+      expect(within(bar).getByRole("button", { name })).toHaveAttribute("title", "Needs a connection");
+    }
+    expect(screen.getByRole("checkbox", { name: /write the roadmap/ })).toBeDisabled();
+    expect(screen.getByText("write the roadmap")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    const item = screen.getByRole("menuitem", { name: /^Delete note/ });
+    expect(item).toBeDisabled();
+    expect(item).toHaveTextContent("Needs a connection");
+    // Reading stays: what the copy can show is offered as before.
+    expect(screen.getByRole("menuitem", { name: /^Find in note/ })).toBeEnabled();
+  });
+
+  it("keeps text written when the connection went, and leaving asks Discard or Stay", async () => {
+    editorApi();
+    const { u, router } = await openInWrite();
+    await u.type(editorBox(), " mine");
+    goOffline();
+    await wait(1000);
+    expect(editorBox()).toHaveValue(`${source} mine`);
+
+    await navigateAway(router, "/notes/Work/projects/roadmap.md");
+    const asking = await screen.findByRole("alertdialog");
+    await u.click(within(asking).getByRole("button", { name: "Stay" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(router.state.location.pathname).toBe(planUrl);
+    expect(editorBox()).toHaveValue(`${source} mine`);
+
+    await navigateAway(router, "/notes/Work/projects/roadmap.md");
+    await u.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/projects/roadmap.md"));
+    expect(await screen.findByText("Roadmap text.")).toBeInTheDocument();
   });
 });

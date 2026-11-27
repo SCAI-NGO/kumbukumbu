@@ -31,6 +31,7 @@ import InstallHint from "../update/InstallHint";
 import OfflineInvite from "../offline/OfflineInvite";
 import PasswordChangedCopies from "../offline/PasswordChangedCopies";
 import OfflineBar from "../offline/OfflineBar";
+import { NEEDS_CONNECTION } from "../offline/mode";
 import UpdateBar from "../update/UpdateBar";
 import { movedPath, useEditor, type Side } from "../state/editor";
 import { useSession } from "../state/session";
@@ -443,7 +444,7 @@ export default function MobileShell() {
 
   // A note the caller can't change (any more: her role was lowered) is only read (`useNoteAccess`; each pane ends Write
   // mode in it). The top bar's Write is the focused pane's, the split view's start the left one's.
-  const { held, readOnly: readOnlyNote } = useNoteAccess(focusedPath);
+  const { held, readOnly: readOnlyNote, needsConnection } = useNoteAccess(focusedPath);
   const leftAccess = useNoteAccess(path);
   const leftRenaming = useEditor((s) => !!path && s.renaming.includes(path));
   // Nothing of a note on its way out with its vault hidden again, a refusal's sentence naming it neither.
@@ -470,7 +471,7 @@ export default function MobileShell() {
     focus("left");
     void openNote(path, "read", "right");
     navigate(paneUrl(path, path));
-    if (!leftAccess.readOnly && !leftRenaming && mode !== "write") startWrite();
+    if (!leftAccess.readOnly && !leftAccess.needsConnection && !leftRenaming && mode !== "write") startWrite();
   };
 
   // Ctrl+Alt+← / → focus the left or the right pane, and the focus goes into it: its editor where it writes. Ctrl on a
@@ -544,8 +545,8 @@ export default function MobileShell() {
       {/* No Write mode while the note is being named: a save would make it again at its old path. */}
       <TopBar
         path={shownNote}
-        writable={!readOnlyNote && !renaming}
-        refusal={refusal}
+        writable={!readOnlyNote && !renaming && !needsConnection}
+        refusal={needsConnection ? NEEDS_CONNECTION : refusal}
         sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null}
         sidePanel={sidePanel ? { expanded: !panelCollapsed, toggle: toggleSidePanel } : null}
         graph={

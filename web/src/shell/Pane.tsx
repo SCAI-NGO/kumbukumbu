@@ -5,6 +5,7 @@ import { titleOf, vaultOf, type NoteAt } from "../api/paths";
 import { NO_SUCH_NOTE } from "../discreet/errorText";
 import { useDiscreet, useGoneWithVaults } from "../discreet/state";
 import NoteView from "../note/NoteView";
+import { useNotKeptHere } from "../offline/writing";
 import { previewSide, useEditor, type Side } from "../state/editor";
 import NoteBar from "./NoteBar";
 import { PaneSide, useOpenNote } from "./openInPane";
@@ -13,7 +14,8 @@ import { PaneSide, useOpenNote } from "./openInPane";
  * Whether the note at `path` may be written here: `readOnly` once the vault list says it can't be changed, or while a
  * save the server refused for the level holds (`held`, its sentence) until the vault list read after it is in (collab
  * design §9.3); not for a vault the list doesn't name yet (renamed in another tab, the note moves to the new name before
- * the list read again is in). `changes`: Rename and Delete are offered.
+ * the list read again is in). `changes`: Rename and Delete are offered. `needsConnection`: offline, in a vault this
+ * device doesn't keep; Write and the writing actions are dimmed, and Write mode isn't ended (what is written stays).
  */
 export function useNoteAccess(path: string | null) {
   const vaults = useVaults();
@@ -21,7 +23,7 @@ export function useNoteAccess(path: string | null) {
   const refused = useEditor((s) => s.refused);
   const held = path && refused && refused.path === path && vaults.dataUpdatedAt <= refused.at ? refusalSentence(refused.code, vaultOf(path)) : null;
   const listed = !!path && !!vaults.data?.some((v) => v.name === vaultOf(path));
-  return { held, readOnly: !!held || (listed && !mayChange(level, path!)), changes: !!path && mayChange(level, path) };
+  return { held, readOnly: !!held || (listed && !mayChange(level, path!)), changes: !!path && mayChange(level, path), needsConnection: useNotKeptHere(path) };
 }
 
 /** A link's note and where in it, as the links of `MarkdownView` carry them (`data-note-path`, `data-note-at`). */
@@ -69,7 +71,7 @@ export default function Pane({
   const hiding = useDiscreet((s) => s.hiding);
   const focused = useEditor((s) => s.focused === side);
   const preview = useEditor((s) => previewSide(s) === side);
-  const { readOnly, changes } = useNoteAccess(path);
+  const { readOnly, changes, needsConnection } = useNoteAccess(path);
   const renaming = useEditor((s) => s.renaming.includes(path));
   const openNote = useOpenNote();
 
@@ -104,6 +106,7 @@ export default function Pane({
           onDelete={changes ? () => onDelete(path) : null}
           split={onSplit}
           onClose={split ? onClose : null}
+          needsConnection={needsConnection}
         />
       )}
       <NoteView key={path} path={path} panel={panel} dim={dim} clickToWrite={split} />
