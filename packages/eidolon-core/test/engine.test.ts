@@ -373,6 +373,10 @@ describe("review focus", () => {
     expect(h.server.notes.get("a.md")!.content).toBe("edited while closed");
     expect(h.server.notes.get("c.md")?.content).toBe("created while closed");
     expect(h.engine.status().mode).not.toBe("offline");
+    // Once one got through, checks ask only for what changed again.
+    h.server.calls.length = 0;
+    await h.engine.check(false);
+    expect(h.server.calls.filter((c) => c.method === "versions").map((c) => c.args[0])).toEqual([h.state.state.cursor]);
   });
 });
 
