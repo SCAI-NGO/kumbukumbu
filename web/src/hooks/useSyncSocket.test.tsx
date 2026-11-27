@@ -419,10 +419,10 @@ describe("a quiet network loss", () => {
         return new Promise((resolve) => setTimeout(resolve, 0));
       });
       expect(asked).toHaveBeenCalledWith("/api/version", expect.anything());
-      // A failed request alone leaves the app online while the socket counts as up.
-      expect(useOfflineMode.getState().offline).toBe(false);
+      // On a dead link the socket's close may come only after the browser's closing handshake gives up: the app
+      // doesn't wait for it.
       expect(last().closed).toBe(true);
-      last().drop();
+      expect(useSyncStatus.getState().connected).toBe(false);
       await waitFor(() => expect(useOfflineMode.getState().offline).toBe(true));
     } finally {
       stop();
