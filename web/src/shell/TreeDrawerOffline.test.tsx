@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import { act, cleanup, screen, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../api/client";
@@ -91,6 +91,18 @@ describe("the tree offline", () => {
     expect(await within(drawer()).findByText("Home is not kept on this device.")).toBeInTheDocument();
     expect(within(drawer()).queryByText("Drafts")).toBeNull();
     expect(within(drawer()).queryByText("inbox")).toBeNull();
+  });
+
+  it("online, keeps the entries read before when the tree can't be read again", async () => {
+    api({ name: "Work", notes: 2, embeddings: "internal" });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/notes/Work/inbox.md", queryClient);
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    vi.stubGlobal("fetch", () => Promise.resolve(json(404, { error: "There is no vault Work." })));
+    await act(() => queryClient.invalidateQueries({ queryKey: ["tree"] }));
+    await waitFor(() => expect(queryClient.getQueryState(["tree", "Work"])?.status).toBe("error"));
+    expect(within(drawer()).getByText("Drafts")).toBeInTheDocument();
   });
 
   it("shows a kept vault's tree as before", async () => {
