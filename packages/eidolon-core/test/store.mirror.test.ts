@@ -581,6 +581,50 @@ describe("tabs", () => {
     expect(b.locked).toBe(true);
     expect(purged).toBeNull();
   });
+
+  const metaRecords = (browser: FakeBrowser) => [...browser.storage.records.keys()].filter((k) => /^c\/[^/]+\/m\//.test(k));
+
+  test("setMeta writes nothing for a vault purged meanwhile in the same tab", async () => {
+    const { browser, mirror } = await setup([work]);
+    const vault = await mirror.adopt(work.id);
+    await Promise.allSettled([vault.setMeta({ name: "Home" }), mirror.purge(work.id)]);
+    expect(metaRecords(browser)).toEqual([]);
+  });
+
+  test("setMeta writes nothing for a vault another tab purged before this one heard", async () => {
+    const { browser, copies, mirror } = await setup([work]);
+    const vault = await mirror.adopt(work.id);
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    await delivered();
+    browser.slots.vaults = [];
+    await other.contact();
+    await vault.setMeta({ name: "Home" });
+    await delivered();
+    expect(metaRecords(browser)).toEqual([]);
+    mirror.lock();
+    other.lock();
+    expect((await copies.unlockOffline(mirror.header, signIn.password))!.held()).toEqual([]);
+  });
+
+  test("setMeta waits for the copy's lock, and writes nothing if the vault went while it waited", async () => {
+    const { browser, mirror } = await setup([work]);
+    const vault = await mirror.adopt(work.id);
+    const other = browser.locks.hold(`kumbu-mirror:${mirror.header.copy}`);
+    await other.acquired;
+    const naming = vault.setMeta({ name: "Home" });
+    await delivered();
+    await browser.storage.write({ remove: [vault.metaKey], removePrefix: [vault.dataPrefix] });
+    other.release();
+    await naming;
+    expect(metaRecords(browser)).toEqual([]);
+  });
+
+  test("setMeta still writes a held vault's name", async () => {
+    const { copies, mirror } = await setup([work]);
+    await (await mirror.adopt(work.id)).setMeta({ name: "Home" });
+    mirror.lock();
+    expect((await copies.unlockOffline(mirror.header, signIn.password))!.vault(work.id)?.name).toBe("Home");
+  });
 });
 
 describe("the idle lock", () => {

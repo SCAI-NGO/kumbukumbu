@@ -225,8 +225,13 @@ export class VaultMirror {
 
   async setMeta(change: Partial<Omit<VaultMeta, "id">>): Promise<void> {
     this.assertHeld();
-    this.meta = { ...this.meta, ...change };
-    await this.r.p.storage.write({ put: [await this.r.sealJson(this.keys.meta, this.meta)] });
+    await this.r.p.locks.run(this.r.lockName, async () => {
+      this.assertHeld();
+      // Gone from storage: another tab purged the vault, and this one hasn't heard yet.
+      if ((await this.r.p.storage.get(this.keys.meta)) === null) return;
+      this.meta = { ...this.meta, ...change };
+      await this.r.p.storage.write({ put: [await this.r.sealJson(this.keys.meta, this.meta)] });
+    });
   }
 
   /** Every path the mirror knows, from the inventory or on this device: the tree, before the texts are all here. */
