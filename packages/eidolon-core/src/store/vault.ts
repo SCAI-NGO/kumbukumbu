@@ -461,9 +461,16 @@ export class VaultMirror {
 
   /**
    * The head to write on. One gone since the vault was opened leaves the generations where this tab saw them last,
-   * so a record written before still doesn't match.
+   * so a record written before still doesn't match. Under the lock.
    */
   private async headNow(): Promise<Head> {
+    // Gone from storage, or adopted again since in a new life: this tab hasn't heard yet, and must not write the old
+    // life's head over the new one.
+    const stored = await this.r.openJson<VaultMeta>(this.keys.meta, await this.r.p.storage.get(this.keys.meta));
+    if (stored === null || stored.epoch !== this.meta.epoch) {
+      this.drop();
+      throw new MirrorLockedError();
+    }
     return (await this.readHead()) ?? { ...emptyHead(this.meta.epoch), g: this.lastG };
   }
 

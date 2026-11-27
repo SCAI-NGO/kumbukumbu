@@ -629,6 +629,44 @@ describe("tabs", () => {
     expect(await again.files().read("Plan.md")).toBe("Written after the re-key");
   });
 
+  test("a note written by a tab that hasn't heard the vault was purged is refused, and leaves nothing behind", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    const deaf = { ...browser.tab(), channel: (copy: string) => ({ post: browser.bus.channel(copy).post, listen: () => () => {} }) };
+    const copies = new MirrorCopies(deaf);
+    const mirror = await copies.create(signIn);
+    const vault = await mirror.adopt(work.id);
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    await delivered();
+    browser.slots.vaults = [];
+    await other.contact();
+    await expect(vault.files().writeIf("Stale.md", null, "Written before hearing")).rejects.toThrow(MirrorLockedError);
+    expect([...browser.storage.records.keys()].filter((k) => k.startsWith(vault.dataPrefix))).toEqual([]);
+  });
+
+  test("a note written by a tab that hasn't heard of the vault's new adoption is refused, and the new one's notes stay", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    // This tab hears nothing from the others.
+    const deaf = { ...browser.tab(), channel: (copy: string) => ({ post: browser.bus.channel(copy).post, listen: () => () => {} }) };
+    const copies = new MirrorCopies(deaf);
+    const mirror = await copies.create(signIn);
+    const vault = await mirror.adopt(work.id);
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    await delivered();
+    browser.slots.vaults = [{ ...work, tag: "tag-b" }];
+    await other.contact();
+    await (await other.adopt(work.id)).files().writeIf("Plan.md", null, "Written after the re-key");
+    await expect(vault.files().writeIf("Stale.md", null, "Written before hearing")).rejects.toThrow(MirrorLockedError);
+    expect(() => vault.assertHeld()).toThrow(MirrorLockedError);
+    await delivered();
+    mirror.lock();
+    other.lock();
+    const again = (await copies.unlockOffline(mirror.header, signIn.password))!.vault(work.id)!;
+    expect(again.list().map((e) => e.path)).toEqual(["Plan.md"]);
+    expect(await again.files().read("Plan.md")).toBe("Written after the re-key");
+  });
+
   test("setMeta waits for the copy's lock, and writes nothing if the vault went while it waited", async () => {
     const { browser, mirror } = await setup([work]);
     const vault = await mirror.adopt(work.id);
