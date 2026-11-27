@@ -752,6 +752,100 @@ describe("tabs", () => {
     expect((await copies.unlockOffline(mirror.header, signIn.password))!.vault(work.id)).toBeUndefined();
   });
 
+  test("a tab whose own write found the vault adopted again takes up the new adoption at the next change it hears", async () => {
+    const { browser, copies, mirror } = await setup([work]);
+    await mirror.adopt(work.id);
+    // This tab misses the purge, and hears the rest.
+    const missing = {
+      ...browser.tab(),
+      channel: (copy: string): TabChannel => {
+        const c = browser.bus.channel(copy);
+        return { post: c.post, listen: (fn) => c.listen((m) => { if (m.type !== "purged") fn(m); }) };
+      },
+    };
+    const other = (await new MirrorCopies(missing).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    const old = other.vault(work.id)!;
+    await mirror.purge(work.id, false, false);
+    const fresh = await mirror.adopt(work.id);
+    await expect(old.files().writeIf("Stale.md", null, "Written before hearing")).rejects.toThrow(MirrorLockedError);
+    await fresh.files().writeIf("Plan.md", null, "Written after the new adoption");
+    await vi.waitFor(() => expect(other.vault(work.id)?.entry("Plan.md")).toBeDefined());
+    expect(other.vault(work.id)).not.toBe(old);
+  });
+
+  test("a copy locked while it hears of a purge leaves no rejection unhandled", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => { rejections.push(e); };
+    process.on("unhandledRejection", onRejection);
+    try {
+      const { browser, copies, mirror } = await setup([work]);
+      await mirror.adopt(work.id);
+      const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+      other.onDrop = () => { other.lock(); return Promise.resolve(); };
+      await mirror.purge(work.id, false, false);
+      await delivered();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(other.locked).toBe(true);
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
+  test("a copy locked during a refresh leaves no rejection unhandled", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => { rejections.push(e); };
+    process.on("unhandledRejection", onRejection);
+    try {
+      const { browser, copies, mirror } = await setup([work]);
+      const vault = await mirror.adopt(work.id);
+      const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+      await delivered();
+      const get = browser.storage.get.bind(browser.storage);
+      let armed = false;
+      browser.storage.get = async (k: string) => {
+        const v = await get(k);
+        if (armed && k === other.vault(work.id)?.metaKey) { armed = false; other.lock(); }
+        return v;
+      };
+      // After this write only the other tab's refresh reads the meta.
+      await vault.files().writeIf("Plan.md", null, "Written in this tab");
+      armed = true;
+      await delivered();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(other.locked).toBe(true);
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
+  test("a copy still open leaves a failure while it handles a message unhidden", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => { rejections.push(e); };
+    process.on("unhandledRejection", onRejection);
+    try {
+      const { browser, copies, mirror } = await setup([work]);
+      const vault = await mirror.adopt(work.id);
+      const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+      await delivered();
+      const get = browser.storage.get.bind(browser.storage);
+      let armed = false;
+      browser.storage.get = async (k: string) => {
+        if (armed && k === other.vault(work.id)?.metaKey) { armed = false; throw new Error("The disk is full."); }
+        return get(k);
+      };
+      await vault.files().writeIf("Plan.md", null, "Written in this tab");
+      armed = true;
+      await delivered();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(other.locked).toBe(false);
+      expect(rejections.map(String)).toEqual(["Error: The disk is full."]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
   test("setMeta waits for the copy's lock, and writes nothing if the vault went while it waited", async () => {
     const { browser, mirror } = await setup([work]);
     const vault = await mirror.adopt(work.id);

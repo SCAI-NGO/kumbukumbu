@@ -233,7 +233,10 @@ export class SealedMirror {
       const keep = new Set([...mirror.vaults.keys(), ...chosen]);
       if (heldOnly(mirror.chosen, keep) !== mirror.chosen) await mirror.choose((c) => heldOnly(c, keep));
     }
-    mirror.stopListening = r.channel.listen((m) => void mirror.heard(m));
+    // A lock while a message is handled ends that work; nothing is left to report.
+    mirror.stopListening = r.channel.listen((m) => void mirror.heard(m).catch((e: unknown) => {
+      if (!mirror.locked) throw e;
+    }));
     return mirror;
   }
 
@@ -480,6 +483,7 @@ export class SealedMirror {
       await this.reopen(m.vault);
     } else {
       try {
+        vault.assertHeld();
         await vault.refresh(m.paths);
       } catch (e) {
         if (!(e instanceof MirrorLockedError) || this.locked) throw e;
