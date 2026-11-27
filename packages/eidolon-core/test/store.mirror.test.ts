@@ -8,6 +8,7 @@ import { versionOf } from "../src/engine/version";
 import type { OfflineChoice } from "../src/store/choice";
 import { MirrorCopies, IDLE_MS, type SealedMirror } from "../src/store/mirror";
 import { IdleLock } from "../src/store/idle";
+import type { TabChannel } from "../src/store/ports";
 import { EditorDrafts } from "../src/store/writing";
 import { MirrorLockedError, SMALL_ATTACHMENT_BYTES, type VaultMirror } from "../src/store/vault";
 import { FakeServer } from "./fakes/fakeServer";
@@ -665,6 +666,29 @@ describe("tabs", () => {
     const again = (await copies.unlockOffline(mirror.header, signIn.password))!.vault(work.id)!;
     expect(again.list().map((e) => e.path)).toEqual(["Plan.md"]);
     expect(await again.files().read("Plan.md")).toBe("Written after the re-key");
+  });
+
+  test("a tab that missed a vault's purge takes up its new adoption when told of a change in it", async () => {
+    const { browser, copies, mirror } = await setup([work]);
+    await mirror.adopt(work.id);
+    // This tab misses the purge, and hears the rest.
+    const missing = {
+      ...browser.tab(),
+      channel: (copy: string): TabChannel => {
+        const c = browser.bus.channel(copy);
+        return { post: c.post, listen: (fn) => c.listen((m) => { if (m.type !== "purged") fn(m); }) };
+      },
+    };
+    const other = (await new MirrorCopies(missing).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    const old = other.vault(work.id)!;
+    const dropped: string[] = [];
+    other.onDrop = (id) => { dropped.push(id); return Promise.resolve(); };
+    await mirror.purge(work.id, false, false);
+    await (await mirror.adopt(work.id)).files().writeIf("Plan.md", null, "Written after the new adoption");
+    await vi.waitFor(() => expect(other.vault(work.id)?.entry("Plan.md")).toBeDefined());
+    expect(other.vault(work.id)).not.toBe(old);
+    expect(() => old.assertHeld()).toThrow(MirrorLockedError);
+    expect(dropped).toEqual([work.id]);
   });
 
   test("setMeta waits for the copy's lock, and writes nothing if the vault went while it waited", async () => {

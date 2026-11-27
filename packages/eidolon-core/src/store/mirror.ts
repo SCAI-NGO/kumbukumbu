@@ -474,7 +474,15 @@ export class SealedMirror {
       // Adopted in another tab.
       await this.reopen(m.vault);
     } else {
-      await vault.refresh(m.paths);
+      try {
+        await vault.refresh(m.paths);
+      } catch (e) {
+        if (!(e instanceof MirrorLockedError) || this.locked) throw e;
+        // Purged and adopted again in another tab, and this one missed the purge: it takes up the new life.
+        if (this.vaults.get(m.vault) === vault) this.vaults.delete(m.vault);
+        await this.onDrop?.(m.vault);
+        await this.reopen(m.vault);
+      }
     }
     this.onChanged?.(m.vault, m.paths);
   }
