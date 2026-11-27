@@ -139,8 +139,8 @@ let sessionKept = 0;
 
 /**
  * While held, a copy found gone leaves this tab's session as it is: this session's own re-encryption removes every
- * slot, this browser's too, and keeps the session, whose new recovery key is on screen until it is seen. Answers the
- * release.
+ * slot, this browser's too, and keeps the session, whose new recovery key is on screen until it is seen. A 401 that
+ * wipes the copy still ends the session: the server's is gone then. Answers the release.
  */
 export function keepSessionThroughWipe(): () => void {
   sessionKept++;
@@ -151,13 +151,16 @@ export function keepSessionThroughWipe(): () => void {
   };
 }
 
-/** The copy went: this tab forgets it, and the sign-in page says so. */
-function wiped() {
+/**
+ * The copy went: this tab forgets it, and the sign-in page says so. `sessionGone`: the server ended the session too,
+ * which no hold keeps.
+ */
+function wiped(sessionGone = false) {
   idle?.stop();
   idle = null;
   useOfflineCopy.getState().mirror?.lock();
   useOfflineCopy.getState().clear();
-  if (sessionKept === 0) useSession.getState().end(WIPED);
+  if (sessionGone || sessionKept === 0) useSession.getState().end(WIPED);
 }
 
 const beforeLock = new Set<() => void | Promise<void>>();
@@ -357,7 +360,7 @@ export async function wipeCopy(token: string | null): Promise<void> {
   const header = useOfflineCopy.getState().header;
   if (token !== (header?.slot.token ?? null)) return;
   useOfflineCopy.getState().mirror?.lock();
-  wiped();
+  wiped(true);
   if (header === null || typeof indexedDB === "undefined") return;
   await (await mirrorCopies()).wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
 }

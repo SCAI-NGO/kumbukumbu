@@ -13,7 +13,7 @@ import { fakeApi, json, user } from "../test/app";
 import { useOfflineCopy } from "./copy";
 import { conflictSentence, offlineSentence } from "./OfflineBar";
 import OfflineBar from "./OfflineBar";
-import { resetOfflineMode, useOfflineMode, WIPED } from "./mode";
+import { keepSessionThroughWipe, resetOfflineMode, useOfflineMode, WIPED } from "./mode";
 
 const header = { copy: "c1", slot: { id: "s1", token: "tok-1" } } as CopyHeader;
 
@@ -84,6 +84,22 @@ describe("the API client", () => {
     expect(fetch.mock.calls[0]![0].headers.get("Kumbu-Mirror")).toBe("tok-1");
     expect(useOfflineCopy.getState().header).toEqual(next);
     expect(useSession.getState().ended).toBe(false);
+  });
+
+  test("a 401 saying mirror-wipe ends the session even while a re-encryption's recovery key is shown", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    useOfflineCopy.getState().set({ ...header }, { lock: vi.fn() } as unknown as SealedMirror);
+    fakeApi({ "GET /api/vaults": () => json(401, { error: "Gone.", code: "mirror-wipe" }) });
+    vi.stubGlobal("indexedDB", undefined);
+    const release = keepSessionThroughWipe();
+    try {
+      await api.GET("/api/vaults").catch(() => {});
+      await vi.waitFor(() => expect(useSession.getState().ended).toBe(true));
+      expect(useSession.getState().user).toBeNull();
+      expect(useSession.getState().notice).toBe(WIPED);
+    } finally {
+      release();
+    }
   });
 
   test("a 401 while uploading changes keeps the place and asks to sign in over the app", async () => {
