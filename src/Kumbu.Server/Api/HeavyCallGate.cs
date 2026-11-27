@@ -18,7 +18,8 @@ public sealed class HeavyCallGate(int perAccount = HeavyCallGate.PerAccount, int
     /// <summary>How many of an account's calls run at once.</summary>
     public const int PerAccount = 1;
 
-    /// <summary>How many calls run at once on the server: half the cores, and at least two, so one account never holds them all.</summary>
+    /// <summary>How many calls run at once on the server: half the cores, and at least two, so one account never holds them all
+    /// (on a server of two cores that is both of them, for the few seconds a call may take).</summary>
     public static int InAll => Math.Max(2, Environment.ProcessorCount / 2);
 
     /// <summary>How long a call waits for its places: long enough for a call ahead of it (well under a second), so that
