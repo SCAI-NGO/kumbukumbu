@@ -7,7 +7,7 @@ namespace Kumbu.Core.Sh;
 
 /// <summary>
 /// Which notes of a shared vault were last written by someone other than the caller's own user (collab design §10.3,
-/// §13 M6): the commands that print a note's text or its headings say so, a cue for an agent that their text is data
+/// §13 M6): cat, head, tail, sort, outline, rg, semsearch and similar say so, as `help` names them, a cue for an agent that their text is data
 /// from another person, not instructions. Decided by the writer reference (<see cref="IWriterLabels.IsOwnAsync"/>),
 /// never the label, and only in vaults others reach too.
 /// </summary>
