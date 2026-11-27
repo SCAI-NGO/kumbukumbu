@@ -314,10 +314,18 @@ describe("a sign-in while another tab removes the copy", () => {
     const header = (await copies.forUser(signIn.userId))!;
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
-    const slow = { ...browser.tab(), crypto: { ...nodeCrypto, kdf: { derive: async (...a: Parameters<typeof fakeKdf.derive>) => { await gate; return fakeKdf.derive(...a); } } } };
+    // What this tab seals, kept as handed over: the password wrap seals the copy's key.
+    const sealed: Uint8Array[] = [];
+    const s = nodeCrypto.subtle;
+    const subtle: typeof s = {
+      importKey: s.importKey.bind(s), deriveKey: s.deriveKey.bind(s), decrypt: s.decrypt.bind(s), sign: s.sign.bind(s),
+      encrypt: (algorithm, key, data) => (sealed.push(data), s.encrypt(algorithm, key, data)),
+    };
+    const kdf = { derive: async (...a: Parameters<typeof fakeKdf.derive>) => { await gate; return fakeKdf.derive(...a); } };
+    const slow = { ...browser.tab(), crypto: { ...nodeCrypto, subtle, kdf } };
     const opening = new MirrorCopies(slow).unlockOnline(header, { username: signIn.username, password: signIn.password, idleMs: IDLE_MS });
     await delivered();
-    return { browser, copies, header, release, opening };
+    return { browser, copies, header, release, opening, sealed };
   }
 
   test("writes no header over a copy another tab removed, and answers wiped", async () => {
@@ -328,6 +336,15 @@ describe("a sign-in while another tab removes the copy", () => {
     expect(await opening).toBe("wiped");
     expect(await copies.headers()).toEqual([]);
     expect([...browser.storage.records.keys()]).toEqual([]);
+  });
+
+  test("answering wiped, it clears the key it was given", async () => {
+    const { copies, header, release, opening, sealed } = await signingIn();
+    await copies.wipe(header.copy);
+    release();
+    expect(await opening).toBe("wiped");
+    expect(sealed.map((b) => b.byteLength)).toEqual([32]);
+    expect([...sealed[0]!].every((b) => b === 0)).toBe(true);
   });
 
   test("the sign-in's header write waits for the copy's lock, and a removal after it still removes the copy", async () => {

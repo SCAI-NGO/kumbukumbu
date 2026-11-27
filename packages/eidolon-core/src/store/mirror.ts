@@ -140,7 +140,10 @@ export class MirrorCopies {
         ...header, login: await loginHash(signIn.username), idleMs: signIn.idleMs,
         password: await wrapWithPassword(this.p.crypto, raw, signIn.password, wrapAad(header.copy)),
       };
-      if (!(await this.rewriteHeader(header))) return "wiped";
+      if (!(await this.rewriteHeader(header))) {
+        raw.fill(0);
+        return "wiped";
+      }
     }
     const mirror = await SealedMirror.unlocked(this.p, header, raw, answer.vaults);
     // The first contact couldn't count them, before the key opened the copy: the device list hears of them now, none
