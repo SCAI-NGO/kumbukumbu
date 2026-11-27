@@ -109,6 +109,35 @@ afterEach(async () => {
   await (await browserPorts()).storage.write({ removePrefix: [""] });
 });
 
+describe("in a second tab", () => {
+  test("a tab holding Alice's copy locks it once the cookie is Bob's, and keeps her waiting change", { timeout: 20_000 }, async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json(201, { id: "s1", token: "tok-a", key, vaults: [home] }))));
+    const copies = new MirrorCopies(await browserPorts());
+    const m = await copies.create({ userId: alice.id, username: "alice", password: "pw", label: "Test", idleMs: 60_000 });
+    const vault = await m.adopt(home.id);
+    await vault.setMeta({ name: "Home" });
+    await vault.files().writeIf("Shopping.md", null, "Milk");
+    m.lock();
+    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    expect(await unlockOffline("alice", "pw")).toBe(true);
+    useSession.getState().signedIn({ user: alice, previousSignInAt: null });
+    await settle();
+    // Bob signed in in another tab: the cookie this tab sends is now his.
+    const asked = kumbuAnswers(bob, [listed("v-work", "Work")]);
+    enginesReconnected();
+    await waitFor(() => expect(useOfflineCopy.getState().mirror).toBeNull());
+    await settle();
+    expect(asked).not.toContain("GET /api/vaults");
+    expect(asked.filter((a) => a.startsWith("PUT") || a.startsWith("DELETE"))).toEqual([]);
+    expect(useSession.getState()).toMatchObject({ user: null, ended: true });
+    const c2 = new MirrorCopies(await browserPorts());
+    const back = (await c2.unlockOffline((await c2.forUsername("alice"))!, "pw"))!;
+    expect({ vaults: back.held().map((v) => v.id), waiting: back.waiting() }).toEqual({ vaults: [home.id], waiting: 1 });
+    back.lock();
+  });
+});
+
 describe("after an offline sign-in", () => {
   test("the engines wait for the session to be read, and run once it is the copy's own user's", async () => {
     await bobsCopy();
