@@ -246,6 +246,45 @@ describe("tabs", () => {
     expect(last(0)?.offline).toBe(false);
   });
 
+  test("after a missed heartbeat, an answer counts again the sockets that stayed open", async () => {
+    const { tabs, last } = await browser(2);
+    tabs[0]!.send({ type: "socket", tab: "tab0", up: true });
+    await vi.advanceTimersByTimeAsync(0);
+    // The visible tab misses one heartbeat, its socket goes and comes back; the leading tab's socket stays open.
+    tabs[1]!.send({ type: "lost" });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: false });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[1]!.send({ type: "reached" });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: true });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[1]!.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    tabs[0]!.send({ type: "failed" });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[0]!.send({ type: "reached" });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(last(0)?.phase).toBe("online");
+  });
+
+  test("an answer after a missed heartbeat doesn't count a socket that closed or a tab that went meanwhile", async () => {
+    const { tabs, last } = await browser(3);
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: true });
+    tabs[2]!.send({ type: "socket", tab: "tab2", up: true });
+    await vi.advanceTimersByTimeAsync(0);
+    tabs[0]!.send({ type: "lost" });
+    tabs[1]!.send({ type: "socket", tab: "tab1", up: false });
+    tabs[2]!.stop();
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    tabs[0]!.send({ type: "reached" });
+    tabs[0]!.send({ type: "socket", tab: "tab0", up: true });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    expect(last(0)?.offline).toBe(false);
+    tabs[0]!.send({ type: "socket", tab: "tab0", up: false });
+    tabs[0]!.send({ type: "failed" });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    expect(last(0)?.offline).toBe(true);
+  });
+
   test("when the leading tab closes, another leads on from the same state", async () => {
     const { tabs, last } = await browser(2);
     tabs[1]!.send({ type: "failed" });

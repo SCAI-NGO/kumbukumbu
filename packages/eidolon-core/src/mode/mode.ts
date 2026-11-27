@@ -37,8 +37,8 @@ export type ModeInput =
   /** A request reached Kumbu² again after a failure. */
   | { type: "reached" }
   /**
-   * The host's heartbeat got no answer: a failed request, and every tab's socket counts as down until one opens again.
-   * A socket in a background tab may not hear of a network gone quietly for minutes.
+   * The host's heartbeat got no answer: a failed request, and every tab's socket counts as down until one opens again
+   * or a request reaches Kumbu². A socket in a background tab may not hear of a network gone quietly for minutes.
    */
   | { type: "lost" }
   /** A tab's sync socket opened or closed. */
@@ -63,6 +63,8 @@ export const initialMode: ModeState = { offline: false, phase: "online", waiting
 export class ModeMachine {
   private state: ModeState;
   private readonly sockets = new Set<string>();
+  /** Sockets a missed heartbeat took out of the count: an answer from Kumbu² counts them again, as they may never close. */
+  private readonly suspended = new Set<string>();
   /** A request failed and none has reached Kumbu² since. */
   private failing = false;
   private sessionLost = false;
@@ -83,12 +85,18 @@ export class ModeMachine {
   apply(input: ModeInput): void {
     switch (input.type) {
       case "failed": this.failing = true; break;
-      case "reached": this.failing = false; break;
+      case "reached":
+        this.failing = false;
+        for (const tab of this.suspended) this.sockets.add(tab);
+        this.suspended.clear();
+        break;
       case "lost":
         this.failing = true;
+        for (const tab of this.sockets) this.suspended.add(tab);
         this.sockets.clear();
         break;
       case "socket":
+        this.suspended.delete(input.tab);
         if (input.up) {
           this.sockets.add(input.tab);
           this.failing = false;
@@ -96,7 +104,10 @@ export class ModeMachine {
           this.sockets.delete(input.tab);
         }
         break;
-      case "gone": this.sockets.delete(input.tab); break;
+      case "gone":
+        this.sockets.delete(input.tab);
+        this.suspended.delete(input.tab);
+        break;
       case "waiting":
         this.state = { ...this.state, waiting: input.count };
         if (this.state.offline) this.peak = Math.max(this.peak, input.count);
