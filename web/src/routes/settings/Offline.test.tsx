@@ -170,6 +170,18 @@ describe("Settings: Offline", () => {
     expect(screen.getByRole("checkbox", { name: "Keep Work on this device" })).toBeInTheDocument();
   });
 
+  it("lists this device as This device once its copy is made", { timeout: 20_000 }, async () => {
+    let made = false;
+    await turnedOn({
+      "GET /api/account/mirror-slots": () => json(200, made ? [thisDevice, phone] : [phone]),
+      "POST /api/account/mirror-slots": () => {
+        made = true;
+        return json(201, { id: "s1", token: "tok", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] });
+      },
+    });
+    expect(await within(screen.getByRole("list", { name: "Devices with a copy" })).findByText("This device")).toBeInTheDocument();
+  });
+
   it("renames a device's copy, this one too, and lists it under the new name", async () => {
     let label = phone.label;
     const fake = api({

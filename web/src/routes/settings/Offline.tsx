@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Settings, Offline (offline mode design §3a): the copy on this device, which vaults it keeps, the attachments and
 // their budget, what is kept offline whole, the browser's storage, and the devices with a copy.
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { attachmentKind, isMarker } from "eidolon-core/engine/paths";
 import { attachmentsUsed, BUDGETS, mirrors } from "eidolon-core/store/choice";
 import type { SealedMirror } from "eidolon-core/store/mirror";
@@ -108,7 +108,15 @@ function RemoveSection({ mirror }: { mirror: SealedMirror | null }) {
 
 function TurnOnDialog({ user, onClose }: { user: { id: string; username: string }; onClose(): void }) {
   const [password, setPassword] = useState("");
-  const on = useMutation({ mutationFn: () => turnOn(user, password), onSuccess: onClose });
+  const queryClient = useQueryClient();
+  const on = useMutation({
+    mutationFn: () => turnOn(user, password),
+    // The list was read before this device had a copy: read again, it names this one too.
+    onSuccess: () => {
+      onClose();
+      return queryClient.invalidateQueries({ queryKey: ["offline-devices"] });
+    },
+  });
   return (
     <ConfirmTyped
       title="Keep your notes on this device"
