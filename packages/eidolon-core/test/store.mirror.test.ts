@@ -336,6 +336,17 @@ describe("contact", () => {
     expect(again.choice).toMatchObject({ kept: { [team.id]: ["Plans"] }, opened: { [team.id]: { "Plans/b.pdf": 2 } } });
   });
 
+  test("an online unlock drops the kept folders of a chosen vault the listing no longer has", async () => {
+    const { browser, copies, mirror } = await setup();
+    await mirror.adopt(work.id);
+    await mirror.choose((c): OfflineChoice => ({ ...c, all: false, vaults: [work.id, team.id], kept: { [work.id]: ["Projects"], [team.id]: ["Plans"] } }));
+    mirror.lock();
+
+    browser.slots.vaults = [work];
+    const again = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    expect(again.choice.kept).toEqual({ [work.id]: ["Projects"] });
+  });
+
   test("follows a change of rights", async () => {
     const { browser, mirror } = await setup();
     const t = await mirror.adopt(team.id);
