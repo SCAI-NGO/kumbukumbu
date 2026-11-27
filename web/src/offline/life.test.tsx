@@ -291,6 +291,20 @@ test("a sign-out in another tab locks this one, its editors written first", asyn
   stop();
 });
 
+test("a sign-in locks the copies of other users open in the browser, and leaves the user's own open", async () => {
+  await adasCopy();
+  const copies = new MirrorCopies(await browserPorts());
+  const adas = (await copies.unlockOffline((await copies.forUser(user.id))!, "pw"))!;
+  server({ "POST /api/account/mirror-slots": () => json(201, { id: "s2", token: "tok-bob", key, vaults }) });
+  const bobs = await copies.create({ userId: bob.id, username: "bob", password: "pw", label: "Test", idleMs: 60_000 });
+  useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+  server({ "POST /api/account/mirror-slots/contact": () => json(200, { id: "s2", key, vaults }) });
+  await openCopy(bob.id);
+  await vi.waitFor(() => expect(adas.locked).toBe(true));
+  expect([bobs.locked, useOfflineCopy.getState().mirror?.locked]).toEqual([false, false]);
+  bobs.lock();
+});
+
 test("the sign-in page removes a copy whose slot is gone, and keeps one whose slot is there", async () => {
   oneTab();
   await adasCopy();

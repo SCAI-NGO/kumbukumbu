@@ -162,6 +162,12 @@ export class MirrorCopies {
     return raw === null ? null : SealedMirror.unlocked(this.p, header, raw, null);
   }
 
+  /** A sign-in: every other user's copy locks in the tabs that have it open; the user's own stays open in theirs. */
+  async lockOthers(userId: string): Promise<void> {
+    const hash = await userHash(userId);
+    for (const h of await this.headers()) if (h.user !== hash) this.p.channel(h.copy).post({ type: "locked" });
+  }
+
   /** Removes a copy with everything in it: a wipe signal, the slot removed, or the person's own choice. */
   async wipe(copy: string): Promise<void> {
     await this.p.locks.run(lockName(copy), () => this.p.storage.write({ remove: [`${HEADERS}${copy}`], removePrefix: [`c/${copy}/`] }));

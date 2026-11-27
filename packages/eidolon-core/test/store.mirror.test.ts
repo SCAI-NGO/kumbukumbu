@@ -609,6 +609,15 @@ describe("tabs", () => {
     expect(asked).toBe(1);
   });
 
+  test("a sign-in locks the copies of other users open in the browser, and leaves the user's own open", async () => {
+    const { browser, mirror: ada } = await setup([work]);
+    const bobId = "user-2c7b";
+    const bob = await new MirrorCopies(browser.tab()).create({ ...signIn, userId: bobId, username: "Bob" });
+    await new MirrorCopies(browser.tab()).lockOthers(bobId);
+    await delivered();
+    expect([ada.locked, bob.locked]).toEqual([true, false]);
+  });
+
   test("a wipe in one tab locks the others", async () => {
     const { browser, mirror: a } = await setup();
     const b = (await new MirrorCopies(browser.tab()).unlockOffline(a.header, signIn.password))!;

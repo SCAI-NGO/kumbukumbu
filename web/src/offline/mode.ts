@@ -295,6 +295,8 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
       if (held !== null && held.header.copy === header?.copy && signIn === undefined) return;
       // Someone else's copy, or this one about to open afresh: it never serves another session.
       if (held !== null) await lockCopy();
+      // Another person's copy open in other tabs locks there; this user's own stays open in theirs.
+      await all.lockOthers(userId);
       if (header === null) return useOfflineCopy.getState().clear();
       const opened = await all.unlockOnline(header, signIn && {
         username: signIn.username, password: signIn.password, idleMs: signIn.remember ? REMEMBERED_IDLE_MS : IDLE_MS,
