@@ -80,6 +80,11 @@ public sealed class SuggestionService(INoteStore store, NoteWriter writer)
     {
         var (path, target, problem) = await PairAsync(pathText, targetText, ct);
         if (problem is not null) return problem;
+        // [[…]] would read these as a heading, a block, an alias or the link's end, and lead elsewhere.
+        if (LinkResolver.LinkText(target!).FirstOrDefault(c => "#^|[]".Contains(c)) is var sign and not '\0')
+        {
+            return Error($"{target!.Value} can't be linked: its name holds '{sign}', which a wiki link reads as its own; rename the note to link it");
+        }
 
         var notes = await store.ListNotesUnderAsync(VaultPath.Root.Child(path!.Vault!), ct);
         var title = LinkResolver.StripMd(target!.Name);
@@ -127,6 +132,7 @@ public sealed class SuggestionService(INoteStore store, NoteWriter writer)
             return (null, null, Error($"{otherText} is not a note's path; give one such as /Work/Plan.md"));
         if (other.Vault != path.Vault) return (null, null, Error("links don't cross vaults; both notes must be in one vault"));
         if (other == path) return (null, null, Error("a note is always related to itself"));
+        if (NoteNames.NameProblem(other) is { } nameProblem) return (null, null, Error(nameProblem));
         if (Caller.Refuse(Tool, path) is { } refused) return (null, null, refused with { Kind = ShellErrorKind.Refused });
         if (await store.GetAsync(other, ct) is null) return (null, null, Error($"{other.Value}: No such note", ShellErrorKind.NotFound));
         return (path, other, null);
