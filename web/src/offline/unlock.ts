@@ -96,7 +96,8 @@ export async function sweepRemovedCopies(): Promise<void> {
   const all = await mirrorCopies();
   for (const header of await all.headers()) {
     try {
-      const response = await fetch("/api/session", { credentials: "same-origin", headers: { "Kumbu-Mirror": header.slot.token } });
+      // Without the cookie: the question carries no session (ADR 0033), and one still live would answer for itself.
+      const response = await fetch("/api/session", { credentials: "omit", headers: { "Kumbu-Mirror": header.slot.token } });
       const body = (await response.json().catch(() => null)) as { code?: string } | null;
       if (response.status === 401 && body?.code === "mirror-wipe") await all.wipe(header.copy);
     } catch {

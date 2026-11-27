@@ -42,6 +42,11 @@ const userHash = (userId: string) => hashOf(`kumbu-mirror user\0${userId}`);
 const loginHash = (username: string) => hashOf(`kumbu-mirror login\0${username.normalize("NFC").toLowerCase()}`);
 const wrapAad = (copy: string) => `kumbu-mirror wrap\0${copy}`;
 
+/** Whether the copy is this user's: by the hash of the user id in its header, as `forUser` finds it. */
+export async function ownedBy(header: CopyHeader, userId: string): Promise<boolean> {
+  return header.user === (await userHash(userId));
+}
+
 function mirrorKey(answer: SlotAnswer): Uint8Array<ArrayBuffer> {
   const raw = fromBase64Url(answer.key);
   if (raw === null || raw.byteLength !== 32) throw new Error("The server's mirror key is not an AES-256 key.");

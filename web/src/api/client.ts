@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { ownedBy, type CopyHeader } from "eidolon-core/store/mirror";
 import createClient, { type Middleware } from "openapi-fetch";
 import { useOfflineCopy } from "../offline/copy";
 import { useOfflineMode, wipeCopy } from "../offline/mode";
@@ -76,13 +77,25 @@ const sessionEnds: Middleware = {
 const unreachable = (response: Response) => [502, 503, 504].includes(response.status) && !response.headers.has("X-Kumbu-Version");
 
 /**
+ * Whether a request may carry the copy's slot token (ADRs 0029, 0033): under the session of the copy's own user, or
+ * with nobody signed in, but never with a request that signs in (`key` as above). After an offline sign-in the tab
+ * knows the username only (id "", owning nothing) and the cookie may be someone else's: none goes until the session
+ * is read.
+ */
+export async function carriesToken(header: CopyHeader, key: string): Promise<boolean> {
+  const user = useSession.getState().user;
+  if (user === null) return !anonymous.has(key);
+  return ownedBy(header, user.id);
+}
+
+/**
  * What the offline mode needs to hear of every request (offline mode design §3a): whether it reached Kumbu²; and the
  * offline copy's slot token goes with it, so a 401 can say the copy was removed (§4.6).
  */
 const reachWatch: Middleware = {
-  onRequest({ request }) {
-    const token = useOfflineCopy.getState().header?.slot.token;
-    if (token !== undefined) request.headers.set("Kumbu-Mirror", token);
+  async onRequest({ request, schemaPath }) {
+    const header = useOfflineCopy.getState().header;
+    if (header !== null && (await carriesToken(header, `${request.method} ${schemaPath}`))) request.headers.set("Kumbu-Mirror", header.slot.token);
     return request;
   },
   onResponse({ response }) {

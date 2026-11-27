@@ -234,6 +234,49 @@ test("the sign-in page removes a copy whose slot is gone, and keeps one whose sl
   expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).not.toBeNull();
 });
 
+test("the sweep sends no cookie, and with a live cookie it still wipes a removed copy", async () => {
+  await adasCopy();
+  const sent: (RequestCredentials | undefined)[] = [];
+  // The browser holds someone's live session: with the cookie, the server answers for that session.
+  server({
+    "GET /api/session": (init) => (
+      sent.push(init?.credentials),
+      init?.credentials === "omit" ? json(401, { error: "Gone.", code: "mirror-wipe" }) : json(200, { user: bob, previousSignInAt: null })
+    ),
+  });
+  await sweepRemovedCopies();
+  expect(sent).toEqual(["omit"]);
+  expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).toBeNull();
+});
+
+describe("the copy's token in Kumbu-Mirror", () => {
+  const mirrorHeaders = (calls: { key: string; headers: Headers }[]) => calls.map((c) => [c.key, c.headers.get("Kumbu-Mirror")]);
+
+  test("goes with requests under its owner's session, and with nobody signed in but not with a sign-in", async () => {
+    await openedOnline();
+    let calls = server({ "GET /api/vaults": () => json(200, []) });
+    await api.GET("/api/vaults");
+    expect(mirrorHeaders(calls)).toEqual([["GET /api/vaults", "tok-ada"]]);
+
+    await lockCopy();
+    useSession.getState().signOut();
+    calls = server({ "GET /api/vaults": () => json(401, { error: "Sign in first." }), "POST /api/session": () => json(401, { error: "Wrong." }) });
+    await api.GET("/api/vaults");
+    await api.POST("/api/session", { body: { username: "bob", password: "pw", remember: false } });
+    expect(mirrorHeaders(calls)).toEqual([["GET /api/vaults", "tok-ada"], ["POST /api/session", null]]);
+  });
+
+  test("after Bob's sign-in no request carries Ada's copy token", async () => {
+    await openedOnline();
+    await lockCopy();
+    useSession.getState().signedIn({ user: bob, previousSignInAt: null });
+    const calls = server({ "GET /api/vaults": () => json(200, []), "POST /api/ws-ticket": () => json(200, { ticket: "t" }) });
+    await api.GET("/api/vaults");
+    await api.POST("/api/ws-ticket");
+    expect(mirrorHeaders(calls)).toEqual([["GET /api/vaults", null], ["POST /api/ws-ticket", null]]);
+  });
+});
+
 test("a sign-out made offline reaches the server as soon as Kumbu² answers again", async () => {
   localStorage.setItem("kumbu.signOutPending", "1");
   const calls = server({ "GET /api/version": () => json(200, {}), "DELETE /api/session": () => noContent() });
