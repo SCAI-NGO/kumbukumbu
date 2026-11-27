@@ -5,7 +5,7 @@
 import { describe, expect, test } from "vitest";
 import { MirrorSearch, NoSuchTagError } from "../src/read/search";
 import { sectionsOf, snippetOf } from "../src/search/sections";
-import { carries, tagsOf } from "../src/search/tags";
+import { carries, normaliseTag, tagsOf } from "../src/search/tags";
 import { prepare, searchWords } from "../src/search/words";
 import { MirrorCopies } from "../src/store/mirror";
 import { FakeBrowser } from "./fakeStore";
@@ -66,6 +66,12 @@ describe("tags", () => {
     ["```\n#fenced\n```\n\n    #indented\n#123 a#b #ok/", ["ok"]],
     ["- item\n    #nested", ["nested"]],
   ])("%j", (content, expected) => expect(tagsOf(content)).toEqual(expected));
+
+  test("strips a tag's trailing slashes, in the text, the front matter and a query", () => {
+    expect(tagsOf("#plan/ and #a//b and #work///\n")).toEqual(["plan", "a//b", "work"]);
+    expect(tagsOf("---\ntags: [plan/, 'idea//']\n---\n")).toEqual(["plan", "idea"]);
+    expect([normaliseTag("#plan/"), normaliseTag("a/b//"), normaliseTag("///"), normaliseTag("#")]).toEqual(["plan", "a/b", null, null]);
+  });
 
   test("a tag carries its nested ones, ignoring case", () => {
     expect(carries(tagsOf("#Project/Kumbu"), "project")).toBe(true);
