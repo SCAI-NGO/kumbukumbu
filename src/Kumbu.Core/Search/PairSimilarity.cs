@@ -11,6 +11,10 @@ namespace Kumbu.Core.Search;
 /// </summary>
 public static class PairSimilarity
 {
+    /// <summary>The most pairs scored in one call; the rest are not measured. With <see cref="SimilarSearch.MaxChunks"/>
+    /// a side, a call stays near a second (measured: 9 ms for such a pair).</summary>
+    public const int MaxPairs = 100;
+
     /// <summary>The score of two notes' chunk vectors (unit length), in [0, 1]; null where a side has none.</summary>
     public static double? Mutual(IReadOnlyList<float[]> a, IReadOnlyList<float[]> b, CancellationToken ct)
     {
@@ -35,15 +39,16 @@ public static class PairSimilarity
 
     /// <summary>The score of each pair from <paramref name="stored"/>, in the pairs' order: null where a note has no
     /// vectors there, or the two lie in different embedding spaces (another model), whose vectors don't compare, and for
-    /// the pairs left once <paramref name="limit"/> has passed: not measured, as for a note not embedded yet.</summary>
+    /// the pairs past <see cref="MaxPairs"/> or left once <paramref name="limit"/> has passed: not measured, as for a note
+    /// not embedded yet. A note is compared by its first <see cref="SimilarSearch.MaxChunks"/> chunks.</summary>
     public static IReadOnlyList<double?> Score(StoredVectors stored, IReadOnlyList<(VaultPath A, VaultPath B)> pairs, TimeProvider time, TimeSpan limit, CancellationToken ct)
     {
         var wanted = pairs.SelectMany(p => new[] { p.A, p.B }).ToHashSet();
         var byNote = stored.Chunks.Where(c => wanted.Contains(c.Path)).GroupBy(c => c.Path)
-            .ToDictionary(g => g.Key, g => (g.First().Space, Vectors: (IReadOnlyList<float[]>)[.. g.Select(c => c.Vector)]));
+            .ToDictionary(g => g.Key, g => (g.First().Space, Vectors: (IReadOnlyList<float[]>)[.. SimilarSearch.FirstChunks(g).Select(c => c.Vector)]));
         var deadline = time.GetUtcNow() + limit;
         var scores = new double?[pairs.Count];
-        for (var i = 0; i < pairs.Count && time.GetUtcNow() < deadline; i++)
+        for (var i = 0; i < Math.Min(pairs.Count, MaxPairs) && time.GetUtcNow() < deadline; i++)
         {
             var (pa, pb) = pairs[i];
             if (byNote.TryGetValue(pa, out var a) && byNote.TryGetValue(pb, out var b) && a.Space == b.Space) scores[i] = Mutual(a.Vectors, b.Vectors, ct);

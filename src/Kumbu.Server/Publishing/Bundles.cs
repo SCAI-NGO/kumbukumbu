@@ -146,9 +146,11 @@ internal sealed partial class Publications
         return order;
     }
 
-    /// <summary>The preview of a walk: the fair copies made as for publishing, without reading any image.</summary>
+    /// <summary>The preview of a walk: the fair copies made as for publishing, without reading any image. Past the note
+    /// limit the walk alone, which can't go out as it is, so that nothing more is made of it.</summary>
     private async Task<BundlePreview> PreviewOfAsync(VaultAccess access, EncryptedNoteStore notes, PublishingRecord record, Walk walk, CancellationToken ct)
     {
+        if (walk.Notes.Count > NoteLimit) return new BundlePreview(walk.Notes, walk.LeftOut, [], 0, TooMany: true, TooLarge: false);
         var (attachments, resolver) = await LinksAsync(access, notes, ct);
         var images = new HashSet<VaultPath>();
         var plain = new List<string>();
@@ -162,7 +164,7 @@ internal sealed partial class Publications
 
         var bytes = images.Sum(p => attachments[p].Current.Size);
         if (plain.Any(n => AttachmentFormat.ForName(n)?.Kind == AttachmentKind.Pdf)) plain.Add(PdfsNotYet);
-        return new BundlePreview(walk.Notes, walk.LeftOut, plain, bytes, walk.Notes.Count > NoteLimit, walk.Notes.Count > 1 && bytes > CopyLimit);
+        return new BundlePreview(walk.Notes, walk.LeftOut, plain, bytes, TooMany: false, walk.Notes.Count > 1 && bytes > CopyLimit);
     }
 
     private static async Task<(Dictionary<VaultPath, StoredAttachment> Attachments, LinkResolver Resolver)> LinksAsync(

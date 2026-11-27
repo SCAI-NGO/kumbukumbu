@@ -229,6 +229,23 @@ public sealed class BundleTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Over_the_note_limit_the_preview_lists_the_walk_alone()
+    {
+        var alice = await WorkAsync(("A.md", "[[B]] ![[manual.pdf]]"), ("B.md", "b"));
+        await alice.CreateFileAsync("manual.pdf", "%PDF-1.4\n%%EOF\n"u8.ToArray());
+        var (notes, access) = await AliceAsync(alice);
+
+        var within = await Limited(noteLimit: 2).PreviewAsync(access, notes, P("/Work/A.md"), 1, [], Ct);
+        var over = await Limited(noteLimit: 1).PreviewAsync(access, notes, P("/Work/A.md"), 1, [], Ct);
+
+        Assert.Contains("manual.pdf", within.Plain);
+        Assert.False(within.TooMany);
+        Assert.Equal(["/Work/A.md", "/Work/B.md"], Paths(over));
+        Assert.True(over.TooMany);
+        Assert.Empty(over.Plain);
+    }
+
+    [Fact]
     public async Task A_member_never_previews()
     {
         var alice = await WorkAsync(("A.md", "a"));

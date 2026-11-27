@@ -149,6 +149,23 @@ public class SimilarTests
         Assert.Equal("similar: the server is busy comparing notes; try again in a moment", result.Output);
     }
 
+    /// <summary>A note of <paramref name="count"/> sections of one word each, then one of <paramref name="last"/>.</summary>
+    private static string Sections(string word, int count, string last) =>
+        string.Concat(Enumerable.Range(0, count).Select(i => $"## Part {i}\n\n{string.Join(' ', Enumerable.Repeat(word, 80))}\n\n")) + $"## Last\n\n{last}\n";
+
+    [Fact]
+    public async Task A_note_over_the_chunk_cap_is_compared_by_its_first_chunks()
+    {
+        var store = Store(("/W/Long.md", Sections("island", SimilarSearch.MaxChunks, "far away")));
+
+        var asSource = Hits(await Run("similar /W/Long.md /R", store));
+        var asCandidate = Hits(await Run("similar /R/Far.md /W", store));
+
+        // Its last section, past the cap, would match Far exactly.
+        Assert.Contains("score 0.00", Assert.Single(asSource, h => h.Contains("/R/Far.md")));
+        Assert.Contains("score 0.00", Assert.Single(asCandidate, h => h.Contains("/W/Long.md")));
+    }
+
     [Fact]
     public async Task Unlinked_leaves_out_what_the_note_links_and_what_links_it()
     {

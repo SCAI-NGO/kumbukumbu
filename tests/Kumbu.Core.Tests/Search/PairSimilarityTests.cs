@@ -105,4 +105,32 @@ public class PairSimilarityTests
         Assert.Null(scores[1]);
         Assert.Null(scores[2]);
     }
+
+    [Fact]
+    public void A_note_over_the_chunk_cap_is_scored_on_its_first_chunks()
+    {
+        var a = P("/W/a.md");
+        var b = P("/W/b.md");
+        // a's last chunks, listed first, are b's topic; its first ones, up to the cap, aren't.
+        List<ChunkVector> chunks = [.. Enumerable.Range(0, 3).Select(i => new ChunkVector(a, 1000 + i, 0, "m", Y))];
+        chunks.AddRange(Enumerable.Range(0, SimilarSearch.MaxChunks).Select(i => new ChunkVector(a, i, 0, "m", X)));
+        chunks.Add(new ChunkVector(b, 1, 0, "m", Y));
+
+        var scores = PairSimilarity.Score(new StoredVectors(SemanticState.Ready, chunks, 0), [(a, b)], Clock, Limit, Ct);
+
+        Assert.Equal(0.0, scores[0]!.Value, 5);
+    }
+
+    [Fact]
+    public void Pairs_past_the_cap_are_not_measured()
+    {
+        var notes = Enumerable.Range(0, PairSimilarity.MaxPairs + 2).Select(i => P($"/W/n{i}.md")).ToList();
+        var stored = new StoredVectors(SemanticState.Ready, [.. notes.Select(n => new ChunkVector(n, 1, 0, "m", X))], 0);
+        var pairs = notes.Skip(1).Select(n => (notes[0], n)).ToList();
+
+        var scores = PairSimilarity.Score(stored, pairs, Clock, Limit, Ct);
+
+        Assert.All(scores.Take(PairSimilarity.MaxPairs), s => Assert.Equal(1.0, s!.Value, 5));
+        Assert.Null(scores[PairSimilarity.MaxPairs]);
+    }
 }
