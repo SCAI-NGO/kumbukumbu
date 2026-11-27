@@ -122,6 +122,8 @@ test("locking the copy forgets what the app read", async () => {
 
 test("removing the copy while signed in online keeps what the app read", async () => {
   await adasCopy();
+  // The removal takes a Web Lock, which jsdom hasn't: one tab, so it runs at once.
+  vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } }));
   const queryClient = new QueryClient();
   const stop = runOfflineHost(queryClient);
   expect(await unlockOffline("ada", "pw")).toBe(true);
@@ -179,6 +181,8 @@ describe("a sign-out offline", () => {
 
   test("with the copy removed, its changes go with it", async () => {
     await adasCopy();
+    // The removal takes a Web Lock, which jsdom hasn't: one tab, so it runs at once.
+    vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } }));
     await unlockOffline("ada", "pw");
     await signOutOffline(true);
     expect(useOfflineCopy.getState().header).toBeNull();

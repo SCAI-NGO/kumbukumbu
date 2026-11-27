@@ -88,9 +88,11 @@ describe("a copy opened with the slot's key", () => {
   });
 });
 
+// The copy's writes and its removal take a Web Lock, which jsdom hasn't: one tab, so each runs at once.
+const oneTab = () => vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } }));
+
 describe("a vault's copy removed", () => {
-  // The copy's writes take a Web Lock, which jsdom hasn't: one tab, so each runs at once.
-  beforeEach(() => vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } })));
+  beforeEach(oneTab);
 
   test("by the engines' vault list before a contact: the notice shows all the same", async () => {
     await openedOnline();
@@ -113,8 +115,7 @@ describe("a vault's copy removed", () => {
 });
 
 describe("Sign in again over the app", () => {
-  // The re-wrap takes the copy's Web Lock, which jsdom hasn't: one tab, so it runs at once.
-  beforeEach(() => vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { locks: { request: (_: string, fn: () => unknown) => fn() } })));
+  beforeEach(oneTab);
 
   /** The bar's dialog after the session ended with changes waiting; what POST /api/session was sent. */
   async function signInAgain(password: string): Promise<unknown[]> {
@@ -221,6 +222,7 @@ describe("a session's end", () => {
   });
 
   test("Ada's copy, found gone while Bob signed in, goes from the device but leaves his session alone", async () => {
+    oneTab();
     await adasCopy();
     useSession.getState().signedIn({ user, previousSignInAt: null });
     let answer!: () => void;
@@ -255,6 +257,7 @@ describe("a session's end", () => {
   });
 
   test("deleting the account removes the copy from this device", async () => {
+    oneTab();
     await openedOnline();
     useSession.getState().end("Your account is deleted, with all your vaults and notes.", "wipe");
     await vi.waitFor(async () => expect(await new MirrorCopies(await browserPorts()).forUser(user.id)).toBeNull());
@@ -288,6 +291,7 @@ test("a sign-out in another tab locks this one, its editors written first", asyn
 });
 
 test("the sign-in page removes a copy whose slot is gone, and keeps one whose slot is there", async () => {
+  oneTab();
   await adasCopy();
   const calls = server({ "GET /api/session": () => json(401, { error: "Gone.", code: "mirror-wipe" }) });
   await sweepRemovedCopies();
@@ -301,6 +305,7 @@ test("the sign-in page removes a copy whose slot is gone, and keeps one whose sl
 });
 
 test("the sweep sends no cookie, and with a live cookie it still wipes a removed copy", async () => {
+  oneTab();
   await adasCopy();
   const sent: (RequestCredentials | undefined)[] = [];
   // The browser holds someone's live session: with the cookie, the server answers for that session.

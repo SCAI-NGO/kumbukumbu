@@ -41,6 +41,8 @@ async function hashOf(label: string): Promise<string> {
 const userHash = (userId: string) => hashOf(`kumbu-mirror user\0${userId}`);
 const loginHash = (username: string) => hashOf(`kumbu-mirror login\0${username.normalize("NFC").toLowerCase()}`);
 const wrapAad = (copy: string) => `kumbu-mirror wrap\0${copy}`;
+/** The copy's lock across tabs, as its records take it (Records.lockName). */
+const lockName = (copy: string) => `kumbu-mirror:${copy}`;
 
 /** Whether the copy is this user's: by the hash of the user id in its header, as `forUser` finds it. */
 export async function ownedBy(header: CopyHeader, userId: string): Promise<boolean> {
@@ -139,7 +141,7 @@ export class MirrorCopies {
 
   /** Removes a copy with everything in it: a wipe signal, the slot removed, or the person's own choice. */
   async wipe(copy: string): Promise<void> {
-    await this.p.storage.write({ remove: [`${HEADERS}${copy}`], removePrefix: [`c/${copy}/`] });
+    await this.p.locks.run(lockName(copy), () => this.p.storage.write({ remove: [`${HEADERS}${copy}`], removePrefix: [`c/${copy}/`] }));
     this.p.channel(copy).post({ type: "purged", vault: null });
   }
 
@@ -296,7 +298,13 @@ export class SealedMirror {
       ...this.h, login: await loginHash(username), password: await wrapWithPassword(this.p.crypto, raw, password, wrapAad(this.h.copy)),
     };
     raw.fill(0);
-    await this.p.locks.run(this.r.lockName, () => this.p.storage.write({ put: [[`${HEADERS}${header.copy}`, encoder.encode(JSON.stringify(header))]] }));
+    // Another tab may have removed the copy while the server and the password wrap were asked.
+    const written = await this.p.locks.run(this.r.lockName, async () => {
+      if ((await this.p.storage.get(`${HEADERS}${header.copy}`)) === null) return false;
+      await this.p.storage.write({ put: [[`${HEADERS}${header.copy}`, encoder.encode(JSON.stringify(header))]] });
+      return true;
+    });
+    if (!written) return "wiped";
     this.h = header;
     return this.align(answer.vaults);
   }

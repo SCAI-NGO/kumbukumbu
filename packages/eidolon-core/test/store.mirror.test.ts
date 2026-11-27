@@ -10,7 +10,7 @@ import { MirrorCopies, IDLE_MS, type SealedMirror } from "../src/store/mirror";
 import { IdleLock } from "../src/store/idle";
 import { MirrorLockedError, SMALL_ATTACHMENT_BYTES, type VaultMirror } from "../src/store/vault";
 import { FakeServer } from "./fakes/fakeServer";
-import { delivered, FakeBrowser, realClock } from "./fakeStore";
+import { delivered, fakeKdf, FakeBrowser, nodeCrypto, realClock } from "./fakeStore";
 
 const work = { id: "vault-1f3a", tag: "tag-a", canWrite: true, pending: false };
 const team = { id: "vault-77c2", tag: "tag-b", canWrite: false, pending: false };
@@ -386,6 +386,45 @@ describe("contact", () => {
     await copies.create(signIn);
     expect((await copies.headers()).length).toBe(1);
     expect(browser.slots.slots.size).toBe(2);
+  });
+});
+
+describe("sign in again while another tab removes the copy", () => {
+  test("writes no header back over the removed copy, and answers wiped", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    // The password wrap of this tab waits for `release`, once the copy is made.
+    let slowNow = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const kdf = { derive: async (...a: Parameters<typeof fakeKdf.derive>) => { if (slowNow) await gate; return fakeKdf.derive(...a); } };
+    const mirror = await new MirrorCopies({ ...browser.tab(), crypto: { ...nodeCrypto, kdf } }).create(signIn);
+    slowNow = true;
+    const rewrapping = mirror.rewrap(signIn.username, signIn.password);
+    await delivered();
+
+    const other = new MirrorCopies(browser.tab());
+    await other.wipe(mirror.header.copy);
+    release();
+
+    expect(await rewrapping).toBe("wiped");
+    expect(await other.headers()).toEqual([]);
+    expect([...browser.storage.records.keys()]).toEqual([]);
+  });
+
+  test("a removal waits for the copy's lock, which the header write holds", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    const copies = new MirrorCopies(browser.tab());
+    const copy = (await copies.create(signIn)).header.copy;
+    const holder = browser.locks.hold(`kumbu-mirror:${copy}`);
+    await holder.acquired;
+    const removing = copies.wipe(copy);
+    await delivered();
+    expect((await copies.headers()).length).toBe(1);
+    holder.release();
+    await removing;
+    expect(await copies.headers()).toEqual([]);
   });
 });
 
