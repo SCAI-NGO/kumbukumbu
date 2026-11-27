@@ -266,6 +266,7 @@ describe("a session's end", () => {
   });
 
   test("a sign-in in a tab that holds the copy wraps it again under the password", async () => {
+    oneTab();
     await openedOnline();
     const held = useOfflineCopy.getState().mirror;
     server({ "POST /api/account/mirror-slots/contact": slot });

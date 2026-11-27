@@ -120,7 +120,7 @@ export class MirrorCopies {
         ...header, login: await loginHash(signIn.username), idleMs: signIn.idleMs,
         password: await wrapWithPassword(this.p.crypto, raw, signIn.password, wrapAad(header.copy)),
       };
-      await this.writeHeader(header);
+      if (!(await this.rewriteHeader(header))) return "wiped";
     }
     const mirror = await SealedMirror.unlocked(this.p, header, raw, answer.vaults);
     // The first contact couldn't count them, before the key opened the copy: the device list hears of them now, none
@@ -147,6 +147,15 @@ export class MirrorCopies {
 
   private async writeHeader(header: CopyHeader): Promise<void> {
     await this.p.storage.write({ put: [[`${HEADERS}${header.copy}`, encoder.encode(JSON.stringify(header))]] });
+  }
+
+  /** An existing copy's header, written again only while the copy is still here: another tab may have removed it. */
+  private rewriteHeader(header: CopyHeader): Promise<boolean> {
+    return this.p.locks.run(lockName(header.copy), async () => {
+      if ((await this.p.storage.get(`${HEADERS}${header.copy}`)) === null) return false;
+      await this.writeHeader(header);
+      return true;
+    });
   }
 }
 

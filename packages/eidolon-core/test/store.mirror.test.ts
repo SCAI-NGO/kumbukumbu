@@ -303,6 +303,58 @@ describe("the engine over the mirror", () => {
   });
 });
 
+describe("a sign-in while another tab removes the copy", () => {
+  /** Ada's copy, locked; a sign-in in a second tab whose password wrap waits for `release`. */
+  async function signingIn() {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    const copies = new MirrorCopies(browser.tab());
+    (await copies.create(signIn)).lock();
+    const header = (await copies.forUser(signIn.userId))!;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const slow = { ...browser.tab(), crypto: { ...nodeCrypto, kdf: { derive: async (...a: Parameters<typeof fakeKdf.derive>) => { await gate; return fakeKdf.derive(...a); } } } };
+    const opening = new MirrorCopies(slow).unlockOnline(header, { username: signIn.username, password: signIn.password, idleMs: IDLE_MS });
+    await delivered();
+    return { browser, copies, header, release, opening };
+  }
+
+  test("writes no header over a copy another tab removed, and answers wiped", async () => {
+    const { browser, copies, header, release, opening } = await signingIn();
+    await copies.wipe(header.copy);
+    browser.slots.fail = new OfflineError("Kumbu² can't be reached.");
+    release();
+    expect(await opening).toBe("wiped");
+    expect(await copies.headers()).toEqual([]);
+    expect([...browser.storage.records.keys()]).toEqual([]);
+  });
+
+  test("the sign-in's header write waits for the copy's lock, and a removal after it still removes the copy", async () => {
+    const { browser, copies, header, release, opening } = await signingIn();
+    const holder = browser.locks.hold(`kumbu-mirror:${header.copy}`);
+    await holder.acquired;
+    release();
+    await delivered();
+    expect(await copies.headers()).toEqual([header]);
+    const removing = copies.wipe(header.copy);
+    await delivered();
+    expect(await copies.headers()).toHaveLength(1);
+    holder.release();
+    await removing;
+    const opened = await opening;
+    if (opened !== "wiped") opened.lock();
+    expect(await copies.headers()).toEqual([]);
+  });
+
+  test("with the copy still there, the sign-in wraps it under the password given", async () => {
+    const { copies, release, opening } = await signingIn();
+    release();
+    const opened = (await opening) as SealedMirror;
+    opened.lock();
+    expect(await copies.unlockOffline((await copies.forUsername(signIn.username))!, signIn.password)).not.toBeNull();
+  });
+});
+
 describe("contact", () => {
   test("purges a vault no longer listed, and one re-keyed, and counts the changes lost", async () => {
     const { browser, mirror } = await setup();
