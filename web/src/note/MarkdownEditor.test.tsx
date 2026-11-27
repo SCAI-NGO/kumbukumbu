@@ -1508,14 +1508,15 @@ describe("Offline in a vault this device doesn't keep", () => {
     expect(editorBox()).toHaveValue(`${source} mine`);
 
     await navigateAway(router, "/notes/Work/projects/roadmap.md");
-    const asking = await screen.findByRole("alertdialog");
+    const asking = await screen.findByRole("alertdialog", { name: "Discard what isn't saved?" });
     await u.click(within(asking).getByRole("button", { name: "Stay" }));
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(router.state.location.pathname).toBe(planUrl);
     expect(editorBox()).toHaveValue(`${source} mine`);
 
+    await wait(50);
     await navigateAway(router, "/notes/Work/projects/roadmap.md");
-    await u.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard" }));
+    await u.click(within(await screen.findByRole("alertdialog", { name: "Discard what isn't saved?" })).getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/projects/roadmap.md"));
     expect(await screen.findByText("Roadmap text.")).toBeInTheDocument();
   });
