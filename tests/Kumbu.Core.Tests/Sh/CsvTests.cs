@@ -514,4 +514,21 @@ public class CsvTests
         var result = await files.WriteAsync(path, bytes, null, null, CancellationToken.None);
         Assert.False(result.Result.IsError, result.Result.Output);
     }
+
+    [Fact]
+    public async Task Csv_marks_a_file_another_user_wrote_last_in_a_shared_vault_as_cat_does()
+    {
+        // The owner's file in her shared Garten: marked for Bob, a member, not for her.
+        var shared = SharedVaults.SharedGarten(asMember: true);
+        shared.AddTextFile("/Garten/costs.csv", Costs);
+        var own = SharedVaults.SharedGarten(asMember: false);
+        own.AddTextFile("/Garten/costs.csv", Costs);
+
+        var marked = await SharedVaults.AsBob(shared).RunAsync("csv /Garten/costs.csv --rows 1", CancellationToken.None);
+        var unmarked = await TestShell.Of(own).RunAsync("csv /Garten/costs.csv --rows 1", CancellationToken.None);
+
+        Assert.StartsWith($"[/Garten/costs.csv: {WriterMarks.Mark}]\n", marked.Output);
+        Assert.DoesNotContain(WriterMarks.Mark, unmarked.Output);
+        Assert.Contains("Coffee", unmarked.Output);
+    }
 }

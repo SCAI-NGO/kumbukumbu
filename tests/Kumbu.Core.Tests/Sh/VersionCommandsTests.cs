@@ -135,6 +135,19 @@ public class VersionCommandsTests
         Assert.Contains("+++ /Demo/sub/x.md", (await Run("diff /Demo/old.md /Demo/sub/x.md")).Output);
     }
 
+    [Fact]
+    public async Task Diff_marks_a_note_another_user_wrote_last_in_a_shared_vault_as_cat_does()
+    {
+        // As Bob, a member of Alice's Garten: Carol wrote plan.md last, Bob own.md.
+        var bob = SharedVaults.AsBob(SharedVaults.SharedGarten(asMember: true));
+
+        var marked = await bob.RunAsync("diff /Garten/own.md /Garten/plan.md", CancellationToken.None);
+        var own = await bob.RunAsync("diff /Garten/own.md /Garten/own.md", CancellationToken.None);
+
+        Assert.StartsWith($"[/Garten/plan.md: {WriterMarks.Mark}]\n--- /Garten/own.md", marked.Output);
+        Assert.DoesNotContain(WriterMarks.Mark, own.Output);
+    }
+
     [Theory]
     [InlineData("diff /Demo/plan.md", "diff: /Demo/plan.md has no earlier version ('history /Demo/plan.md')")]
     [InlineData("diff /Demo/plan.md 000000000000", "diff: /Demo/plan.md has no version 000000000000 ('history /Demo/plan.md' lists them)")]

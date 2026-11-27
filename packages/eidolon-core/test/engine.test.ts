@@ -378,6 +378,22 @@ describe("review focus", () => {
     await h.engine.check(false);
     expect(h.server.calls.filter((c) => c.method === "versions").map((c) => c.args[0])).toEqual([h.state.state.cursor]);
   });
+
+  test("an incremental check queued behind a full check the network cut off leaves the full check owed: the next check is full and uploads what only this device has", async () => {
+    const h = await harness({ synced: { "a.md": "a", "b.md": "b" } });
+    // Written while no engine heard it: only a full check lists them.
+    h.files.userEdit("c.md", "later");
+    h.files.userEdit("d.md", "later too");
+    const running = h.engine.check(false);
+    const full = h.engine.check(true);
+    h.server.failNext("put", new OfflineError("lost signal"));
+    const behind = h.engine.check(false);
+    await Promise.all([running, full, behind]);
+    await h.engine.check(false);
+    await h.engine.check(false);
+    expect(h.server.notes.get("c.md")?.content).toBe("later");
+    expect(h.server.notes.get("d.md")?.content).toBe("later too");
+  });
 });
 
 describe("not synced", () => {

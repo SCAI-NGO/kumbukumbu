@@ -49,12 +49,12 @@ public sealed class Shell
         ICommand[] commands =
         [
             .. ReadingCommands(notes, _now, _zone, pixels, marks: marks),
-            new Csv(notes),
+            new Csv(notes, marks),
             new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks), new Similar(notes, search ?? new Search.NoSearchIndex(), mover.Time, heavy, marks),
             new Html(notes), new Xml(notes),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             .. pixels is null || files is null ? Array.Empty<ICommand>() : [new PdfImages(notes, pixels, files, mover.Time)],
-            new History(notes, () => writer.Now, labels), new Blame(notes, labels), new DiffCommand(notes, _checkpoints, labels), new Restore(writer, _checkpoints, files),
+            new History(notes, () => writer.Now, labels), new Blame(notes, labels), new DiffCommand(notes, _checkpoints, labels, marks), new Restore(writer, _checkpoints, files),
             new Mv(mover), new ArchiveCommand(notes, mover, mover.Time), .. files is null ? Array.Empty<ICommand>() : [new Mkdir(files)], new Rm(writer, files), new Trash(notes, labels),
             new Df(notes, figures ?? NoStorageFigures.Instance), new Du(notes),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),

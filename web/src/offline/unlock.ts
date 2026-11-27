@@ -3,6 +3,7 @@
 // sign-in form opens it offline after a reload, an offline unlock ends like a session, and a sign-out offline is
 // pending until the device is online again.
 import type { SealedMirror } from "eidolon-core/store/mirror";
+import { forgetLastNoteOf } from "../shell/lastNote";
 import { useOfflineCopy } from "./copy";
 import { keep, lockEverywhere, mirrorCopies, useOfflineMode } from "./mode";
 
@@ -104,6 +105,9 @@ export async function sweepRemovedCopies(): Promise<void> {
     }
     const body = (await response.json().catch(() => null)) as { code?: string } | null;
     // One copy's removal failing leaves it for the next visit, and the others are still asked after.
-    if (response.status === 401 && body?.code === "mirror-wipe") await all.wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
+    if (response.status === 401 && body?.code === "mirror-wipe") {
+      forgetLastNoteOf(header.user);
+      await all.wipe(header.copy).catch((e: unknown) => console.error("Kumbu² offline copy:", e));
+    }
   }
 }

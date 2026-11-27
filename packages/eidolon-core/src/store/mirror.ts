@@ -39,6 +39,8 @@ async function hashOf(label: string): Promise<string> {
 }
 
 const userHash = (userId: string) => hashOf(`kumbu-mirror user\0${userId}`);
+/** The hash of the user id a header holds: what the host keeps of a user outside the copy goes under it, naming no one. */
+export const userKey = userHash;
 const loginHash = (username: string) => hashOf(`kumbu-mirror login\0${username.normalize("NFC").toLowerCase()}`);
 const wrapAad = (copy: string) => `kumbu-mirror wrap\0${copy}`;
 /** The copy's lock across tabs, as its records take it (Records.lockName). */
@@ -140,7 +142,10 @@ export class MirrorCopies {
         ...header, login: await loginHash(signIn.username), idleMs: signIn.idleMs,
         password: await wrapWithPassword(this.p.crypto, raw, signIn.password, wrapAad(header.copy)),
       };
-      if (!(await this.rewriteHeader(header))) return "wiped";
+      if (!(await this.rewriteHeader(header))) {
+        raw.fill(0);
+        return "wiped";
+      }
     }
     const mirror = await SealedMirror.unlocked(this.p, header, raw, answer.vaults);
     // The first contact couldn't count them, before the key opened the copy: the device list hears of them now, none
@@ -157,6 +162,12 @@ export class MirrorCopies {
   async unlockOffline(header: CopyHeader, password: string): Promise<SealedMirror | null> {
     const raw = await unwrapWithPassword(this.p.crypto, header.password, password, wrapAad(header.copy));
     return raw === null ? null : SealedMirror.unlocked(this.p, header, raw, null);
+  }
+
+  /** A sign-in: every other user's copy locks in the tabs that have it open; the user's own stays open in theirs. */
+  async lockOthers(userId: string): Promise<void> {
+    const hash = await userHash(userId);
+    for (const h of await this.headers()) if (h.user !== hash) this.p.channel(h.copy).post({ type: "locked" });
   }
 
   /** Removes a copy with everything in it: a wipe signal, the slot removed, or the person's own choice. */
@@ -292,6 +303,19 @@ export class SealedMirror {
     });
   }
 
+  /** The last note opened with this copy, for the next start: the host's, sealed like the rest; null for none. */
+  async lastNote(): Promise<string | null> {
+    this.assertOpen();
+    const key = await this.lastNoteKey();
+    return (await this.r.openJson<{ path: string }>(key, await this.p.storage.get(key)))?.path ?? null;
+  }
+
+  async keepLastNote(path: string | null): Promise<void> {
+    this.assertOpen();
+    const key = await this.lastNoteKey();
+    await this.p.storage.write(path === null ? { remove: [key] } : { put: [await this.r.sealJson(key, { path })] });
+  }
+
   /** The changes waiting to upload, across the copy's vaults. */
   waiting(): number {
     return [...this.vaults.values()].reduce((n, v) => n + v.waiting(), 0);
@@ -335,7 +359,10 @@ export class SealedMirror {
       await this.p.storage.write({ put: [[`${HEADERS}${header.copy}`, encoder.encode(JSON.stringify(header))]] });
       return true;
     });
-    if (!written) return "wiped";
+    if (!written) {
+      this.lock();
+      return "wiped";
+    }
     this.h = header;
     return this.align(answer.vaults);
   }
@@ -498,6 +525,10 @@ export class SealedMirror {
 
   private async choiceKey(): Promise<string> {
     return `${this.r.prefix}o/${await this.r.name("choice")}`;
+  }
+
+  private async lastNoteKey(): Promise<string> {
+    return `${this.r.prefix}o/${await this.r.name("last")}`;
   }
 
   private async reopen(id: string): Promise<void> {

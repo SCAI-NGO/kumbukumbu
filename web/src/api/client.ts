@@ -88,9 +88,9 @@ const unreachable = (response: Response) => [502, 503, 504].includes(response.st
  * is read.
  */
 export async function carriesToken(header: CopyHeader, key: string): Promise<boolean> {
+  if (anonymous.has(key)) return false;
   const user = useSession.getState().user;
-  if (user === null) return !anonymous.has(key);
-  return ownedBy(header, user.id);
+  return user === null || ownedBy(header, user.id);
 }
 
 /**

@@ -105,12 +105,14 @@
 // the PIN in a session of its own, so it is @serial (plan review point 2: offline-firefox runs in the parallel phase
 // and leaves @serial out), Chromium only. It also covers Task 8's fifth place, the offline copy's vault list. #8 to
 // #11 take steps off the 0.7.0 hand-test list: A4, A12, A6 with A10, and A1; #12a, #12b and #13 its B19a (a trash
-// against an edit, both ways) and B19b (an upload cut off halfway, finding F-15).
-import type { Page } from "@playwright/test";
+// against an edit, both ways) and B19b (an upload cut off halfway, finding F-15). #16 takes §2's names, looked up again
+// on every reconnect: two vaults that swap names while the device is away keep their notes apart, also with the
+// look-up held for a while after the reconnect.
+import type { Page, Route } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { crc32, deflateSync } from "node:zlib";
 import { dismissInstallHint, notePage } from "../calendar/helpers";
-import type { Api } from "../support/api";
+import { encodePath, type Api } from "../support/api";
 import { secrets, usernames, type User } from "../support/env";
 import { endHidden, hideDiscreet, limitWindow, reserve, reservePassword, revealDiscreet } from "../support/session";
 import { quietNetwork, reconnectSlowly } from "../support/network";
@@ -891,4 +893,101 @@ test("gaps #15: Wi-Fi lost and back as Chromium on Linux has it, with no event: 
   await expect(bar(page)).toHaveCount(0, { timeout: 90_000 });
   await expect(page.getByText("The server can't be reached right now. Try again in a moment."), "F-16: no error in place of the app once back").toHaveCount(0);
   await expect(article(page), "F-16: the note is still shown once back").toContainText("Still here.");
+});
+
+test("gaps #16: two vaults that swap names while the device is offline keep their notes apart @offline", async ({ page, aliceApi }) => {
+  test.setTimeout(300_000);
+  // Vaults of the test's own: Alice's Work is every other test's, and her Home is discreet.
+  const id = randomBytes(3).toString("hex");
+  const [home, work, swap] = [`Home-${id}`, `Work-${id}`, `Swap-${id}`];
+  // By id for the clean-up: the names move.
+  const ids: string[] = [];
+  try {
+    for (const name of [home, work]) ids.push((await aliceApi.json<{ id: string }>("POST", "/api/vaults", { name })).id);
+    await aliceApi.putNote(`/${home}/Notes/Diary.md`, "# Diary\n\nHome only.\n");
+    await aliceApi.putNote(`/${work}/Notes/Plan.md`, "# Plan\n\nWork only.\n");
+    await turnOn(page, "alice", work);
+    await untilHeld(page, home);
+    await page.goto(notePage(`/${work}/Notes/Plan.md`));
+    await expect(article(page)).toContainText("Work only.");
+
+    // A new note in Work, written offline, once the app has switched.
+    await goOffline(page);
+    await expect(bar(page)).toContainText("You're offline.");
+    await expect(article(page)).toContainText("Work only.");
+    // The dock may still be settling after the switch: a menu closed by it is opened again.
+    await expect(async () => {
+      if (!(await source(page).isVisible())) {
+        await page.getByRole("button", { name: "New", exact: true }).click();
+        await page.getByRole("menuitem", { name: "New note" }).click({ timeout: 2_000 });
+      }
+      await expect(source(page)).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 20_000 });
+    await source(page).fill("# Made offline\n\nWritten in Work.\n");
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByRole("button", { name: "Done" })).toHaveCount(0);
+    const created = decodeURIComponent(new URL(page.url()).pathname.replace(/^\/notes/, ""));
+    expect(created).toContain(`/${work}/Notes/`);
+    const name = created.slice(`/${work}/Notes/`.length);
+    await expect(bar(page)).toContainText("1 change will upload when you're back.");
+
+    // Meanwhile, from another device, the two vaults swap names: Work is called Home now, and Home Work.
+    for (const [from, to] of [[work, swap], [home, work], [swap, home]]) {
+      await aliceApi.json("PUT", `/api/vaults/${encodeURIComponent(from)}/name`, { name: to });
+    }
+
+    // Back online, with the app's look-up of the new names held for a while (it reads the session before the vault
+    // list); meanwhile another device writes in the vault now called Work.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const holdSession = async (route: Route) => {
+      await held;
+      await route.continue().catch(() => {});
+    };
+    const session = (url: URL) => url.pathname === "/api/session";
+    await page.context().route(session, holdSession);
+    const socket = page.waitForEvent("websocket", { timeout: 60_000 });
+    await page.context().setOffline(false);
+    try {
+      const hinted = (await socket).waitForEvent("framereceived", {
+        predicate: (f) => String(f.payload).includes(`"changed","vault":"${work}"`),
+        timeout: 30_000,
+      });
+      await aliceApi.putNote(`/${work}/Notes/Elsewhere.md`, "# Elsewhere\n\nHome only, written elsewhere.\n");
+      await hinted;
+      await page.waitForTimeout(15_000);
+    } finally {
+      release();
+      await page.context().unroute(session, holdSession);
+    }
+
+    // The note is in the vault it was written in, called Home now; neither vault has the other's notes.
+    const notes = async (vault: string) => {
+      const all = (f: Tree): string[] => [...f.notes.map((n) => n.path), ...f.folders.flatMap(all)];
+      return all((await aliceApi.json<{ root: Tree }>("GET", `/api/vaults/${encodeURIComponent(vault)}/tree`)).root).sort();
+    };
+    await expect
+      .poll(async () => ({ [home]: await notes(home), [work]: await notes(work) }), { message: "each vault holds its own notes", timeout: 60_000 })
+      .toEqual({ [home]: [`/${home}/Notes/${name}`, `/${home}/Notes/Plan.md`].sort(), [work]: [`/${work}/Notes/Diary.md`, `/${work}/Notes/Elsewhere.md`] });
+    expect((await aliceApi.getNote(`/${home}/Notes/${name}`)).content).toBe("# Made offline\n\nWritten in Work.\n");
+    expect((await aliceApi.send("GET", `/api/notes/${encodePath(`/${work}/Notes/${name}`)}`)).status(), "not in the other vault").toBe(404);
+
+    // And the copy on this device holds each vault's own notes under its new name.
+    await page.goto("/settings/offline");
+    await expect
+      .poll(
+        async () => {
+          // In Firefox the app's own navigation may cut a reload off (NS_BINDING_ABORTED), which is no answer either way.
+          await page.reload().catch(() => {});
+          return [(await vaultLine(page, home).innerText().catch(() => "")).replace(/\s+/g, " "), (await vaultLine(page, work).innerText().catch(() => "")).replace(/\s+/g, " ")];
+        },
+        { message: "the copy keeps two notes of each", timeout: 30_000, intervals: [500, 1000, 2000] },
+      )
+      .toEqual([expect.stringMatching(new RegExp(`^${home} ?2 notes · `)), expect.stringMatching(new RegExp(`^${work} ?2 notes · `))]);
+  } finally {
+    for (const vault of (await aliceApi.json<{ id: string; name: string }[]>("GET", "/api/vaults")).filter((v) => ids.includes(v.id))) {
+      await reservePassword("alice");
+      await aliceApi.json("POST", `/api/vaults/${encodeURIComponent(vault.name)}/delete`, { password: secrets().passwords.alice, confirm: vault.name });
+    }
+  }
 });

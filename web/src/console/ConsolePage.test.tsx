@@ -847,6 +847,9 @@ describe("peek", () => {
   ])("refuses %s without a request", async (line, said) => {
     const { fetch, posted } = peekApi();
     await open("/Work");
+    // The shell's start reads the last note first; its own requests (the vaults, the favourites) follow it.
+    const url = (c: unknown[]) => String(c[0] instanceof Request ? c[0].url : c[0]);
+    await waitFor(() => expect(fetch.mock.calls.some((c) => url(c).endsWith("/api/account/favourites"))).toBe(true));
     const before = fetch.mock.calls.length;
     await run(line);
     expect(posted).toEqual([]);

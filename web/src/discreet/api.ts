@@ -63,10 +63,10 @@ export function useMarkDiscreet() {
     mutationFn: ({ vault, discreet }: { vault: string; discreet: boolean }) =>
       call(api.PUT("/api/account/discreet/vaults/{vault}", { params: { path: { vault } }, body: { discreet } })),
     // The kept last note goes at once, not only when the list read after it marks the vault.
-    onMutate: ({ vault, discreet }) => {
+    onMutate: async ({ vault, discreet }) => {
       const userId = useSession.getState().user?.id;
       const kept = userId ? lastNote(userId) : null;
-      if (discreet && kept && vaultOf(kept) === vault) forgetLastNote(userId);
+      if (discreet && kept && vaultOf(kept) === vault) await forgetLastNote(userId);
     },
     // This tab's socket stays open through its own mark, so no reconnect brings the copy in line: the vault's copy goes
     // now, here, without waiting for an answer (offline mode design §4.6); the contact after it brings the rest, the

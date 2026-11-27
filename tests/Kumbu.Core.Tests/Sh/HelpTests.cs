@@ -446,6 +446,6 @@ public class HelpTests
         var output = (await Run("help")).Output;
 
         var words = string.Join(' ', output.Split((char[])[' ', '\n'], StringSplitOptions.RemoveEmptyEntries));
-        Assert.Contains("cat, head, tail, sort, outline, rg, semsearch and similar mark a note last written by another user", words);
+        Assert.Contains("cat, head, tail, sort, outline, rg, csv, diff, semsearch and similar mark a note last written by another user", words);
     }
 }

@@ -9,6 +9,7 @@ import { SharedMode, type ModeChannel, type ModePorts } from "eidolon-core/mode/
 import { IdleLock } from "eidolon-core/store/idle";
 import { IDLE_MS, MirrorCopies, REMEMBERED_IDLE_MS, type SealedMirror } from "eidolon-core/store/mirror";
 import { create } from "zustand";
+import { forgetLastNoteOf } from "../shell/lastNote";
 import { onSessionEnd, useSession } from "../state/session";
 import { useOfflineCopy } from "./copy";
 import { browserPorts, keepThroughCleanUps, locks } from "./ports";
@@ -158,6 +159,8 @@ export function keepSessionThroughWipe(): () => void {
 function wiped(sessionGone = false) {
   idle?.stop();
   idle = null;
+  const header = useOfflineCopy.getState().header;
+  if (header !== null) forgetLastNoteOf(header.user);
   useOfflineCopy.getState().mirror?.lock();
   useOfflineCopy.getState().clear();
   if (sessionGone || sessionKept === 0) useSession.getState().end(WIPED);
@@ -295,10 +298,13 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
       if (held !== null && held.header.copy === header?.copy && signIn === undefined) return;
       // Someone else's copy, or this one about to open afresh: it never serves another session.
       if (held !== null) await lockCopy();
+      // Another person's copy open in other tabs locks there; this user's own stays open in theirs.
+      await all.lockOthers(userId);
       if (header === null) return useOfflineCopy.getState().clear();
       const opened = await all.unlockOnline(header, signIn && {
         username: signIn.username, password: signIn.password, idleMs: signIn.remember ? REMEMBERED_IDLE_MS : IDLE_MS,
       });
+      if (opened === "wiped") forgetLastNoteOf(header.user);
       // Signed out, or someone else signed in, while it opened: it isn't kept for the session there is now, and a copy
       // found gone (removed from the device already) ends no one else's session.
       if (useSession.getState().user?.id !== userId) return opened === "wiped" ? undefined : opened.lock();
@@ -370,6 +376,7 @@ async function removeCopy(): Promise<void> {
   const header = useOfflineCopy.getState().header;
   idle?.stop();
   idle = null;
+  if (header !== null) forgetLastNoteOf(header.user);
   useOfflineCopy.getState().mirror?.lock();
   useOfflineCopy.getState().clear();
   if (header === null || typeof indexedDB === "undefined") return;

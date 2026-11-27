@@ -4,6 +4,7 @@ import { AuthError } from "eidolon-core/engine/ports";
 import { IDLE_MS, MirrorCopies, REMEMBERED_IDLE_MS, type CopyHeader } from "eidolon-core/store/mirror";
 import type { StorePorts } from "eidolon-core/store/ports";
 import { api, call } from "../api/client";
+import { forgetLastNoteOf } from "../shell/lastNote";
 import { useSession } from "../state/session";
 import { useOfflineCopy } from "./copy";
 import { deviceLabel } from "./deviceLabel";
@@ -80,6 +81,7 @@ export async function turnOff(header: CopyHeader): Promise<void> {
   // The slot is this browser's to remove without the password only once this session has handed in its token (a new
   // sign-in, a copy still locked): a contact first makes it so.
   await ports.slots.contact(header.slot.token, null).catch(() => {});
+  forgetLastNoteOf(header.user);
   if (mirror !== null && !mirror.locked && mirror.header.copy === header.copy) await mirror.remove();
   else await new MirrorCopies(ports).wipe(header.copy);
   if (useOfflineCopy.getState().header?.copy === header.copy) useOfflineCopy.getState().clear();

@@ -49,5 +49,6 @@ Records are public. A security decision says what we do and why, never which con
 | [0042](0042-removing-another-devices-copy-always-asks-for-the-password.md) | Removing another device's copy always asks for the password | Accepted |
 | [0043](0043-the-worker-answers-with-its-own-headers.md) | Let the service worker answer a kept file with headers of its own | Accepted |
 | [0044](0044-each-adoption-of-a-vault-has-its-own-epoch.md) | Give each adoption of a vault into the copy its own epoch | Accepted |
+| [0045](0045-the-last-note-is-kept-in-the-copy-or-under-the-users-hash.md) | Keep the last note opened in the copy, or under the user's hash | Accepted |
 
 0002 to 0016 were recorded after the fact, on 2026-11-23, from the decisions of the 0.7.0 weekend; their dates are the days they were taken.

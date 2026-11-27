@@ -138,6 +138,23 @@ describe("a copy", () => {
     await expect(vault.files().writeIf("x.md", null, "x")).rejects.toThrow(MirrorLockedError);
   });
 
+  test("the last note opened is sealed in the copy and goes with it", async () => {
+    const { browser, copies, mirror } = await setup();
+    expect(await mirror.lastNote()).toBeNull();
+    await mirror.keepLastNote("/Diary/Secret crush.md");
+    expect(browser.storage.dump()).not.toContain("crush");
+    mirror.lock();
+    await expect(mirror.keepLastNote("/Diary/x.md")).rejects.toThrow(MirrorLockedError);
+
+    const again = (await copies.unlockOffline(mirror.header, signIn.password))!;
+    expect(await again.lastNote()).toBe("/Diary/Secret crush.md");
+    await again.keepLastNote(null);
+    expect(await again.lastNote()).toBeNull();
+    await again.keepLastNote("/Diary/Plan.md");
+    await again.remove();
+    expect([...browser.storage.records.keys()]).toEqual([]);
+  });
+
   test("never mirrors a vault the server didn't list, as it leaves out discreet ones", async () => {
     const { mirror } = await setup([work]);
     await expect(mirror.adopt("vault-discreet")).rejects.toThrow(/lists/);
@@ -314,10 +331,18 @@ describe("a sign-in while another tab removes the copy", () => {
     const header = (await copies.forUser(signIn.userId))!;
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
-    const slow = { ...browser.tab(), crypto: { ...nodeCrypto, kdf: { derive: async (...a: Parameters<typeof fakeKdf.derive>) => { await gate; return fakeKdf.derive(...a); } } } };
+    // What this tab seals, kept as handed over: the password wrap seals the copy's key.
+    const sealed: Uint8Array[] = [];
+    const s = nodeCrypto.subtle;
+    const subtle: typeof s = {
+      importKey: s.importKey.bind(s), deriveKey: s.deriveKey.bind(s), decrypt: s.decrypt.bind(s), sign: s.sign.bind(s),
+      encrypt: (algorithm, key, data) => (sealed.push(data), s.encrypt(algorithm, key, data)),
+    };
+    const kdf = { derive: async (...a: Parameters<typeof fakeKdf.derive>) => { await gate; return fakeKdf.derive(...a); } };
+    const slow = { ...browser.tab(), crypto: { ...nodeCrypto, subtle, kdf } };
     const opening = new MirrorCopies(slow).unlockOnline(header, { username: signIn.username, password: signIn.password, idleMs: IDLE_MS });
     await delivered();
-    return { browser, copies, header, release, opening };
+    return { browser, copies, header, release, opening, sealed };
   }
 
   test("writes no header over a copy another tab removed, and answers wiped", async () => {
@@ -328,6 +353,15 @@ describe("a sign-in while another tab removes the copy", () => {
     expect(await opening).toBe("wiped");
     expect(await copies.headers()).toEqual([]);
     expect([...browser.storage.records.keys()]).toEqual([]);
+  });
+
+  test("answering wiped, it clears the key it was given", async () => {
+    const { copies, header, release, opening, sealed } = await signingIn();
+    await copies.wipe(header.copy);
+    release();
+    expect(await opening).toBe("wiped");
+    expect(sealed.map((b) => b.byteLength)).toEqual([32]);
+    expect([...sealed[0]!].every((b) => b === 0)).toBe(true);
   });
 
   test("the sign-in's header write waits for the copy's lock, and a removal after it still removes the copy", async () => {
@@ -519,6 +553,26 @@ describe("sign in again while another tab removes the copy", () => {
     expect([...browser.storage.records.keys()]).toEqual([]);
   });
 
+  test("leaves the copy locked once it answers wiped, even in a tab that heard nothing of the removal", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    let slowNow = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const kdf = { derive: async (...a: Parameters<typeof fakeKdf.derive>) => { if (slowNow) await gate; return fakeKdf.derive(...a); } };
+    const deaf = { ...browser.tab(), crypto: { ...nodeCrypto, kdf }, channel: (copy: string) => ({ post: browser.bus.channel(copy).post, listen: () => () => {} }) };
+    const mirror = await new MirrorCopies(deaf).create(signIn);
+    slowNow = true;
+    const rewrapping = mirror.rewrap(signIn.username, signIn.password);
+    await delivered();
+
+    await new MirrorCopies(browser.tab()).wipe(mirror.header.copy);
+    release();
+
+    expect(await rewrapping).toBe("wiped");
+    expect(mirror.locked).toBe(true);
+  });
+
   test("a removal waits for the copy's lock, which the header write holds", async () => {
     const browser = new FakeBrowser();
     browser.slots.vaults = [work];
@@ -570,6 +624,15 @@ describe("tabs", () => {
     await delivered();
     expect([a.locked, b.locked, c.locked]).toEqual([true, true, true]);
     expect(asked).toBe(1);
+  });
+
+  test("a sign-in locks the copies of other users open in the browser, and leaves the user's own open", async () => {
+    const { browser, mirror: ada } = await setup([work]);
+    const bobId = "user-2c7b";
+    const bob = await new MirrorCopies(browser.tab()).create({ ...signIn, userId: bobId, username: "Bob" });
+    await new MirrorCopies(browser.tab()).lockOthers(bobId);
+    await delivered();
+    expect([ada.locked, bob.locked]).toEqual([true, false]);
   });
 
   test("a wipe in one tab locks the others", async () => {
