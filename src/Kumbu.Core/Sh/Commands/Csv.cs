@@ -8,7 +8,8 @@ using Kumbu.Core.Notes;
 namespace Kumbu.Core.Sh.Commands;
 
 /// <summary><c>csv</c>: a text file, or the piped input, read as a table (spec 2026-11-19, decisions 3–6).</summary>
-public sealed partial class Csv(INoteReader notes) : ICommand
+/// <param name="marks">Marks a file another user wrote last, as cat does; none if null.</param>
+public sealed partial class Csv(INoteReader notes, WriterMarks? marks = null) : ICommand
 {
     private static readonly Option[] Spec =
     [
@@ -60,6 +61,15 @@ public sealed partial class Csv(INoteReader notes) : ICommand
     public bool ReadsInput => true;
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
+    {
+        var result = await TableAsync(args, input, ct);
+        if (marks is null || input is not null || result.IsError || !Options.TryParse(Name, args, Spec, out var options, out _)) return result;
+        // A table read from a file: the one path among the operands, read already.
+        var path = options.Operands.Single(o => !RangePattern().IsMatch(o));
+        return CommandArgs.TryParsePath(Name, path, out var file, out _) ? result with { Notice = await marks.NoticeAsync([file], ct) } : result;
+    }
+
+    private async Task<ShellResult> TableAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
 

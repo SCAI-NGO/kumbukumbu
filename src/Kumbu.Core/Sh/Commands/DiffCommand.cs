@@ -7,7 +7,8 @@ using Kumbu.Core.Sections;
 namespace Kumbu.Core.Sh.Commands;
 
 /// <param name="labels">How writers are shown to the caller; the labels as they are by default.</param>
-public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints, IWriterLabels? labels = null) : ICommand
+/// <param name="marks">Marks the current notes another user wrote last, as cat does; none if null.</param>
+public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints, IWriterLabels? labels = null, WriterMarks? marks = null) : ICommand
 {
     private readonly IWriterLabels _labels = labels ?? PlainWriterLabels.Instance;
 
@@ -41,7 +42,9 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints, IWrit
     public bool ReadsInput => false;
 
     /// <param name="Absent">What stands in for a note that isn't there on this side, e.g. "(removed since)".</param>
-    private sealed record Side(VaultPath Path, string Content, string Writer, DateTime At, string? Origin = null, string? Absent = null, WriterRef? Ref = null)
+    /// <param name="IsCurrent">The note as it is now, which the writer mark speaks of; an older version or a checkpoint's isn't.</param>
+    private sealed record Side(
+        VaultPath Path, string Content, string Writer, DateTime At, string? Origin = null, string? Absent = null, WriterRef? Ref = null, bool IsCurrent = false)
     {
         public string Header(char marker) => Absent is not null
             ? $"{new string(marker, 3)} {Path.Value}  {Absent}"
@@ -114,7 +117,8 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints, IWrit
     {
         var hunks = TextDiff.Hunks(older.Content, newer.Content, words);
         if (hunks.Count == 0) return ShellResult.Ok($"(no differences between {VersionToken.Of(older.Content)} and {VersionToken.Of(newer.Content)})");
-        return ShellResult.Ok(Lines.Join([(await ShownAsync(older, ct)).Header('-'), (await ShownAsync(newer, ct)).Header('+'), .. hunks]));
+        var result = ShellResult.Ok(Lines.Join([(await ShownAsync(older, ct)).Header('-'), (await ShownAsync(newer, ct)).Header('+'), .. hunks]));
+        return marks is null ? result : result with { Notice = await marks.NoticeAsync(new[] { older, newer }.Where(s => s.IsCurrent).Select(s => s.Path), ct) };
     }
 
     /// <summary>The side with its writer as the caller is shown it; an absent side names none.</summary>
@@ -150,5 +154,5 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints, IWrit
         return await CompareAsync(from, to, words, ct);
     }
 
-    private static Side Current(StoredNote note) => new(note.Path, note.Content, note.LastWriter, note.LastWriteAt, Ref: note.Ref);
+    private static Side Current(StoredNote note) => new(note.Path, note.Content, note.LastWriter, note.LastWriteAt, Ref: note.Ref, IsCurrent: true);
 }
