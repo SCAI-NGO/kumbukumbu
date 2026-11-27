@@ -11,7 +11,7 @@ import { IDLE_MS, MirrorCopies, REMEMBERED_IDLE_MS, type SealedMirror } from "ei
 import { create } from "zustand";
 import { onSessionEnd, useSession } from "../state/session";
 import { useOfflineCopy } from "./copy";
-import { browserPorts, locks } from "./ports";
+import { browserPorts, keepThroughCleanUps, locks } from "./ports";
 
 /** The sign-in page's sentence after a wipe (§3a "Purges and discreet vaults"). */
 export const WIPED = "The offline copy on this device was removed.";
@@ -196,6 +196,39 @@ function contacted(mirror: SealedMirror) {
 /** The copy being opened in this tab, and for whom. */
 let opening: { userId: string; done: Promise<void> } | null = null;
 
+// A switch to offline under way (turnOn.ts), kept across a reload: one cut short after its copy was made finishes at
+// the next start, one cut short before says it didn't (Settings, Offline). Only the user's id, nothing of the copy.
+const switchKey = "kumbu.turningOn";
+
+export function switchBegun(userId: string): void {
+  try {
+    localStorage.setItem(switchKey, userId);
+  } catch {
+    // Not kept: a reload that cuts the switch short goes unnoticed, as before.
+  }
+}
+
+export function switchEnded(): void {
+  try {
+    localStorage.removeItem(switchKey);
+  } catch {
+    // Nothing was kept.
+  }
+}
+
+function switchUnder(userId: string): boolean {
+  try {
+    return localStorage.getItem(switchKey) === userId;
+  } catch {
+    return false;
+  }
+}
+
+/** This user's switch was cut short before its copy was made: there is nothing to finish. */
+export async function switchCutShort(userId: string): Promise<boolean> {
+  return switchUnder(userId) && (await (await mirrorCopies()).forUser(userId)) === null;
+}
+
 /** Holds an unlocked copy in this tab, following what other tabs do to it; a copy it held before is locked. */
 export function keep(opened: SealedMirror) {
   const before = useOfflineCopy.getState().mirror;
@@ -247,6 +280,11 @@ export function openCopy(userId: string, signIn?: { username: string; password: 
       if (opened === "wiped") return wiped();
       keep(opened);
       contacted(opened);
+      // The switch that made it was cut short: its last step, asking the browser to keep the copy, is done now.
+      if (switchUnder(userId)) {
+        switchEnded();
+        await keepThroughCleanUps().catch(() => false);
+      }
     } catch (e) {
       // Offline or signed out meanwhile: the next sign-in or reconnect opens it.
       if (!(e instanceof OfflineError || e instanceof AuthError)) console.error("Kumbu² offline copy:", e);

@@ -291,4 +291,48 @@ describe("Settings: Offline", () => {
     expect(calls(fake, "DELETE /api/account/mirror-slots/s1")).toHaveLength(1);
     expect(screen.getByRole("switch", { name: "Keep my notes on this device" })).not.toBeChecked();
   });
+  describe("a switch cut off by a reload either finishes at the next start or says it didn't", () => {
+    async function keepThemHere() {
+      renderApp("/settings/offline");
+      await userEvent.click(await screen.findByRole("switch", { name: "Keep my notes on this device" }));
+      const dialog = screen.getByRole("alertdialog", { name: "Keep your notes on this device" });
+      await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Keep them here" }));
+    }
+
+    /** A reload: the tab's memory goes, what the browser stored stays. */
+    function reload() {
+      useOfflineCopy.getState().mirror?.lock();
+      useOfflineCopy.getState().clear();
+      cleanup();
+      useSession.getState().reset();
+    }
+
+    it("says it didn't when the copy wasn't made", async () => {
+      const fake = api({ "POST /api/account/mirror-slots": () => new Promise<Response>(() => {}) });
+      await keepThemHere();
+      await waitFor(() => expect(calls(fake, "POST /api/account/mirror-slots")).toHaveLength(1));
+      reload();
+      api();
+      renderApp("/settings/offline");
+      expect(await screen.findByText("Keeping your notes on this device didn't finish. Turn it on again.")).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Keep my notes on this device" })).not.toBeChecked();
+    });
+
+    it("finishes when the copy was made", { timeout: 20_000 }, async () => {
+      const persist = vi.fn(() => new Promise<boolean>(() => {}));
+      Object.defineProperty(navigator, "storage", { value: { persist }, configurable: true });
+      api();
+      await keepThemHere();
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(1));
+      reload();
+      persist.mockImplementation(() => Promise.resolve(true));
+      renderApp("/settings/offline");
+      await screen.findByRole("region", { name: "Vaults on this device" }, { timeout: 10_000 });
+      expect(screen.getByRole("switch", { name: "Keep my notes on this device" })).toBeChecked();
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText(/didn't finish/)).toBeNull();
+      Reflect.deleteProperty(navigator, "storage");
+    });
+  });
 });

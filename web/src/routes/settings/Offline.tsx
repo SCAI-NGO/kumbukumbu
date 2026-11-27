@@ -15,7 +15,7 @@ import { FormError, inputClass, secondaryButtonClass } from "../../components/fo
 import { useOfflineCopy } from "../../offline/copy";
 import { chooseOffline } from "../../offline/engines";
 import { storageUse } from "../../offline/ports";
-import { NEEDS_CONNECTION, openCopy, useOffline } from "../../offline/mode";
+import { NEEDS_CONNECTION, openCopy, switchCutShort, useOffline } from "../../offline/mode";
 import { turnOff, turnOn } from "../../offline/turnOn";
 import { useSession } from "../../state/session";
 import { isStandalone } from "../../update/InstallHint";
@@ -66,6 +66,15 @@ function KeepSection({ mirror }: { mirror: SealedMirror | null }) {
   const header = useOfflineCopy((s) => s.header);
   const [asking, setAsking] = useState<"on" | "off" | null>(null);
   const on = header !== null;
+  const [cutShort, setCutShort] = useState(false);
+  useEffect(() => {
+    if (user === null || on) return setCutShort(false);
+    let live = true;
+    void switchCutShort(user.id).then((cut) => live && setCutShort(cut));
+    return () => {
+      live = false;
+    };
+  }, [user, on]);
   return (
     <Section title="Offline">
       <label className="flex min-h-11 items-center gap-3 text-text">
@@ -84,6 +93,7 @@ function KeepSection({ mirror }: { mirror: SealedMirror | null }) {
         it.
       </p>
       {header && !mirror && <p className="text-muted">The copy on this device opens when you sign in.</p>}
+      {cutShort && <p className="text-muted">Keeping your notes on this device didn't finish. Turn it on again.</p>}
       {asking === "on" && user && <TurnOnDialog user={user} onClose={() => setAsking(null)} />}
       {asking === "off" && header && <RemoveCopyDialog waiting={mirror?.waiting() ?? null} onClose={() => setAsking(null)} />}
     </Section>

@@ -9,7 +9,7 @@ import { useOfflineCopy } from "./copy";
 import { deviceLabel } from "./deviceLabel";
 import { browserPorts, keepThroughCleanUps } from "./ports";
 import { removeDeviceCopy } from "./slots";
-import { keep } from "./mode";
+import { keep, switchBegun, switchEnded } from "./mode";
 
 let ports: Promise<StorePorts> | null = null;
 /** The browser's ports, the database opened once per tab. */
@@ -44,6 +44,16 @@ export function rememberSignIn(remember: boolean): void {
  * and a mistyped one would leave a copy that never opens offline. Then the browser is asked to keep it (§5).
  */
 export async function turnOn(user: { id: string; username: string }, password: string): Promise<void> {
+  // Ended here whether it is made or fails in the dialog; only a reload leaves it begun.
+  switchBegun(user.id);
+  try {
+    await made(user, password);
+  } finally {
+    switchEnded();
+  }
+}
+
+async function made(user: { id: string; username: string }, password: string): Promise<void> {
   await call(api.POST("/api/session/confirm", { body: { password } }));
   const ports = await storePorts();
   const signedIn = () => useSession.getState().user?.id === user.id;
