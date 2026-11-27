@@ -1,7 +1,7 @@
 # 0021. Let the service worker serve a kept file only while its bytes are the build's
 
 - **Date:** 2026-11-23
-- **Status:** Proposed
+- **Status:** Superseded by [0043](0043-the-worker-answers-with-its-own-headers.md)
 - **Decided by:** proposed with the fix, from the review of the offline mode; Chris confirms in review
 - **Spec:** [offline mode](../superpowers/specs/2026-11-22-offline-mode-design.md) §4.5
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The app shell's service worker checks what it serves (offline mode design,
-// docs/superpowers/specs/2026-11-22-offline-mode-design.md, §4.5; #311; ADR 0021). The build writes each kept file's
-// SHA-256 into the worker (vite.config.ts); a kept file whose bytes differ is deleted and fetched again, never served,
+// docs/superpowers/specs/2026-11-22-offline-mode-design.md, §4.5; #311; ADR 0021, superseded by 0043). The build
+// writes each kept file's SHA-256 into the worker (vite.config.ts); a kept file whose bytes differ is deleted and fetched again, never served,
 // offline neither (web/sw/kept.ts, worker.ts). Any page of the origin can write the worker's cache: these tests do it
 // from the page, as a script run in the origin would. Offline is the browser's own (context.setOffline).
 //
@@ -12,6 +12,9 @@
 // 2. The kept app page changed in CacheStorage, then a reload offline: the changed page is never shown (the start
 //    fails rather than run it), where the unchanged one opened the app offline just before → "sw #2: the kept app page
 //    changed …".
+// 3. The kept app page, kept with other headers than the server's, opens the app at an offline start with the
+//    server's own: the worker answers with the bytes and headers it sets itself (ADR 0043) → "sw #3: an offline start
+//    serves the kept page with the app's own headers".
 // Left out: a new build replacing the old cache (web/e2e/shell/shell.browser.ts, against a server of its own), and
 // the worker's script itself (out of any page's reach by design: the browser keeps it).
 // Chromium only (desktop): the check is the worker's own code, the same in every browser, and the run's spec
@@ -149,4 +152,28 @@ test("sw #2: the kept app page changed in the cache is never shown at an offline
   await expect(page).toHaveTitle("Kumbu²");
   // Pages come from the network first (worker.ts), so nothing online puts it back.
   expect(await keptHash(page, name, "/index.html"), "the changed page is deleted").toBeNull();
+});
+
+test("sw #3: an offline start serves the kept page with the app's own headers @sw", async ({ page }) => {
+  const online = await page.goto("/");
+  const headers = online!.headers();
+  const { name } = await shell(page);
+  // The build's bytes, kept with another type and none of the server's headers.
+  const body = await (await page.request.get("/index.html")).text();
+  await tamper(page, name, "/index.html", body, "text/plain");
+
+  await page.context().setOffline(true);
+  try {
+    const answer = await page.reload();
+    expect(answer?.fromServiceWorker(), "offline, the worker's kept page").toBe(true);
+    const served = answer!.headers();
+    expect(served["content-type"], "the build's type").toBe("text/html");
+    expect(served["content-security-policy"], "the server's policy").toBe(headers["content-security-policy"]);
+    expect(served["x-content-type-options"]).toBe("nosniff");
+    expect(served["referrer-policy"]).toBe("same-origin");
+    await expect(page).toHaveTitle("Kumbu²");
+    await expect(page.locator("#root")).not.toBeEmpty();
+  } finally {
+    await page.context().setOffline(false);
+  }
 });

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { precache, route } from "./shell";
+import { contentType, precache, route } from "./shell";
 
 describe("what the worker keeps", () => {
   const built = [
@@ -38,6 +38,18 @@ describe("what the worker keeps", () => {
 
   it("leaves out the fonts a browser with service workers never loads", () => {
     expect(shell.some((p) => p.endsWith(".woff") || p.endsWith(".ttf"))).toBe(false);
+  });
+});
+
+describe("the build's list", () => {
+  it("gives each kept file its content type", () => {
+    expect(
+      ["/index.html", "/assets/main-C1H6-F9b.js", "/assets/pdf.worker.min-B5Yc7dP4.mjs", "/assets/src-WCMCQJEa.css", "/assets/plex-Bz2ap9Ks.woff2", "/favicon.svg", "/icons/icon-192.png", "/manifest.webmanifest"].map(contentType),
+    ).toEqual(["text/html", "text/javascript", "text/javascript", "text/css", "font/woff2", "image/svg+xml", "image/png", "application/manifest+json"]);
+  });
+
+  it("names no type for a file it doesn't know, so the build stops", () => {
+    expect(() => contentType("/assets/data.bin")).toThrow("/assets/data.bin");
   });
 });
 

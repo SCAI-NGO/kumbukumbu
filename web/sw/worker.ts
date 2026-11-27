@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The app shell's service worker (offline mode spec §3, §10): keeps one build's files, so the app opens without a
 // connection, and nothing else. Built as /sw.js by vite.config.ts, which writes the build's list into it, each file
-// with its SHA-256: a kept file is served only while its bytes are the build's (kept.ts).
-import { asset, keptPage } from "./kept";
+// with its SHA-256 and type: a kept file is served only while its bytes are the build's, with headers of the
+// worker's own (kept.ts).
+import { asset, keptPage, type Listed } from "./kept";
 import { route } from "./shell";
 
 declare const self: ServiceWorkerGlobalScope;
 
-/** Written by the build: the cache's name, from the content of the files it lists, and those files with their SHA-256. */
-const shell = "__KUMBU_SHELL__" as unknown as { name: string; files: Record<string, string> };
+/** Written by the build: the cache's name, from the content of the files it lists, and those files with their SHA-256 and type. */
+const shell = "__KUMBU_SHELL__" as unknown as { name: string; files: Record<string, Listed> };
 const paths = Object.keys(shell.files);
 const files = new Set(paths);
 const prefix = "kumbu-shell-";
