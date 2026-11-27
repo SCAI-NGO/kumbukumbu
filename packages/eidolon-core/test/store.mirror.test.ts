@@ -519,6 +519,26 @@ describe("sign in again while another tab removes the copy", () => {
     expect([...browser.storage.records.keys()]).toEqual([]);
   });
 
+  test("leaves the copy locked once it answers wiped, even in a tab that heard nothing of the removal", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    let slowNow = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const kdf = { derive: async (...a: Parameters<typeof fakeKdf.derive>) => { if (slowNow) await gate; return fakeKdf.derive(...a); } };
+    const deaf = { ...browser.tab(), crypto: { ...nodeCrypto, kdf }, channel: (copy: string) => ({ post: browser.bus.channel(copy).post, listen: () => () => {} }) };
+    const mirror = await new MirrorCopies(deaf).create(signIn);
+    slowNow = true;
+    const rewrapping = mirror.rewrap(signIn.username, signIn.password);
+    await delivered();
+
+    await new MirrorCopies(browser.tab()).wipe(mirror.header.copy);
+    release();
+
+    expect(await rewrapping).toBe("wiped");
+    expect(mirror.locked).toBe(true);
+  });
+
   test("a removal waits for the copy's lock, which the header write holds", async () => {
     const browser = new FakeBrowser();
     browser.slots.vaults = [work];

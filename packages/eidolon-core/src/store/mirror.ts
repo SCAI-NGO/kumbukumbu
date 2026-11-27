@@ -335,7 +335,10 @@ export class SealedMirror {
       await this.p.storage.write({ put: [[`${HEADERS}${header.copy}`, encoder.encode(JSON.stringify(header))]] });
       return true;
     });
-    if (!written) return "wiped";
+    if (!written) {
+      this.lock();
+      return "wiped";
+    }
     this.h = header;
     return this.align(answer.vaults);
   }
