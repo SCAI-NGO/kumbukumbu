@@ -15,7 +15,7 @@ import { FormError, inputClass, secondaryButtonClass } from "../../components/fo
 import { useOfflineCopy } from "../../offline/copy";
 import { chooseOffline } from "../../offline/engines";
 import { storageUse } from "../../offline/ports";
-import { openCopy } from "../../offline/mode";
+import { NEEDS_CONNECTION, openCopy, useOffline } from "../../offline/mode";
 import { turnOff, turnOn } from "../../offline/turnOn";
 import { useSession } from "../../state/session";
 import { isStandalone } from "../../update/InstallHint";
@@ -159,6 +159,9 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
   // Never a discreet vault, shown or not (§4.3); nor one still being set up.
   const listed = vaults.data?.filter((v) => !v.discreet && !v.pending) ?? [];
   const chosen = useChoose(mirror);
+  // What this device keeps is the server's word: offline, the choice waits for a connection.
+  const offline = useOffline();
+  const reach = offline ? { disabled: true, title: NEEDS_CONNECTION } : {};
   const choose = (change: Parameters<typeof chooseOffline>[1]) => chosen(change).catch((e: unknown) => setError(failureText(e)));
   const set = (vault: VaultView, keep: boolean) => {
     const waiting = mirror.vault(vault.id)?.waiting() ?? 0;
@@ -176,14 +179,16 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
         <input
           type="checkbox"
           checked={choice.all}
+          {...reach}
           // Off, the vaults kept now stay chosen one by one: nothing goes until a vault is unticked.
           onChange={(e) => {
             const all = e.target.checked;
             void choose((c) => ({ ...c, all, vaults: all ? [] : listed.map((v) => v.id) }));
           }}
-          className="size-5 shrink-0 accent-accent"
+          className="size-5 shrink-0 accent-accent disabled:opacity-40"
         />
       </label>
+      {offline && <p className="text-sm text-muted">{NEEDS_CONNECTION}</p>}
       <p className="text-sm text-muted">New vaults, and vaults shared with you later, follow All my vaults.</p>
       {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
       <ul aria-label="Vaults on this device" className="flex flex-col gap-1">
@@ -199,7 +204,8 @@ function VaultsSection({ mirror }: { mirror: SealedMirror }) {
                 aria-label={`Keep ${vault.name} on this device`}
                 checked={mirrors(choice, vault.id)}
                 onChange={(e) => set(vault, e.target.checked)}
-                className="size-5 shrink-0 accent-accent"
+                {...reach}
+                className="size-5 shrink-0 accent-accent disabled:opacity-40"
               />
             </label>
           </li>
@@ -225,6 +231,7 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
   const id = useId();
   const choice = mirror.choice;
   const choose = useChoose(mirror);
+  const offline = useOffline();
   return (
     <Section title="Attachments">
       <p className="text-text-body">
@@ -239,6 +246,8 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
         <select
           id={id}
           value={choice.budget}
+          disabled={offline}
+          title={offline ? NEEDS_CONNECTION : undefined}
           onChange={(e) => {
             // Read now: the change runs later, once the copy's lock is held.
             const budget = Number(e.target.value);
@@ -252,6 +261,7 @@ function AttachmentsSection({ mirror }: { mirror: SealedMirror }) {
             </option>
           ))}
         </select>
+        {offline && <p className="text-sm text-muted">{NEEDS_CONNECTION}</p>}
       </div>
     </Section>
   );

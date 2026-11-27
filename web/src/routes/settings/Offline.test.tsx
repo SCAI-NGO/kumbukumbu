@@ -4,6 +4,7 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useOfflineCopy } from "../../offline/copy";
+import { useOfflineMode } from "../../offline/mode";
 import { turnOff } from "../../offline/turnOn";
 import { useEditor } from "../../state/editor";
 import { useSession } from "../../state/session";
@@ -60,6 +61,7 @@ afterEach(async () => {
   const header = useOfflineCopy.getState().header;
   if (header) await turnOff(header);
   cleanup();
+  useOfflineMode.setState({ offline: false });
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   useSession.getState().reset();
@@ -131,6 +133,27 @@ describe("Settings: Offline", () => {
     expect(kept).not.toHaveTextContent("Plans");
     expect(kept).not.toHaveTextContent("A vault");
     expect(within(kept).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("dims the vault choice, All my vaults and the budget offline, with Needs a connection", { timeout: 20_000 }, async () => {
+    await turnedOn();
+    const controls = () => [
+      screen.getByRole("checkbox", { name: "All my vaults" }),
+      screen.getByRole("checkbox", { name: "Keep Work on this device" }),
+      screen.getByRole("combobox", { name: "Space for opened attachments" }),
+    ];
+    for (const c of controls()) expect(c).toBeEnabled();
+    expect(screen.queryByText("Needs a connection")).toBeNull();
+    act(() => useOfflineMode.setState({ offline: true }));
+    for (const c of controls()) {
+      expect(c).toBeDisabled();
+      expect(c).toHaveAttribute("title", "Needs a connection");
+    }
+    expect(within(screen.getByRole("region", { name: "Vaults on this device" })).getByText("Needs a connection")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Attachments" })).getByText("Needs a connection")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Keep Work on this device" }));
+    expect(useOfflineCopy.getState().mirror!.choice).toMatchObject({ all: true });
+    expect(screen.queryByText(/can't be reached/)).toBeNull();
   });
 
   it("renames a device's copy, this one too, and lists it under the new name", async () => {
