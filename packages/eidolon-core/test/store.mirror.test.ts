@@ -606,6 +606,29 @@ describe("tabs", () => {
     expect((await copies.unlockOffline(mirror.header, signIn.password))!.held()).toEqual([]);
   });
 
+  test("setMeta writes nothing over a vault another tab re-keyed and adopted again before this one heard", async () => {
+    const browser = new FakeBrowser();
+    browser.slots.vaults = [work];
+    // This tab hears nothing from the others.
+    const deaf = { ...browser.tab(), channel: (copy: string) => ({ post: browser.bus.channel(copy).post, listen: () => () => {} }) };
+    const copies = new MirrorCopies(deaf);
+    const mirror = await copies.create(signIn);
+    const vault = await mirror.adopt(work.id);
+    const other = (await new MirrorCopies(browser.tab()).unlockOnline((await copies.forUser(signIn.userId))!)) as SealedMirror;
+    await delivered();
+    browser.slots.vaults = [{ ...work, tag: "tag-b" }];
+    await other.contact();
+    await (await other.adopt(work.id)).files().writeIf("Plan.md", null, "Written after the re-key");
+    await vault.setMeta({ name: "Home" });
+    await delivered();
+    mirror.lock();
+    other.lock();
+    const again = (await copies.unlockOffline(mirror.header, signIn.password))!.vault(work.id)!;
+    expect(again.tag).toBe("tag-b");
+    expect(again.name).toBeUndefined();
+    expect(await again.files().read("Plan.md")).toBe("Written after the re-key");
+  });
+
   test("setMeta waits for the copy's lock, and writes nothing if the vault went while it waited", async () => {
     const { browser, mirror } = await setup([work]);
     const vault = await mirror.adopt(work.id);

@@ -227,8 +227,10 @@ export class VaultMirror {
     this.assertHeld();
     await this.r.p.locks.run(this.r.lockName, async () => {
       this.assertHeld();
-      // Gone from storage: another tab purged the vault, and this one hasn't heard yet.
-      if ((await this.r.p.storage.get(this.keys.meta)) === null) return;
+      // Gone from storage, or adopted again since in a new life: another tab purged the vault, and this one hasn't
+      // heard yet.
+      const stored = await this.r.openJson<VaultMeta>(this.keys.meta, await this.r.p.storage.get(this.keys.meta));
+      if (stored === null || stored.epoch !== this.meta.epoch) return;
       this.meta = { ...this.meta, ...change };
       await this.r.p.storage.write({ put: [await this.r.sealJson(this.keys.meta, this.meta)] });
     });
