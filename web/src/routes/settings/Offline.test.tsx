@@ -352,4 +352,19 @@ describe("Settings: Offline", () => {
       Reflect.deleteProperty(navigator, "storage");
     });
   });
+
+  it("removes its place in the list when this session hasn't made contact with it yet", { timeout: 20_000 }, async () => {
+    // As after a new sign-in on this device: the slot is this browser's only once this session hands in its token.
+    let contacted = false;
+    const fake = await turnedOn({
+      "POST /api/account/mirror-slots/contact": () => ((contacted = true), json(200, { id: "s1", key, vaults: [{ id: work.id, tag: "t", canWrite: true, pending: false }] })),
+      "DELETE /api/account/mirror-slots/s1": () => (contacted ? noContent() : json(400, { error: "Needs your password.", code: "changes-waiting" })),
+    });
+    contacted = false;
+    await userEvent.click(await screen.findByRole("button", { name: "Remove the copy" }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(useOfflineCopy.getState().header).toBeNull());
+    expect(contacted).toBe(true);
+    expect(calls(fake, "DELETE /api/account/mirror-slots/s1")).toHaveLength(1);
+  });
 });

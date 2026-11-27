@@ -74,9 +74,13 @@ async function made(user: { id: string; username: string }, password: string): P
  * the list keeps it until it is removed there; the copy goes either way.
  */
 export async function turnOff(header: CopyHeader): Promise<void> {
+  const ports = await storePorts();
+  // The slot is this browser's to remove without the password only once this session has handed in its token (a new
+  // sign-in, a copy still locked): a contact first makes it so.
+  await ports.slots.contact(header.slot.token, null).catch(() => {});
   const mirror = useOfflineCopy.getState().mirror;
   if (mirror !== null && !mirror.locked) await mirror.remove();
-  else await new MirrorCopies(await storePorts()).wipe(header.copy);
+  else await new MirrorCopies(ports).wipe(header.copy);
   useOfflineCopy.getState().clear();
   await removeDeviceCopy(header.slot.id).catch(() => {});
 }
