@@ -22,13 +22,14 @@ async function setup(listedByContact = [work, team]) {
   const servers = new Map([["Work", new FakeServer()], ["Team", new FakeServer()]]);
   const vaults: ListedVault[] = [{ id: work.id, name: "Work", canWrite: true }, { id: team.id, name: "Team", canWrite: true }];
   const adopted: string[] = [];
+  const asked = { lists: 0 };
   const engines = new MirrorEngines({
     mirror, device: "Firefox on Linux", clock: realClock,
-    listVaults: () => Promise.resolve(vaults),
+    listVaults: () => { asked.lists++; return Promise.resolve(vaults); },
     remote: (name) => servers.get(name)!,
     adopted: (v) => { adopted.push(v.name); return Promise.resolve(); },
   });
-  return { browser, copies, mirror, servers, engines, adopted, vaults };
+  return { browser, copies, mirror, servers, engines, adopted, vaults, asked };
 }
 
 const held = (mirror: SealedMirror, id: string) => mirror.vault(id)?.list().filter((e) => e.local).map((e) => e.path).sort() ?? null;
@@ -126,10 +127,25 @@ describe("the engines of a copy", () => {
     await vi.waitFor(() => expect(server.count("put")).toBe(1), { timeout: 5000 });
     expect(mirror.waiting()).toBe(1);
 
-    await engines.refresh();
+    await engines.reconnected();
     await vi.waitFor(() => expect(server.notes.get("new.md")?.content).toBe("# New\n"), { timeout: 1000 });
     expect(server.count("put")).toBe(2);
     await vi.waitFor(() => expect(mirror.waiting()).toBe(0), { timeout: 1000 });
+    await engines.stop();
+  });
+
+  test("a vault whose name the server still takes for another reads the vault list again, and waits for its retry", async () => {
+    const { mirror, servers, engines, asked } = await setup([work]);
+    const server = servers.get("Work")!;
+    await engines.start();
+    for (let i = 0; i < 5; i++) server.failNext("put", new VaultChangedError("Work is another vault now."));
+    const before = asked.lists;
+    await mirror.vault(work.id)!.files().writeIf("new.md", null, "# New\n");
+    engines.localChanged(work.id, "new.md");
+    await vi.waitFor(() => expect(asked.lists).toBe(before + 1), { timeout: 3500 });
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(server.count("put")).toBe(1);
+    expect(asked.lists).toBe(before + 1);
     await engines.stop();
   });
 
@@ -216,6 +232,8 @@ describe("a vault's mirror removed for the server's reasons is told, whichever p
     vaults.splice(vaults.findIndex((v) => v.id === team.id), 1);
     browser.slots.vaults = [work];
     await engines.refresh();
+    // The host's purge goes on after the refresh: its records go under the copy's lock.
+    await vi.waitFor(() => expect(told.mock.calls).toEqual([[{ vaults: 1, lost: 0 }]]));
     expect(await mirror.contact()).toEqual({ vaults: 0, lost: 0 });
     expect(mirror.vault(team.id)).toBeUndefined();
     expect(told.mock.calls).toEqual([[{ vaults: 1, lost: 0 }]]);

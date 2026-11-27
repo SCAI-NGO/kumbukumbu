@@ -127,7 +127,7 @@ export function enginesLocalChanged(vaultId: string, path: string): void {
 
 /** The socket is (back) up: the vault list and the engines are brought in line. */
 export function enginesReconnected(): void {
-  void running?.engines.refresh().catch(() => {});
+  void running?.engines.reconnected().catch(() => {});
 }
 
 /** An attachment opened online: kept on this device within the budget (§6). Nothing without an open copy. */

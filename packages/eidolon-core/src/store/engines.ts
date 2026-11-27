@@ -78,19 +78,31 @@ export class MirrorEngines {
   }
 
   /**
-   * Brings the engines in line with the vault list and the device's choice: on start, every reconnect, and each
-   * change of the choice (`recheck`: the engines look at every path again, as the fetch policy may say yes now). A
-   * vault no longer chosen is dropped from the copy (Settings has said what that loses). The vault list answered, so
-   * the engines that ran before send what waits now rather than at their next retry, which a run of failures puts
-   * minutes away.
+   * Brings the engines in line with the vault list and the device's choice: on start, every reconnect, a name the
+   * server took for another vault, and each change of the choice (`recheck`: the engines look at every path again, as
+   * the fetch policy may say yes now). A vault no longer chosen is dropped from the copy (Settings has said what that
+   * loses).
    */
   async refresh(recheck = false): Promise<void> {
+    await this.align(recheck, false);
+  }
+
+  /**
+   * The network is back: as refresh, and the engines that ran before send what waits now rather than at their next
+   * retry, which a run of failures puts minutes away. Only here: an engine that failed for another reason keeps its
+   * backoff.
+   */
+  async reconnected(): Promise<void> {
+    await this.align(false, true);
+  }
+
+  private async align(recheck: boolean, wake: boolean): Promise<void> {
     if (!this.leading || this.stopped || this.o.mirror.locked) return;
     const running = new Set(this.engines.values());
     await this.host.refresh();
     const m = this.o.mirror;
     for (const vault of m.held()) if (!mirrors(m.choice, vault.id)) await m.purge(vault.id, false);
-    await Promise.all([...this.engines.values()].filter((e) => recheck || running.has(e)).map((e) => e.check(recheck)));
+    await Promise.all([...this.engines.values()].filter((e) => recheck || (wake && running.has(e))).map((e) => e.check(recheck)));
     await this.keepBudget();
   }
 
