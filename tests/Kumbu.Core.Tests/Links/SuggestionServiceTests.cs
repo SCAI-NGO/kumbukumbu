@@ -165,4 +165,12 @@ public class SuggestionServiceTests
         Assert.True(leftOut(c));
         Assert.False(leftOut(new Note(P("/Work/d.md"), "D\n")));
     }
+
+    [Fact]
+    public void A_not_related_entry_names_a_note_of_its_own_vault_only()
+    {
+        const string Entries = "---\nnot-related: [\"../Home/Mine\", \"Deep/../../Home/Mine\", \"[[../Home/Mine]]\", \"./b\", \"Deep/c\"]\n---\n";
+
+        Assert.Equal([P("/Work/Deep/c.md")], NotRelated.Of(P("/Work/a.md"), Entries));
+    }
 }

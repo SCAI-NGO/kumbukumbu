@@ -54,7 +54,8 @@ public static class NotRelated
         var text = item.Trim();
         if (text.StartsWith("[[", StringComparison.Ordinal) && text.EndsWith("]]", StringComparison.Ordinal)) text = text[2..^2].Split('|')[0];
         text = text.Trim().TrimStart('/');
-        if (text.Length == 0) return null;
+        // A path from the vault's top, without a '.' or '..' step: one could lead out of the vault.
+        if (text.Length == 0 || text.Split('/').Any(s => s is "." or "..")) return null;
         if (!text.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) text += ".md";
         // Always from the vault's top, as the property is written.
         return VaultPath.TryParse($"/{note.Vault}/{text}", out var path) ? path : null;
