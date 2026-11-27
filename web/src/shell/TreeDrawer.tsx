@@ -604,6 +604,9 @@ export default function TreeDrawer(props: {
   const otherPath = useEditor((s) => (wide && s.panes.right ? s.panes[s.focused === "left" ? "right" : "left"]!.path : null));
   const openNote = useOpenNote();
   const tree = useTree(activeVault);
+  // Offline the tree is the copy's. Where it has none (a vault not kept here, a discreet one too), the entries read
+  // online before would lead nowhere: its line stands alone.
+  const notKept = useOffline() && tree.isError;
   const navigate = useNavigate();
   const vaults = useVaults();
   const providers = useEmbeddingProviders();
@@ -852,7 +855,7 @@ export default function TreeDrawer(props: {
         </div>
       )}
       {copied.status}
-      {tree.data && activeVault && (
+      {tree.data && activeVault && !notKept && (
         <TreeTools
           vault={activeVault}
           writes={atLeast(level, "write")}
@@ -878,7 +881,7 @@ export default function TreeDrawer(props: {
             Open in the other pane
           </span>
         )}
-        {shownRoot && (
+        {shownRoot && !notKept && (
           <ul>
             {rows(shownRoot, expanded).map((row) => (
               <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
@@ -913,15 +916,15 @@ export default function TreeDrawer(props: {
             ))}
           </ul>
         )}
-        {tree.data && !found && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
+        {tree.data && !notKept && !found && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
           <p className="px-2.5 py-2 text-sm text-muted">{atLeast(level, "write") ? "No notes yet. Make the first with + New note above." : "No notes yet."}</p>
         )}
-        {!!tree.data?.damaged && (
+        {!!tree.data?.damaged && !notKept && (
           <p className="px-2.5 py-2 text-sm text-muted">
             {tree.data.damaged === 1 ? "1 note doesn't open, so it isn't shown." : `${tree.data.damaged} notes don't open, so they aren't shown.`}
           </p>
         )}
-        {tree.data?.archive && activeVault && !found && (
+        {tree.data?.archive && activeVault && !notKept && !found && (
           <ArchiveEntry files={Number(tree.data.archive.files)} bytes={Number(tree.data.archive.bytes)} onOpen={() => onVaultSheet({ kind: "archive", vault: activeVault })} />
         )}
       </div>
