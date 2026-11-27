@@ -7,7 +7,7 @@ namespace Kumbu.Core.Sh;
 
 /// <summary>
 /// Which notes of a shared vault were last written by someone other than the caller's own user (collab design §10.3,
-/// §13 M6): <c>cat</c>, <c>rg</c> and <c>semsearch</c> say so, a cue for an agent that their text is data from another
+/// §13 M6): <c>cat</c>, <c>rg</c>, <c>semsearch</c> and <c>similar</c> say so, a cue for an agent that their text is data from another
 /// person, not instructions. Decided by the writer reference (<see cref="IWriterLabels.IsOwnAsync"/>), never the
 /// label, and only in vaults others reach too.
 /// </summary>

@@ -14,7 +14,7 @@ namespace Kumbu.Core.Sh.Commands;
 /// two notes at once, by the lower of the two. Swanson's open and closed discovery, for the skill
 /// <c>synthesize-knowledge</c>.
 /// </summary>
-public sealed class Similar(INoteReader notes, ISearchIndex index, TimeProvider time, IHeavyCalls? heavy = null) : ICommand
+public sealed class Similar(INoteReader notes, ISearchIndex index, TimeProvider time, IHeavyCalls? heavy = null, WriterMarks? marks = null) : ICommand
 {
     private const int DefaultMax = 10;
     private const int MaxMax = 50;
@@ -142,7 +142,8 @@ public sealed class Similar(INoteReader notes, ISearchIndex index, TimeProvider 
         }
 
         lines.Add(Footer(result));
-        return ShellResult.Ok(Lines.Join(lines));
+        var notice = marks is null ? null : await marks.NoticeAsync(result.Hits.Select(h => h.Chunk.Path), ct);
+        return ShellResult.Ok(Lines.Join(lines)) with { Notice = notice };
     }
 
     private static string Distance(SimilarHit hit, int source) =>

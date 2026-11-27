@@ -374,4 +374,19 @@ public class SimilarTests
         Assert.Contains("/R/Far.md", without);
         Assert.DoesNotContain("/R/Finding.md", without);
     }
+
+    [Fact]
+    public async Task Similar_marks_a_note_another_user_wrote_last()
+    {
+        // As Bob in Alice's shared Garten: Carol wrote plan.md last, Alice's agent beet.md, Bob own.md.
+        var store = SharedVaults.SharedGarten(asMember: true);
+        var words = new Dictionary<string, float[]> { ["jäten"] = [1, 0, 0], ["planen"] = [0.9f, 0.43589f, 0], ["gießen"] = [0.8f, 0.6f, 0] };
+        var bob = SharedVaults.AsBob(store, new FakeIndex(store, words));
+
+        var result = await bob.RunAsync("similar /Garten/own.md", CancellationToken.None);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.StartsWith($"[{WriterMarks.Mark}: /Garten/plan.md, /Garten/beet.md]\nsimilar to /Garten/own.md", result.Output);
+        Assert.Contains("   Beete planen\n", result.Output);
+    }
 }
